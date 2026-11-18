@@ -140,3 +140,5 @@ the whole surface with examples.
 
 Confused by the API, or need something the types don't explain? Clone the BB
 repo and read the source: <https://github.com/get-bb/bb>.
+
+В режиме Custom верхняя кнопка New thread открывает черновик без проекта. Кнопка «+» в ручной папке выбирает проект папки и сохраняет размещение треда. Для новой папки выберите проект при создании первого чата. Для существующей папки без явной привязки берётся самый ранний самостоятельный чат с проектом, включая архив.

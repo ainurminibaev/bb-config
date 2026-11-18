@@ -20,6 +20,7 @@ import {
   definePluginApp,
   experimental_Icon as BbIcon,
   experimental_useSidebarThreads,
+  useBbNavigate,
   useRealtime,
   useRpc,
   useSdk,
@@ -37,6 +38,9 @@ import { textMatches } from "./lib/text-match";
 import { installSidebarView } from "./lib/sidebar-view";
 import { SearchExtras, SearchSettings, type SearchOptions } from "./lib/thread-search";
 
+// BB represents its built-in “No project” workspace with this id.
+const NO_PROJECT = "proj_personal";
+const SectionProjects = createContext<Record<string, string> | null>(null);
 const TABS_CHANGED = "machine-tabs-changed";
 const ICONS_CHANGED = "machine-tabs-icons-changed";
 const ICONS_REFRESH_MS = 5 * 60 * 1000;
@@ -423,6 +427,7 @@ async function loadNativeList(
   runtime.zod ??= zod;
   const base = ("default" in real ? real.default : real) as AnyRecord;
 
+  const useNavigation = base.useBbNavigate as typeof useBbNavigate;
   const setups = new Map<unknown, (app: unknown) => void>();
   const useThreads = base.experimental_useSidebarThreads as (
     options?: unknown,
@@ -439,6 +444,20 @@ async function loadNativeList(
       const definition = define(setup);
       setups.set(definition, setup);
       return definition;
+    },
+    useBbNavigate() {
+      const navigate = useNavigation();
+      const bindings = useContext(SectionProjects);
+      return useMemo(() => ({
+        ...navigate,
+        toCompose(options: Parameters<typeof navigate.toCompose>[0]) {
+          const section = options?.placement?.sectionId;
+          if (bindings && section?.startsWith("sec_")) {
+            return navigate.toCompose({ ...options, projectId: bindings[section] ?? NO_PROJECT });
+          }
+          return navigate.toCompose(options);
+        },
+      }), [navigate, bindings]);
     },
     experimental_useSidebarThreads(options?: unknown) {
       const result = useThreads(options);
@@ -1143,6 +1162,21 @@ const HIDE_EMPTY_GROUPS = `
 }`;
 
 function MachineThreadList(props: PluginThreadListProps) {
+  const navigate = useBbNavigate();
+  useEffect(() => {
+    // The header belongs to the Navigation plugin, outside the wrapped thread list.
+    const startLooseThread = (event: MouseEvent) => {
+      const button = event.target instanceof Element
+        ? event.target.closest<HTMLButtonElement>('[data-bb-plugin="navigation"] button[aria-keyshortcuts]')
+        : null;
+      if (!button || button.textContent?.trim() !== "New thread" || button.disabled) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      navigate.toCompose({ projectId: NO_PROJECT, placement: { sectionId: null, pinned: false }, focusPrompt: true });
+    };
+    document.addEventListener("click", startLooseThread, true);
+    return () => document.removeEventListener("click", startLooseThread, true);
+  }, [navigate]);
   const { state, select, setView } = useTabs();
   const { component: NativeList, error } = useNativeList("main");
   const { component: RecentList } = useNativeList("recent");
@@ -1592,6 +1626,7 @@ function MachineThreadList(props: PluginThreadListProps) {
         </p>
       ) : null}
       {NativeList && state !== null ? (
+        <SectionProjects.Provider value={state.sectionProjects}>
         <ProjectBadges.Provider value={badges}>
         <div data-machine-tabs-list="" data-machine-tabs-host-id={baseView.machineId ?? undefined} data-machine-tabs-hide-empty={hideEmpty ? "" : undefined}>
           {outer === "none" ? (
@@ -1651,6 +1686,7 @@ function MachineThreadList(props: PluginThreadListProps) {
           )}
         </div>
         </ProjectBadges.Provider>
+        </SectionProjects.Provider>
       ) : error ? (
         <p className="px-3 py-2 text-xs text-muted-foreground">
           Machine tabs could not load bb's thread list: {error} Switch back

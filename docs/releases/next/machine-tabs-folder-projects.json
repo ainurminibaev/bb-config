@@ -1,0 +1,10 @@
+{
+  "id": "machine-tabs-folder-projects",
+  "title": "Выбор проекта при создании треда",
+  "component": "machine-tabs",
+  "where": "server",
+  "kind": "local-plugin",
+  "plugin": "machine-tabs",
+  "rerun": "Проверить версию и состояние установленного плагина. Повторная установка сохраняет его настройки.",
+  "rollback": "Вернуть предыдущую версию плагина из сохранённого checkout, пересобрать и перезагрузить его."
+}

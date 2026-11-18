@@ -20,6 +20,9 @@ export type Machine = z.infer<typeof machineSchema>;
 
 const outerSchema = z.enum(["none", "project", "machine", "day"]);
 
+const sectionProjectsSchema = z.record(z.string().min(1), z.string().min(1));
+const SECTION_PROJECTS_KEY = "section-projects";
+
 const stateSchema = z.object({
   machines: z.array(machineSchema),
   /** The machine whose tab is active, or null for All. */
@@ -28,6 +31,7 @@ const stateSchema = z.object({
   byDay: z.boolean(),
   /** A grouping this plugin draws above bb's own, for two-level lists. */
   outer: outerSchema,
+  sectionProjects: sectionProjectsSchema,
 });
 export type TabsState = z.infer<typeof stateSchema>;
 
@@ -66,6 +70,7 @@ export const rpcContract = defineRpcContract({
     input: z.object({ refresh: z.boolean().optional() }),
     output: z.object({ icons: z.record(z.string(), z.string()) }),
   },
+  set_section_projects: { input: sectionProjectsSchema, output: stateSchema },
   tabs_state: { input: z.null(), output: stateSchema },
   tabs_set_view: {
     input: z.object({ byDay: z.boolean(), outer: outerSchema }),
@@ -225,12 +230,55 @@ export default async function plugin(bb: BbPluginApi) {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  // A separate key per folder prevents simultaneous creations in different folders
+  // from overwriting each other's bindings. Existing configured bindings take priority.
+  async function firstFolderProject(sectionId: string): Promise<string | null> {
+    const key = "first-project:" + sectionId;
+    const saved = await bb.storage.kv.get<string>(key);
+    if (saved) return saved;
+    let first: { createdAt: number; projectId: string; id: string } | undefined;
+    for (const archived of [false, true]) {
+      const limit = 100;
+      for (let offset = 0; ; offset += limit) {
+        const threads = await bb.sdk.threads.list({ sectionId, archived, includeHidden: true, limit, offset });
+        for (const thread of threads) {
+          if (thread.projectId === "proj_personal" || thread.parentThreadId) continue;
+          if (!first || thread.createdAt < first.createdAt ||
+              (thread.createdAt === first.createdAt && thread.id < first.id)) first = thread;
+        }
+        if (threads.length < limit) break;
+      }
+    }
+    if (!first) return null;
+    await bb.storage.kv.set(key, first.projectId);
+    return first.projectId;
+  }
+
+  async function folderProjects(): Promise<Record<string, string>> {
+    const [configured, sections] = await Promise.all([
+      bb.storage.kv.get<Record<string, string>>(SECTION_PROJECTS_KEY),
+      bb.sdk.threadSections.list(),
+    ]);
+    const bindings = { ...configured };
+    await Promise.all(sections.map(async ({ id }) => {
+      if (bindings[id]) return;
+      const project = await firstFolderProject(id);
+      if (project) bindings[id] = project;
+    }));
+    return bindings;
+  }
+
+  bb.events.on("thread.created", async ({ thread }) => {
+    if (thread.sectionId) bb.realtime.publish(TABS_CHANGED, await state());
+  });
+
   async function state(): Promise<TabsState> {
-    const [machines, stored, byDay, storedOuter] = await Promise.all([
+    const [machines, stored, byDay, storedOuter, sectionProjects] = await Promise.all([
       listMachines(),
       bb.storage.kv.get<string | null>(SELECTED_KEY),
       bb.storage.kv.get<boolean>(BY_DAY_KEY),
       bb.storage.kv.get<string>(OUTER_KEY),
+      folderProjects(),
     ]);
     const outer = outerSchema.safeParse(storedOuter);
     const selectedId =
@@ -239,6 +287,7 @@ export default async function plugin(bb: BbPluginApi) {
       machines,
       selectedId,
       byDay: byDay === true,
+      sectionProjects: sectionProjects ?? {},
       outer: outer.success ? outer.data : "none",
     };
   }
@@ -325,6 +374,17 @@ export default async function plugin(bb: BbPluginApi) {
     },
     async project_icons({ refresh }) {
       return { icons: await projectIcons(refresh === true) };
+    },
+    async set_section_projects(bindings) {
+      const projects = await bb.sdk.projects.list();
+      const ids = new Set(projects.map((project) => project.id));
+      for (const projectId of Object.values(bindings)) {
+        if (!ids.has(projectId)) throw new Error(`Unknown project: ${projectId}`);
+      }
+      await bb.storage.kv.set(SECTION_PROJECTS_KEY, bindings);
+      const next = await state();
+      bb.realtime.publish(TABS_CHANGED, next);
+      return next;
     },
     async tabs_state() {
       return state();

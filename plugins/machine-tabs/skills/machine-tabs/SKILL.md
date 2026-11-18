@@ -93,3 +93,5 @@ pinned is not treated as empty.
 The adapter matches semantic native renderer props and must be verified after
 BB updates. Verified with Show empty projects enabled (the current default);
 when disabled, BB can omit a section before this renderer is reached.
+
+В режиме Custom верхняя кнопка New thread открывает черновик без проекта. Кнопка «+» в ручной папке выбирает проект папки и сохраняет размещение треда. Для новой папки выберите проект при создании первого чата. Для существующей папки без явной привязки берётся самый ранний самостоятельный чат с проектом, включая архив.
