@@ -135,7 +135,7 @@
   },
   {
     "id": "codex-delegation-watch",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "enabled": true,
     "name": "Codex Delegation Watch",
     "source": "path:plugins/codex-delegation-watch"

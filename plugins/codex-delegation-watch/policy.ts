@@ -25,6 +25,8 @@ export interface Watch {
   doneReason: string | null;
   lastCheckAt: number | null;
   lastSummary: string | null;
+  /** Thread title at the last check, for the settings screen. */
+  title?: string;
 }
 
 export interface Snapshot {
@@ -50,6 +52,8 @@ export interface Config {
   nudgeCooldownMs: number;
   maxNudges: number;
   maxWatchMs: number;
+  /** Ask a child without a Goal to set one, and report a turn that ended without one. */
+  checkGoal: boolean;
 }
 
 export const DEFAULTS: Config = {
@@ -61,7 +65,84 @@ export const DEFAULTS: Config = {
   nudgeCooldownMs: 4 * 60_000,
   maxNudges: 3,
   maxWatchMs: 3 * 24 * 60 * 60_000,
+  checkGoal: true,
 };
+
+/** User-facing settings (BB plugin settings and `bb codex-watch config`). */
+export interface Settings {
+  enabled: boolean;
+  autoEnroll: boolean;
+  defaultMode: "supervise" | "observe";
+  intervalMinutes: number;
+  maxNudges: number;
+  checkGoal: boolean;
+}
+
+export const SETTING_DEFAULTS: Settings = {
+  enabled: true,
+  autoEnroll: true,
+  defaultMode: "supervise",
+  intervalMinutes: 5,
+  maxNudges: 3,
+  checkGoal: true,
+};
+
+export const SETTING_LABELS: Record<keyof Settings, string> = {
+  enabled: "Надзор включён",
+  autoEnroll: "Автоподключение новых Codex-детей",
+  defaultMode: "Режим по умолчанию (supervise — надзор с подталкиванием, observe — только наблюдать и сообщать)",
+  intervalMinutes: "Интервал проверки, минут (1–60)",
+  maxNudges: "Максимум подталкиваний на тред (0–10)",
+  checkGoal: "Проверять постановку цели",
+};
+
+export function isSettingKey(key: string): key is keyof Settings {
+  return Object.hasOwn(SETTING_DEFAULTS, key);
+}
+
+/** Parses a CLI value for a setting; throws with a readable message on bad input. */
+export function parseSettingValue<K extends keyof Settings>(key: K, raw: string): Settings[K] {
+  const value = raw.trim().toLowerCase();
+  const fail = (why: string): never => { throw new Error(`${key}: ${why}`); };
+  switch (key) {
+    case "enabled":
+    case "autoEnroll":
+    case "checkGoal": {
+      if (["true", "on", "yes", "1", "да", "вкл"].includes(value)) return true as Settings[K];
+      if (["false", "off", "no", "0", "нет", "выкл"].includes(value)) return false as Settings[K];
+      return fail("ожидается true или false");
+    }
+    case "defaultMode":
+      if (value === "supervise" || value === "observe") return value as Settings[K];
+      return fail("ожидается supervise или observe");
+    case "intervalMinutes": {
+      const n = Number(value);
+      if (!Number.isInteger(n) || n < 1 || n > 60) fail("целое число от 1 до 60");
+      return n as Settings[K];
+    }
+    case "maxNudges": {
+      const n = Number(value);
+      if (!Number.isInteger(n) || n < 0 || n > 10) fail("целое число от 0 до 10");
+      return n as Settings[K];
+    }
+  }
+  return fail("неизвестный параметр");
+}
+
+/** Policy timing derived from the user's settings. */
+export function configFrom(settings: Settings): Config {
+  const intervalMs = settings.intervalMinutes * 60_000;
+  return {
+    ...DEFAULTS,
+    intervalMs,
+    // A stopped turn with an active Goal is nudged on the second look.
+    idleNudgeMs: Math.max(60_000, intervalMs - 60_000),
+    nudgeCooldownMs: Math.max(60_000, intervalMs - 60_000),
+    firstCheckMs: Math.min(DEFAULTS.firstCheckMs, intervalMs),
+    maxNudges: settings.maxNudges,
+    checkGoal: settings.checkGoal,
+  };
+}
 
 export const GOAL_NUDGE =
   "[Надзор Codex] У этого треда не поставлена цель (Goal). Сейчас вызови инструмент create_goal: objective — одна-две фразы " +
@@ -128,6 +209,12 @@ function raw(w: Watch, s: Snapshot, cfg: Config): Evaluation {
     };
   }
 
+  if (s.goal === null && !cfg.checkGoal) {
+    if (running) return stalled(w, s, cfg, ref) ?? wait("работает без цели (проверка цели выключена)");
+    if (s.firstTurnStartedAt === null) return wait("ход ещё не начался");
+    return { decision: { kind: "finish", reason: "ход закончен", summary: "наблюдение снято: ход закончен (цель не требуется)" }, idleActiveSince: null };
+  }
+
   if (s.goal === null) {
     if (running) {
       if (s.firstTurnStartedAt !== null && s.now - s.firstTurnStartedAt >= cfg.goalGraceMs) {
@@ -149,20 +236,7 @@ function raw(w: Watch, s: Snapshot, cfg: Config): Evaluation {
 
   const status = s.goal.status;
   if (status === "active") {
-    if (running) {
-      if (s.lastEventAt !== null && s.now - s.lastEventAt >= cfg.stallMs) {
-        return {
-          decision: {
-            kind: "alert",
-            key: `stall:${s.lastEventSeq ?? 0}`,
-            summary: `нет событий ${minutes(s.now - s.lastEventAt)} мин`,
-            text: `Тред ${ref} работает, но ${minutes(s.now - s.lastEventAt)} мин не выдаёт событий — возможно, зависла команда. Проверь: bb thread log ${w.threadId} --limit 10. Остановка — bb thread stop (цель встанет на паузу).`,
-          },
-          idleActiveSince: null,
-        };
-      }
-      return wait("работает по цели");
-    }
+    if (running) return stalled(w, s, cfg, ref) ?? wait("работает по цели");
     const since = keep ?? s.now;
     if (s.now - since >= cfg.idleNudgeMs) {
       return { decision: { kind: "nudge", key: "continue", text: CONTINUE_NUDGE, summary: "ход остановился при активной цели" }, idleActiveSince: null };
@@ -189,6 +263,19 @@ function raw(w: Watch, s: Snapshot, cfg: Config): Evaluation {
   };
 }
 
+function stalled(w: Watch, s: Snapshot, cfg: Config, ref: string): Evaluation | null {
+  if (s.lastEventAt === null || s.now - s.lastEventAt < cfg.stallMs) return null;
+  return {
+    decision: {
+      kind: "alert",
+      key: `stall:${s.lastEventSeq ?? 0}`,
+      summary: `нет событий ${minutes(s.now - s.lastEventAt)} мин`,
+      text: `Тред ${ref} работает, но ${minutes(s.now - s.lastEventAt)} мин не выдаёт событий — возможно, зависла команда. Проверь: bb thread log ${w.threadId} --limit 10. Остановка — bb thread stop (цель встанет на паузу).`,
+    },
+    idleActiveSince: null,
+  };
+}
+
 /** Applies observe mode, the nudge limit, cooldown, alert de-duplication and the watch lifetime. */
 export function evaluate(w: Watch, s: Snapshot, cfg: Config = DEFAULTS): Evaluation {
   if (s.now - w.enrolledAt >= cfg.maxWatchMs) {
@@ -210,7 +297,7 @@ export function evaluate(w: Watch, s: Snapshot, cfg: Config = DEFAULTS): Evaluat
           kind: "alert",
           key,
           summary: `${d.summary}; лимит подталкиваний исчерпан`,
-          text: `Тред «${s.title}» (@thread:${w.threadId}): ${d.summary}, ${cfg.maxNudges} подталкивания не помогли. Нужен твой разбор: bb thread log ${w.threadId} --limit 20. Надзор больше не вмешивается.`,
+          text: `Тред «${s.title}» (@thread:${w.threadId}): ${d.summary}, ${cfg.maxNudges === 0 ? "подталкивание выключено настройкой" : `${cfg.maxNudges} подталкивания не помогли`}. Нужен твой разбор: bb thread log ${w.threadId} --limit 20. Надзор больше не вмешивается.`,
         },
         idleActiveSince: result.idleActiveSince,
       };

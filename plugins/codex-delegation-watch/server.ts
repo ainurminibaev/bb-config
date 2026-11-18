@@ -1,6 +1,22 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { PluginCliError, cliCommand, defineCli } from "@get-bb/plugin-sdk";
-import { DEFAULTS, evaluate, latestGoal, newWatch, shouldEnroll, type Snapshot, type Watch } from "./policy.ts";
+import { z } from "zod";
+import { rpcContract, type WatchView } from "./contract.ts";
+import {
+  SETTING_DEFAULTS,
+  SETTING_LABELS,
+  configFrom,
+  evaluate,
+  isSettingKey,
+  latestGoal,
+  newWatch,
+  parseSettingValue,
+  shouldEnroll,
+  type Config,
+  type Settings,
+  type Snapshot,
+  type Watch,
+} from "./policy.ts";
 
 const WATCH = "watch:";
 const SINCE = "meta:since";
@@ -26,6 +42,42 @@ export default function codexDelegationWatch(bb: BbPluginApi) {
   };
   const busy = new Set<string>();
 
+  const settings = bb.settings.define({
+    enabled: { type: "boolean", label: SETTING_LABELS.enabled, default: SETTING_DEFAULTS.enabled },
+    autoEnroll: { type: "boolean", label: SETTING_LABELS.autoEnroll, default: SETTING_DEFAULTS.autoEnroll },
+    defaultMode: {
+      type: "select",
+      label: "Режим по умолчанию",
+      options: ["supervise", "observe"],
+      experimental_optionLabels: { supervise: "Надзор с подталкиванием", observe: "Только наблюдать и сообщать" },
+      default: SETTING_DEFAULTS.defaultMode,
+    },
+    intervalMinutes: {
+      type: "number",
+      label: "Интервал проверки, минут",
+      experimental_schema: z.number().int().min(1).max(60),
+      default: SETTING_DEFAULTS.intervalMinutes,
+    },
+    maxNudges: {
+      type: "number",
+      label: "Максимум подталкиваний на тред",
+      experimental_schema: z.number().int().min(0).max(10),
+      default: SETTING_DEFAULTS.maxNudges,
+    },
+    checkGoal: { type: "boolean", label: SETTING_LABELS.checkGoal, default: SETTING_DEFAULTS.checkGoal },
+  });
+  const current = async (): Promise<Settings> => {
+    const v = obj(await settings.get());
+    return {
+      enabled: typeof v.enabled === "boolean" ? v.enabled : SETTING_DEFAULTS.enabled,
+      autoEnroll: typeof v.autoEnroll === "boolean" ? v.autoEnroll : SETTING_DEFAULTS.autoEnroll,
+      defaultMode: v.defaultMode === "observe" ? "observe" : "supervise",
+      intervalMinutes: num(v.intervalMinutes) ?? SETTING_DEFAULTS.intervalMinutes,
+      maxNudges: num(v.maxNudges) ?? SETTING_DEFAULTS.maxNudges,
+      checkGoal: typeof v.checkGoal === "boolean" ? v.checkGoal : SETTING_DEFAULTS.checkGoal,
+    };
+  };
+
   const since = async (): Promise<number> => {
     const stored = num(await kv.get(SINCE));
     if (stored !== null) return stored;
@@ -46,9 +98,13 @@ export default function codexDelegationWatch(bb: BbPluginApi) {
     }
   };
 
-  const enroll = async (thread: Obj, mode: Watch["mode"], force: boolean): Promise<Watch | null> => {
+  const enroll = async (thread: Obj, requested: Watch["mode"] | null, force: boolean): Promise<Watch | null> => {
     const id = str(thread.id);
     if (id === null) return null;
+    const cur = await current();
+    if (!force && (!cur.enabled || !cur.autoEnroll)) return null;
+    const mode = requested ?? cur.defaultMode;
+    const cfg = configFrom(cur);
     const existing = await load(id);
     if (existing && (!existing.done || !force)) return force ? existing : null;
     if (!force) {
@@ -60,7 +116,7 @@ export default function codexDelegationWatch(bb: BbPluginApi) {
     }
     const parent = str(thread.parentThreadId);
     // Without a parent there is nobody to report to, so never write into the thread.
-    const w = newWatch(id, parent, parent === null ? "observe" : mode, Date.now());
+    const w = newWatch(id, parent, parent === null ? "observe" : mode, Date.now(), cfg);
     await save(w);
     bb.log.info(`watching ${id} (${w.mode}) parent=${parent} createdAt=${String(thread.createdAt)}`);
     return w;
@@ -117,16 +173,16 @@ export default function codexDelegationWatch(bb: BbPluginApi) {
   };
 
   /** One check. `act: false` only reports what would happen. */
-  const check = async (watch: Watch, act: boolean) => {
+  const check = async (watch: Watch, act: boolean, cfg: Config) => {
     let w = watch;
     const s = await snapshot(w.threadId);
     // The parent can change or be removed after enrollment; follow the current row.
     const row = s.exists ? await getThread(w.threadId) : null;
     const parent = row === null ? w.parentThreadId : str(row.parentThreadId);
     if (parent !== w.parentThreadId) w = { ...w, parentThreadId: parent, mode: parent === null ? "observe" : w.mode };
-    const { decision, idleActiveSince } = evaluate(w, s, DEFAULTS);
+    const { decision, idleActiveSince } = evaluate(w, s, cfg);
     if (!act) return { snapshot: s, decision };
-    const next: Watch = { ...w, idleActiveSince, lastCheckAt: s.now, lastSummary: decision.summary, nextCheckAt: s.now + DEFAULTS.intervalMs };
+    const next: Watch = { ...w, idleActiveSince, lastCheckAt: s.now, lastSummary: decision.summary, title: s.title, nextCheckAt: s.now + cfg.intervalMs };
     switch (decision.kind) {
       case "finish":
         next.done = true;
@@ -136,8 +192,8 @@ export default function codexDelegationWatch(bb: BbPluginApi) {
         await sendText(w.threadId, decision.text);
         next.nudges += 1;
         next.lastNudgeAt = s.now;
-        next.lastSummary = `${decision.summary} → подтолкнул (${next.nudges}/${DEFAULTS.maxNudges})`;
-        if (decision.key === "goal") next.nextCheckAt = s.now + DEFAULTS.firstCheckMs;
+        next.lastSummary = `${decision.summary} → подтолкнул (${next.nudges}/${cfg.maxNudges})`;
+        if (decision.key === "goal") next.nextCheckAt = s.now + cfg.firstCheckMs;
         break;
       case "alert":
         if (w.mode === "supervise") await notifyParent(w, decision.text);
@@ -160,8 +216,10 @@ export default function codexDelegationWatch(bb: BbPluginApi) {
     if (busy.has(threadId)) return;
     busy.add(threadId);
     try {
+      const cur = await current();
+      if (!cur.enabled) return;
       const w = await load(threadId);
-      if (w && !w.done) await check(w, true);
+      if (w && !w.done) await check(w, true, configFrom(cur));
     } catch (error) {
       bb.log.warn(`check ${threadId} after ${why} failed: ${errText(error)}`);
     } finally {
@@ -180,7 +238,7 @@ export default function codexDelegationWatch(bb: BbPluginApi) {
     const result: unknown = await sdk().threads.list({ hasParent: true, limit: 200 });
     const threads = Array.isArray(result) ? result : Array.isArray(obj(result).threads) ? (obj(result).threads as unknown[]) : [];
     for (const t of threads) {
-      if (shouldEnroll(obj(t), cutoff)) await enroll(obj(t), "supervise", false);
+      if (shouldEnroll(obj(t), cutoff)) await enroll(obj(t), null, false);
     }
   };
 
@@ -190,7 +248,7 @@ export default function codexDelegationWatch(bb: BbPluginApi) {
       const t = obj(thread);
       const id = str(t.id);
       if (id === null) return;
-      await enroll(t, "supervise", false);
+      await enroll(t, null, false);
       if (recheckMs === null) return;
       const w = await load(id);
       if (w && !w.done) {
@@ -220,7 +278,8 @@ export default function codexDelegationWatch(bb: BbPluginApi) {
       while (!signal.aborted) {
         try {
           const now = Date.now();
-          for (const w of await allWatches()) {
+          const enabled = (await current()).enabled;
+          for (const w of enabled ? await allWatches() : []) {
             if (signal.aborted) break;
             if (!w.done && w.nextCheckAt <= now) await runCheck(w.threadId, "schedule");
           }
@@ -235,8 +294,74 @@ export default function codexDelegationWatch(bb: BbPluginApi) {
     },
   });
 
-  const line = (w: Watch) =>
-    `${w.threadId}  ${w.done ? `снято (${w.doneReason})` : w.mode === "observe" ? "наблюдение" : "надзор"}  подталкиваний ${w.nudges}/${DEFAULTS.maxNudges}  ${w.lastSummary ?? "ещё не проверялся"}`;
+  const line = (w: Watch, maxNudges: number) =>
+    `${w.threadId}  ${w.done ? `снято (${w.doneReason})` : w.mode === "observe" ? "наблюдение" : "надзор"}  подталкиваний ${w.nudges}/${maxNudges}  ${w.lastSummary ?? "ещё не проверялся"}`;
+
+  const setMode = async (threadId: string, mode: Watch["mode"]) => {
+    const w = await load(threadId);
+    if (!w) return false;
+    if (mode === "supervise" && w.parentThreadId === null) throw new Error("у треда нет родителя: сообщать некому, доступно только наблюдение");
+    await save({ ...w, mode, alerts: mode === "supervise" ? w.alerts.filter((k) => k !== "nudge-limit") : w.alerts });
+    return true;
+  };
+
+  /** "Check now" from the settings screen: acts when supervision is on, otherwise only reports. */
+  const checkNow = async (threadId: string): Promise<string> => {
+    const cur = await current();
+    const w = (await load(threadId)) ?? newWatch(threadId, null, "observe", Date.now());
+    const acting = cur.enabled && !w.done && (await load(threadId)) !== undefined && (await load(threadId)) !== null;
+    if (acting && busy.has(threadId)) return "проверка уже идёт";
+    if (acting) busy.add(threadId);
+    try {
+      const { decision } = await check({ ...w, done: false }, acting, configFrom(cur));
+      return `${decision.summary}${acting ? "" : " (без действий)"}`;
+    } finally {
+      if (acting) busy.delete(threadId);
+    }
+  };
+
+  bb.rpc.register(rpcContract, {
+    overview: async ({ includeDone }) => {
+      const cur = await current();
+      const list = (await allWatches()).filter((w) => includeDone || !w.done).sort((a, b) => b.enrolledAt - a.enrolledAt).slice(0, 200);
+      const titles = await Promise.all(list.map(async (w) => {
+        if (w.title) return w.title;
+        const t = await getThread(w.threadId).catch(() => null);
+        return (t && (str(t.title) ?? str(t.titleFallback))) ?? w.threadId;
+      }));
+      const watches: WatchView[] = list.map((w, i) => ({
+        threadId: w.threadId,
+        title: titles[i],
+        mode: w.mode,
+        done: w.done,
+        doneReason: w.doneReason,
+        nudges: w.nudges,
+        lastCheckAt: w.lastCheckAt,
+        lastSummary: w.lastSummary,
+        hasParent: w.parentThreadId !== null,
+      }));
+      return { enabled: cur.enabled, maxNudges: cur.maxNudges, intervalMinutes: cur.intervalMinutes, watches };
+    },
+    remove: async ({ threadId }) => {
+      const w = await load(threadId);
+      if (w) await save({ ...w, done: true, doneReason: "снят вручную" });
+      return { ok: Boolean(w) };
+    },
+    checkNow: async ({ threadId }) => ({ summary: await checkNow(threadId) }),
+    setMode: async ({ threadId, mode }) => ({ ok: await setMode(threadId, mode) }),
+  });
+
+  // Turning supervision back on starts every open watch afresh instead of acting on stale timers.
+  settings.onChange((next: unknown, prev: unknown) => {
+    if (obj(next).enabled !== true || obj(prev).enabled !== false) return;
+    void (async () => {
+      const cfg = configFrom(await current());
+      for (const w of await allWatches()) {
+        if (!w.done) await save({ ...w, idleActiveSince: null, nextCheckAt: Date.now() + cfg.firstCheckMs });
+      }
+      await reconcile();
+    })().catch((error: unknown) => bb.log.warn(`re-enable failed: ${errText(error)}`));
+  });
   const threadArg = { name: "thread", description: "ID треда Codex", required: true } as const;
 
   bb.cli.register(
@@ -248,9 +373,11 @@ export default function codexDelegationWatch(bb: BbPluginApi) {
           summary: "Список тредов под надзором и итог последней проверки",
           options: { all: { type: "boolean", description: "Показать и снятые с надзора" }, json: { type: "boolean", description: "JSON" } },
           async run(input) {
+            const cur = await current();
             const list = (await allWatches()).filter((w) => input.options.all || !w.done).sort((a, b) => b.enrolledAt - a.enrolledAt);
             if (input.options.json) return { exitCode: 0, stdout: JSON.stringify(list, null, 2) };
-            return { exitCode: 0, stdout: list.length ? list.map(line).join("\n") : "Под надзором нет тредов." };
+            const head = cur.enabled ? "" : "Надзор выключен (bb codex-watch config set enabled true): треды не проверяются.\n";
+            return { exitCode: 0, stdout: head + (list.length ? list.map((w) => line(w, cur.maxNudges)).join("\n") : "Под надзором нет тредов.") };
           },
         }),
         check: cliCommand({
@@ -259,27 +386,35 @@ export default function codexDelegationWatch(bb: BbPluginApi) {
           options: { json: { type: "boolean", description: "JSON" } },
           async run(input) {
             const id = input.positionals.thread;
+            const cur = await current();
             const w = (await load(id)) ?? newWatch(id, null, "observe", Date.now());
-            const { snapshot: s, decision } = await check({ ...w, done: false }, false);
+            const { snapshot: s, decision } = await check({ ...w, done: false }, false, configFrom(cur));
             if (input.options.json) return { exitCode: 0, stdout: JSON.stringify({ watch: w, snapshot: s, decision }, null, 2) };
             const goal = s.goal ? `${s.goal.status} — ${s.goal.objective}` : "не поставлена";
             const idle = s.lastEventAt ? `${Math.round((s.now - s.lastEventAt) / 1000)} с назад` : "нет";
             return {
               exitCode: 0,
-              stdout: [`Тред: ${s.title} (${id})`, `Статус: ${s.status}`, `Цель: ${goal}`, `Последнее событие: ${idle}`, `Вопросы/разрешения: ${s.pendingInteractionIds.length}`, `В очереди: ${s.queuedCount}`, `Надзор: ${(await load(id)) ? line(w) : "не подключён"}`, `Решение сейчас: ${decision.kind} — ${decision.summary}`].join("\n"),
+              stdout: [`Тред: ${s.title} (${id})`, `Статус: ${s.status}`, `Цель: ${goal}`, `Последнее событие: ${idle}`, `Вопросы/разрешения: ${s.pendingInteractionIds.length}`, `В очереди: ${s.queuedCount}`, `Надзор: ${!cur.enabled ? "выключен в настройках" : (await load(id)) ? line(w, cur.maxNudges) : "не подключён"}`, `Решение сейчас: ${decision.kind} — ${decision.summary}`].join("\n"),
             };
           },
         }),
         add: cliCommand({
           summary: "Поставить существующий тред Codex под надзор (по умолчанию новые дочерние треды подключаются сами)",
           positionals: [threadArg],
-          options: { observe: { type: "boolean", description: "Только наблюдать: не писать ребёнку и родителю" } },
+          options: {
+            observe: { type: "boolean", description: "Только наблюдать: не писать ребёнку и родителю" },
+            supervise: { type: "boolean", description: "Надзор с подталкиванием (иначе — режим по умолчанию из настроек)" },
+          },
           async run(input) {
             const t = await getThread(input.positionals.thread);
             if (t === null) throw new PluginCliError(`тред ${input.positionals.thread} не найден`, { code: "thread_not_found" });
             if (t.providerId !== "codex") throw new PluginCliError("надзор рассчитан на треды Codex", { code: "not_codex" });
-            const w = await enroll(t, input.options.observe ? "observe" : "supervise", true);
-            return { exitCode: 0, stdout: w ? line(w) : "не подключён" };
+            const existing = await load(input.positionals.thread);
+            const mode = input.options.observe ? "observe" : input.options.supervise ? "supervise" : null;
+            if (existing && !existing.done && mode !== null) await setMode(existing.threadId, mode);
+            const w = await enroll(t, mode, true);
+            const cur = await current();
+            return { exitCode: 0, stdout: (w ? line((await load(w.threadId)) ?? w, cur.maxNudges) : "не подключён") + (cur.enabled ? "" : "\nНадзор выключен в настройках: тред будет проверяться после включения.") };
           },
         }),
         remove: cliCommand({
@@ -290,6 +425,53 @@ export default function codexDelegationWatch(bb: BbPluginApi) {
             if (!w) return { exitCode: 0, stdout: "Тред не был под надзором." };
             await save({ ...w, done: true, doneReason: "снят вручную" });
             return { exitCode: 0, stdout: "Снят с надзора." };
+          },
+        }),
+        mode: cliCommand({
+          summary: "Сменить режим треда под надзором: supervise (с подталкиванием) или observe (только наблюдать и сообщать)",
+          positionals: [threadArg, { name: "mode", description: "supervise или observe", required: true }],
+          async run(input) {
+            const mode = input.positionals.mode;
+            if (mode !== "supervise" && mode !== "observe") throw new PluginCliError("режим: supervise или observe", { code: "bad_mode" });
+            try {
+              if (!(await setMode(input.positionals.thread, mode))) throw new PluginCliError("тред не под надзором", { code: "not_watched", hint: `bb codex-watch add ${input.positionals.thread}` });
+            } catch (error) {
+              if (error instanceof PluginCliError) throw error;
+              throw new PluginCliError(errText(error), { code: "no_parent" });
+            }
+            return { exitCode: 0, stdout: `Режим: ${mode === "observe" ? "только наблюдать и сообщать" : "надзор с подталкиванием"}.` };
+          },
+        }),
+        "config get": cliCommand({
+          summary: "Показать настройки надзора",
+          positionals: [{ name: "key", description: "Один параметр (иначе все)", required: false }],
+          options: { json: { type: "boolean", description: "JSON" } },
+          async run(input) {
+            const cur = await current();
+            const key = input.positionals.key;
+            if (key !== undefined && !isSettingKey(key)) throw new PluginCliError(`неизвестный параметр ${key}`, { code: "bad_key", hint: `Параметры: ${Object.keys(SETTING_DEFAULTS).join(", ")}` });
+            if (input.options.json) return { exitCode: 0, stdout: JSON.stringify(key ? { [key]: cur[key as keyof Settings] } : cur, null, 2) };
+            const keys = (key ? [key] : Object.keys(SETTING_DEFAULTS)) as (keyof Settings)[];
+            return { exitCode: 0, stdout: keys.map((k) => `${k} = ${String(cur[k])}    # ${SETTING_LABELS[k]}`).join("\n") };
+          },
+        }),
+        "config set": cliCommand({
+          summary: "Изменить настройку надзора: enabled, autoEnroll, defaultMode, intervalMinutes, maxNudges, checkGoal",
+          positionals: [
+            { name: "key", description: "Параметр", required: true },
+            { name: "value", description: "Значение (true/false, supervise/observe, число)", required: true },
+          ],
+          async run(input) {
+            const key = input.positionals.key;
+            if (!isSettingKey(key)) throw new PluginCliError(`неизвестный параметр ${key}`, { code: "bad_key", hint: `Параметры: ${Object.keys(SETTING_DEFAULTS).join(", ")}` });
+            let value: Settings[keyof Settings];
+            try {
+              value = parseSettingValue(key, input.positionals.value);
+            } catch (error) {
+              throw new PluginCliError(errText(error), { code: "bad_value" });
+            }
+            await (settings as unknown as { experimental_set(v: Obj): Promise<unknown> }).experimental_set({ [key]: value });
+            return { exitCode: 0, stdout: `${key} = ${String(value)}` };
           },
         }),
         "resume-goal": cliCommand({
@@ -304,7 +486,7 @@ export default function codexDelegationWatch(bb: BbPluginApi) {
             if (s.goal.status === "active" || s.goal.status === "complete") return { exitCode: 0, stdout: `Цель уже ${s.goal.status}.` };
             await sendText(id, "/goal resume");
             const w = await load(id);
-            if (w) await save({ ...w, done: false, alerts: w.alerts.filter((k) => !k.startsWith("goal:")), nextCheckAt: Date.now() + DEFAULTS.firstCheckMs });
+            if (w) await save({ ...w, done: false, alerts: w.alerts.filter((k) => !k.startsWith("goal:")), nextCheckAt: Date.now() + configFrom(await current()).firstCheckMs });
             return { exitCode: 0, stdout: "Отправил /goal resume. Проверьте через минуту: bb codex-watch check " + id };
           },
         }),

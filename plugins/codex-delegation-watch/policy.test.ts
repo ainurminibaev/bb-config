@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CONTINUE_NUDGE, DEFAULTS, GOAL_NUDGE, evaluate, latestGoal, newWatch, shouldEnroll, type Snapshot, type Watch } from "./policy.ts";
+import { CONTINUE_NUDGE, DEFAULTS, GOAL_NUDGE, SETTING_DEFAULTS, configFrom, evaluate, isSettingKey, latestGoal, newWatch, parseSettingValue, shouldEnroll, type Snapshot, type Watch } from "./policy.ts";
 
 const T0 = 1_000_000_000;
 const MIN = 60_000;
@@ -122,4 +122,52 @@ test("the Goal is read from the newest provider-codex/goal extension state", () 
   assert.equal(latestGoal([{ type: "thread/goal/cleared", data: {} }, goal("active")]), null);
   assert.equal(latestGoal([{ type: "thread/extensionState/updated", data: { kind: "provider-codex/goal", payload: null } }]), null);
   assert.equal(latestGoal([]), null);
+});
+
+test("settings defaults reproduce the built-in policy", () => {
+  const cfg = configFrom(SETTING_DEFAULTS);
+  assert.equal(cfg.intervalMs, 5 * MIN);
+  assert.equal(cfg.maxNudges, 3);
+  assert.equal(cfg.checkGoal, true);
+  assert.equal(cfg.idleNudgeMs, DEFAULTS.idleNudgeMs);
+  assert.equal(cfg.nudgeCooldownMs, DEFAULTS.nudgeCooldownMs);
+});
+
+test("the interval setting drives check timing", () => {
+  const cfg = configFrom({ ...SETTING_DEFAULTS, intervalMinutes: 1 });
+  assert.equal(cfg.intervalMs, MIN);
+  assert.equal(cfg.firstCheckMs, MIN);
+  assert.equal(cfg.idleNudgeMs, MIN);
+  const ten = configFrom({ ...SETTING_DEFAULTS, intervalMinutes: 10 });
+  assert.equal(ten.idleNudgeMs, 9 * MIN);
+  assert.equal(ten.firstCheckMs, DEFAULTS.firstCheckMs);
+});
+
+test("with goal checking off a goal-less child is neither nudged nor reported", () => {
+  const cfg = configFrom({ ...SETTING_DEFAULTS, checkGoal: false });
+  assert.equal(evaluate(watch(), snap(), cfg).decision.kind, "wait");
+  assert.equal(evaluate(watch(), snap({ status: "idle" }), cfg).decision.kind, "finish");
+  assert.equal(evaluate(watch(), snap({ now: T0 + 30 * MIN, lastEventAt: T0 + 10 * MIN }), cfg).decision.kind, "alert");
+});
+
+test("maxNudges = 0 never nudges and tells the parent once", () => {
+  const cfg = configFrom({ ...SETTING_DEFAULTS, maxNudges: 0 });
+  const d = evaluate(watch(), snap(), cfg).decision;
+  assert.equal(d.kind, "alert");
+  assert.match(d.kind === "alert" ? d.text : "", /выключено настройкой/);
+});
+
+test("CLI values are parsed strictly", () => {
+  assert.equal(parseSettingValue("enabled", "off"), false);
+  assert.equal(parseSettingValue("enabled", "TRUE"), true);
+  assert.equal(parseSettingValue("defaultMode", "observe"), "observe");
+  assert.equal(parseSettingValue("intervalMinutes", "15"), 15);
+  assert.equal(parseSettingValue("maxNudges", "0"), 0);
+  assert.throws(() => parseSettingValue("intervalMinutes", "0"));
+  assert.throws(() => parseSettingValue("intervalMinutes", "2.5"));
+  assert.throws(() => parseSettingValue("maxNudges", "11"));
+  assert.throws(() => parseSettingValue("defaultMode", "loud"));
+  assert.throws(() => parseSettingValue("checkGoal", "maybe"));
+  assert.equal(isSettingKey("maxNudges"), true);
+  assert.equal(isSettingKey("toString"), false);
 });
