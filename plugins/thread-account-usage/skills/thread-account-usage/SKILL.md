@@ -22,3 +22,5 @@ identity limitations, DOM anchors and restoration are described in the plugin
 README.md. After changing source, run TypeScript, `node --test logic.test.ts`,
 `bb plugin build .`, then `bb plugin reload thread-account-usage` from the
 installed plugin directory. Build alone does not update the running bundle.
+
+The provider logo is centered inside the quota rings. Reset credits occupy a separate inline badge in both the header and the footer.

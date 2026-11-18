@@ -420,7 +420,7 @@
   },
   {
     "id": "thread-account-usage",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "enabled": true,
     "name": "Thread Account Usage",
     "source": "path:plugins/thread-account-usage"

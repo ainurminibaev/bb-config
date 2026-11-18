@@ -33,12 +33,27 @@ function resetText(at: string | null, now: number) {
   return { relative, exact: new Date(at).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) };
 }
 function QuotaGlyph({ windows, logo, agent, resets=0, blocked=0 }: { windows: QuotaWindow[]; logo?:string|null;agent?:string;resets?:number;blocked?:number }) {
-  return <span className="tau-glyph-wrap"><svg className="tau-quota-glyph" viewBox="0 0 32 32" role="img" aria-label={windows.map(w=>`${short(w)}: ${pct(w.usedPercent)}`).join(', ')}>
-    {windows.slice(0,2).map((w,i)=><g key={`${w.label}:${i}`} data-level={level(w.usedPercent)}><title>{w.label}: {pct(w.usedPercent)}</title>
-      <circle className="tau-track" cx="16" cy="16" r={13-i*5} />
-      <circle className="tau-fill" cx="16" cy="16" r={13-i*5} pathLength="100" strokeDasharray={`${Math.min(100,Math.max(0,w.usedPercent))} 100`} transform="rotate(-90 16 16)" />
-    </g>)}
-  </svg>{logo&&<img className="tau-glyph-agent" src={logo} alt={agent??''}/>}{resets>0&&<sup className="tau-glyph-credit" title={`Доступно сбросов: ${resets}`}>+{resets}</sup>}{blocked>0&&<span className="tau-account-status-dot" title={`Исчерпан общий лимит у аккаунтов: ${blocked}`} role="img" aria-label={`Исчерпан общий лимит у аккаунтов: ${blocked}`}/>}</span>;
+  return (
+    <span className="tau-glyph-wrap">
+      <span className="tau-glyph-icon" data-double={windows.length > 1}>
+        <svg className="tau-quota-glyph" viewBox="0 0 32 32" role="img"
+          aria-label={windows.map(w => `${short(w)}: ${pct(w.usedPercent)}`).join(', ')}>
+          {windows.slice(0, 2).map((w, i) => (
+            <g key={`${w.label}:${i}`} data-level={level(w.usedPercent)}>
+              <title>{w.label}: {pct(w.usedPercent)}</title>
+              <circle className="tau-track" cx="16" cy="16" r={13 - i * 5} />
+              <circle className="tau-fill" cx="16" cy="16" r={13 - i * 5} pathLength="100"
+                strokeDasharray={`${Math.min(100, Math.max(0, w.usedPercent))} 100`} transform="rotate(-90 16 16)" />
+            </g>
+          ))}
+        </svg>
+        {logo && <img className="tau-glyph-agent" src={logo} alt={agent ?? ''} />}
+        {blocked > 0 && <span className="tau-account-status-dot" title={`Исчерпан общий лимит у аккаунтов: ${blocked}`}
+          role="img" aria-label={`Исчерпан общий лимит у аккаунтов: ${blocked}`} />}
+      </span>
+      {resets > 0 && <span className="tau-glyph-credit" title={`Доступно сбросов: ${resets}`}>+{resets}</span>}
+    </span>
+  );
 }
 function RefreshIcon({loading}:{loading:boolean}) {
   return <svg className="tau-refresh-icon" data-loading={loading} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

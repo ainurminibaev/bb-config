@@ -1,0 +1,10 @@
+{
+  "id": "thread-account-usage-layout",
+  "title": "Размещение индикаторов лимитов в шапке и сайдбаре",
+  "component": "thread-account-usage",
+  "where": "server",
+  "kind": "local-plugin",
+  "plugin": "thread-account-usage",
+  "rerun": "Проверить версию и состояние установленного плагина. Повторная установка сохраняет его настройки.",
+  "rollback": "Вернуть предыдущую версию плагина из сохранённого checkout, пересобрать и перезагрузить его."
+}
