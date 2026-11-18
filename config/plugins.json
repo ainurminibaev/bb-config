@@ -134,6 +134,13 @@
     "source": "path:plugins/code-open"
   },
   {
+    "id": "codex-delegation-watch",
+    "version": "0.1.0",
+    "enabled": true,
+    "name": "Codex Delegation Watch",
+    "source": "path:plugins/codex-delegation-watch"
+  },
+  {
     "id": "codex-realtime",
     "version": "0.1.0",
     "enabled": true,
