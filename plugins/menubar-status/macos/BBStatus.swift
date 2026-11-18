@@ -398,7 +398,7 @@ final class Controller: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     /// the label row, per account a thick bar (5 hours) and a thin one (week),
     /// both filling up from 0 to 100 % used, with the machine's initial
     /// underneath; then the time until the reset of the fullest bar.
-    func usageBlock(_ ink: NSColor) -> (image: NSImage, signature: String)? {
+    func usageBlock(_ ink: NSColor, compact: Bool, includeTimer: Bool = true) -> (image: NSImage, signature: String)? {
         guard !accounts.isEmpty else { return nil }
         let height: CGFloat = 22, barY: CGFloat = 8, barHeight: CGFloat = 13
         let letterFont = NSFont.systemFont(ofSize: 6.5, weight: .semibold)
@@ -410,16 +410,19 @@ final class Controller: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         var previous = ""
         for account in accounts {
             if account.provider != previous {
-                if !previous.isEmpty { separators.append(x + 3); x += 6.5 }
+                if !previous.isEmpty {
+                    separators.append(x + (compact ? 2 : 3))
+                    x += compact ? 4.5 : 6.5
+                }
                 glyphs.append((account.provider, x))
                 x += 8
                 previous = account.provider
             } else {
-                x += 3.5
+                x += compact ? 2 : 3.5
             }
-            let label = NSMutableAttributedString(string: account.machines, attributes: [
+            let label = NSMutableAttributedString(string: compact ? "" : account.machines, attributes: [
                 .font: letterFont, .foregroundColor: ink.withAlphaComponent(0.85), .kern: 0.3])
-            if account.resets > 0 {
+            if !compact && account.resets > 0 {
                 label.append(NSAttributedString(string: "+\(account.resets)", attributes: [
                     .font: NSFont.systemFont(ofSize: 6.5, weight: .heavy),
                     .foregroundColor: NSColor(red: 0.45, green: 0.95, blue: 0.6, alpha: 1)]))
@@ -441,16 +444,18 @@ final class Controller: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         }
         var timer: NSAttributedString? = nil
         var badge: NSColor? = nil
-        if let shown = shown, shown.reset != nil {
+        let badgePadding: CGFloat = compact ? 4 : 8
+        if includeTimer, let shown = shown, shown.reset != nil {
             let calm = shown.used < 90
             // Red or orange text is hard to read on the menu bar: an alert is
             // white text on a coloured badge instead.
             badge = calm ? nil : (shown.used >= 100 ? NSColor(red: 0.93, green: 0.23, blue: 0.2, alpha: 1)
                                                   : NSColor(red: 0.96, green: 0.55, blue: 0.05, alpha: 1))
-            timer = NSAttributedString(string: untilText(shown.reset), attributes: [
+            let time = untilText(shown.reset)
+            timer = NSAttributedString(string: compact ? time.replacingOccurrences(of: " ", with: "") : time, attributes: [
                 .font: NSFont.monospacedDigitSystemFont(ofSize: 9.5, weight: calm ? .regular : .bold),
                 .foregroundColor: calm ? ink.withAlphaComponent(0.75) : NSColor.white])
-            x += 4.5 + ceil(timer!.size().width) + (badge != nil ? 8 : 0)
+            x += (compact ? 3 : 4.5) + ceil(timer!.size().width) + (badge != nil ? badgePadding : 0)
         }
         let signature = columns.map { "\($0.account.machines)+\($0.account.resets):\(Int($0.account.five ?? -1)):\(Int($0.account.week ?? -1))" }
             .joined(separator: ",") + "|" + (timer?.string ?? "")
@@ -484,10 +489,11 @@ final class Controller: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             if let timer = timer {
                 let size = timer.size()
                 if let badge = badge {
-                    let pill = NSRect(x: x - ceil(size.width) - 8, y: (height - 14) / 2, width: ceil(size.width) + 8, height: 14)
+                    let pillWidth = ceil(size.width) + badgePadding
+                    let pill = NSRect(x: x - pillWidth, y: (height - 14) / 2, width: pillWidth, height: 14)
                     badge.setFill()
                     NSBezierPath(roundedRect: pill, xRadius: 7, yRadius: 7).fill()
-                    timer.draw(at: NSPoint(x: pill.minX + 4, y: (height - size.height) / 2))
+                    timer.draw(at: NSPoint(x: pill.minX + badgePadding / 2, y: (height - size.height) / 2))
                 } else {
                     timer.draw(at: NSPoint(x: x - ceil(size.width), y: (height - size.height) / 2))
                 }
@@ -520,16 +526,40 @@ final class Controller: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             .font: NSFont.systemFont(ofSize: 14, weight: .bold), .foregroundColor: ink])
         let digits: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 12.5, weight: .semibold), .foregroundColor: ink]
-        var width = ceil(logo.size().width) + 2
+        let logoWidth = ceil(logo.size().width) + 2
         let pieces: [(NSImage?, NSAttributedString?)] = parts.map { part in
             let image = symbol(part.symbol, part.color)
             let count = part.count > 0 ? NSAttributedString(string: "\(part.count)", attributes: digits) : nil
-            width += 5 + 16 + (count.map { 2 + ceil($0.size().width) } ?? 0)
             return (image, count)
         }
-        let usage = usageBlock(ink)
-        if let usage = usage { width += 9 + usage.image.size.width }
-        let signature = "\(dark)|" + parts.map { "\($0.symbol):\($0.count)" }.joined(separator: ",")
+
+        func statusWidth(symbolSide: CGFloat, partGap: CGFloat, countGap: CGFloat) -> CGFloat {
+            pieces.reduce(logoWidth) { width, piece in
+                width + partGap + symbolSide + (piece.1.map { countGap + ceil($0.size().width) } ?? 0)
+            }
+        }
+
+        // macOS can hide the whole item if its image is too wide for a crowded menu bar.
+        // Leave room for the margins AppKit adds around the image.
+        let maxImageWidth: CGFloat = 180
+        let fullUsage = usageBlock(ink, compact: false)
+        let fullUsageWidth = fullUsage.map { 9 + $0.image.size.width } ?? 0
+        let compact = statusWidth(symbolSide: 16, partGap: 5, countGap: 2) + fullUsageWidth > maxImageWidth
+        let symbolSide: CGFloat = compact ? 14 : 16
+        let partGap: CGFloat = compact ? 2 : 5
+        let countGap: CGFloat = compact ? 1 : 2
+        let usageGap: CGFloat = compact ? 4 : 9
+        let countsWidth = statusWidth(symbolSide: symbolSide, partGap: partGap, countGap: countGap)
+        let availableUsageWidth = maxImageWidth - countsWidth - usageGap
+        var usage = compact ? usageBlock(ink, compact: true) : fullUsage
+        if let block = usage, block.image.size.width > availableUsageWidth {
+            usage = usageBlock(ink, compact: true, includeTimer: false)
+        }
+        if let block = usage, block.image.size.width > availableUsageWidth {
+            usage = nil
+        }
+        let width = countsWidth + (usage.map { usageGap + $0.image.size.width } ?? 0)
+        let signature = "\(dark)|\(compact)|" + parts.map { "\($0.symbol):\($0.count)" }.joined(separator: ",")
             + "|\(usage?.signature ?? "")"
         if signature == lastSignature { return }
         lastSignature = signature
@@ -538,29 +568,29 @@ final class Controller: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         var spinImage: NSImage? = nil
         var x0: CGFloat = 1 + ceil(logo.size().width) + 1
         for (index, (symbolImage, count)) in pieces.enumerated() {
-            x0 += 5
+            x0 += partGap
             if parts[index].spins { spinX = x0; spinImage = symbolImage }
-            x0 += 16 + (count.map { 2 + ceil($0.size().width) } ?? 0)
+            x0 += symbolSide + (count.map { countGap + ceil($0.size().width) } ?? 0)
         }
         let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { _ in
             var x: CGFloat = 1
             logo.draw(at: NSPoint(x: x, y: (height - logo.size().height) / 2))
             x += ceil(logo.size().width) + 1
             for (index, (symbolImage, count)) in pieces.enumerated() {
-                x += 5
+                x += partGap
                 // The spinning symbol is drawn by its own layer instead.
                 if !self.parts[index].spins {
-                    symbolImage?.draw(in: NSRect(x: x, y: (height - 16) / 2, width: 16, height: 16))
+                    symbolImage?.draw(in: NSRect(x: x, y: (height - symbolSide) / 2, width: symbolSide, height: symbolSide))
                 }
-                x += 16
+                x += symbolSide
                 if let count = count {
-                    x += 2
+                    x += countGap
                     count.draw(at: NSPoint(x: x, y: (height - count.size().height) / 2))
                     x += ceil(count.size().width)
                 }
             }
             if let usage = usage {
-                x += 9
+                x += usageGap
                 usage.image.draw(at: NSPoint(x: x, y: 0), from: .zero, operation: .sourceOver, fraction: 1)
             }
             return true
@@ -569,7 +599,8 @@ final class Controller: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         button.image = rasterize(image, scale: scale)
         button.title = ""
         button.superview?.layoutSubtreeIfNeeded()
-        placeSpinner(spinImage.map { rasterize($0, scale: scale) }, at: spinX, imageWidth: width, scale: scale)
+        placeSpinner(spinImage.map { rasterize($0, scale: scale) }, at: spinX,
+                     imageWidth: width, symbolSide: symbolSide, scale: scale)
     }
 
     /// Draws a drawing-handler image once into a bitmap, so redraws are a copy.
@@ -588,7 +619,7 @@ final class Controller: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         return out
     }
 
-    func placeSpinner(_ image: NSImage?, at slot: CGFloat?, imageWidth: CGFloat, scale: CGFloat) {
+    func placeSpinner(_ image: NSImage?, at slot: CGFloat?, imageWidth: CGFloat, symbolSide: CGFloat, scale: CGFloat) {
         guard let button = item.button else { return }
         guard let image = image, let slot = slot else {
             spinLayer?.removeFromSuperlayer()
@@ -617,8 +648,8 @@ final class Controller: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         layer.contents = image
         // The button centres its image.
         let left = (button.bounds.width - imageWidth) / 2
-        layer.bounds = CGRect(x: 0, y: 0, width: 16, height: 16)
-        layer.position = CGPoint(x: left + slot + 8, y: button.bounds.height / 2)
+        layer.bounds = CGRect(x: 0, y: 0, width: symbolSide, height: symbolSide)
+        layer.position = CGPoint(x: left + slot + symbolSide / 2, y: button.bounds.height / 2)
         CATransaction.commit()
     }
 }
