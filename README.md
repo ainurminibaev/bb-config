@@ -12,17 +12,17 @@
 | [Proxy Manager](plugins/proxy-manager) | Управление прокси, проверку соединений и маршрутов провайдеров | Добавьте собственные прокси |
 | [Project Open](plugins/project-open) | Кнопки у треда: открыть папку проекта в Finder и терминал BB | Для Finder — локальный обработчик на Mac (см. README плагина) |
 | [Push Button](plugins/push-button) | Кнопку «попросить агента запушить» в строке ветки; сам Git не запускает | Не требуется |
+| [Thread Spend](plugins/thread-spend) | Статистика расхода тредов, детализация по ходам и таблица за период | Не требуется |
 | [Thread Account Usage](plugins/thread-account-usage) | Окна квот аккаунта у текущего треда, отдельно от расхода токенов | Не требуется |
 | [Handoff Button](plugins/handoff-button) | Кнопку открытия оригинальной панели Handoff в composer | Установите оригинальный Handoff из каталога BB |
 | [Web BB Button](plugins/web-bb-button) | Глобус в левой панели, открывающий BB в браузере | Укажите публичный URL своего BB в настройках |
 | [Open on Desktop](plugins/file-local-open) | Значки у ссылок на файлы: открыть файл на своём Mac или Windows-компьютере либо сохранить в Загрузки; просмотр PDF по ширине | Не требуется при одном настольном компьютере; иначе `macHostId` |
 | [Browser Page](plugins/browser-page) | Навык для агентов на Windows, где Browser Automation не запускается: открыть страницу во встроенном браузере BB, прочитать, нажать, снять снимок | Не требуется |
 | [Config Updates](plugins/config-updates) | Сообщает о новых стабильных релизах этого репозитория и запускает их применение агентом по кнопке «Обновить с ИИ» | Checkout репозитория должен быть проектом BB на машине сервера |
-| [Plugin Keeper](plugins/voice-mode-keeper) | Сохраняет ваши правки каталожных плагинов при их обновлениях: Voice Mode ([список правок](plugins/voice-mode)), исправления Needs You и Tokenomics. После обновления сам накладывает правки на новую версию (с допуском на сдвиги и переформатирование), проверяет тестами и сборкой, откатывает при несовместимости | Установите Voice Mode, Needs You и Tokenomics из каталога BB. Правки Voice Mode русскоязычные: голос говорит по-русски от первого лица |
+| [Plugin Keeper](plugins/voice-mode-keeper) | Сохраняет ваши правки каталожных плагинов при их обновлениях: Voice Mode ([список правок](plugins/voice-mode)), исправления Needs You и KodaForge. После обновления сам накладывает правки на новую версию (с допуском на сдвиги и переформатирование), проверяет тестами и сборкой, откатывает при несовместимости | Установите Voice Mode, Needs You и KodaForge из каталога BB. Правки Voice Mode русскоязычные: голос говорит по-русски от первого лица |
 
 Патчи к сторонним плагинам (ставятся отдельно, оригиналы остаются из каталога):
-[Needs You](plugins/inbox-compat) — `python3 scripts/apply_inbox_compat.py --host <ID машины сервера> --apply`,
-[Tokenomics](plugins/tokenomics-compat) — `python3 scripts/apply_tokenomics_compat.py --apply`.
+[Needs You](plugins/inbox-compat) — `python3 scripts/apply_inbox_compat.py --host <ID машины сервера> --apply`.
 
 ## Установка одного плагина
 

@@ -1,0 +1,13 @@
+{
+  "id": "thread-account-usage-thread-spend",
+  "title": "Кольца квот рядом с Thread Spend",
+  "component": "thread-account-usage",
+  "where": "server",
+  "kind": "local-plugin",
+  "plugin": "thread-account-usage",
+  "rerun": "Сверяет версию и источник установленного плагина.",
+  "rollback": "Вернуть предыдущую версию из сохранённого checkout, собрать и перезагрузить.",
+  "after": [
+    "next/thread-spend-plugin"
+  ]
+}

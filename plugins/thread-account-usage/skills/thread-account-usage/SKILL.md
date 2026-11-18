@@ -10,7 +10,7 @@ quota window has its own column: label and used percentage above, time until
 reset (↻) below. Keep five-hour before weekly in both columns and rings,
 regardless of used percentage; model/other windows follow as fallbacks.
 Only reported windows appear; a provider may report one or two.
-These are account quotas, separate from the adjacent Tokenomics thread spend.
+These are account quotas, separate from the adjacent Thread Spend statistics.
 
 `+N` means confirmed available reset credits. Codex credits are read through
 its existing CLI and matched by email. Claude reset counts are currently unknown;

@@ -25,14 +25,11 @@ tests, the added regression tests, TypeScript and build in staging; on any
 failure the release keeps running unmodified and a notice explains why. This
 is a tested compatibility layer, not a guarantee about every future version.
 
-It also checks three catalog plugins with `patch_keeper.py` after startup,
-after an update and every 10 minutes. Needs You and KodaForge can use patch
-files with `patch --fuzz=2`. Tokenomics uses a single source anchor and version
-and checksum checks on the installed catalog copy. A fixed release needs no
-changes. The keeper builds the staged copy against installed dependencies
-before reloading it. A failed start restores the previous files and bundle.
+It also keeps the Needs You and KodaForge fixes through `patch_keeper.py`.
+The keeper checks after startup, after an update, and every ten minutes.
+It builds the staged copy against installed dependencies before reloading
+it. A failed start restores the previous source and bundle.
 Tests: `python3 plugins/voice-mode-keeper/test_patch_keeper.py`.
-KodaForge shows Close all only in the workspace tab context menu.
 
 Restore from bb-config with `python3 scripts/restore.py --plugins --apply`.
 The sibling `plugins/voice-mode` patch directory must remain alongside this

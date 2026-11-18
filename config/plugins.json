@@ -434,7 +434,7 @@
   },
   {
     "id": "thread-account-usage",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "enabled": true,
     "name": "Thread Account Usage",
     "source": "path:plugins/thread-account-usage"
@@ -447,12 +447,11 @@
     "source": "builtin:thread-list"
   },
   {
-    "id": "tokenomics",
-    "version": "0.2.2",
+    "id": "thread-spend",
+    "version": "0.1.2",
     "enabled": true,
-    "name": "Tokenomics",
-    "source": "git:https://github.com/danielbachhuber/bb-plugins.git@semver:tokenomics/:^0.2.0",
-    "installSource": "tokenomics@bb-community"
+    "name": "Thread Spend",
+    "source": "path:plugins/thread-spend"
   },
   {
     "id": "usage",
@@ -479,7 +478,7 @@
   },
   {
     "id": "voice-mode-keeper",
-    "version": "0.2.5",
+    "version": "0.2.7",
     "enabled": true,
     "name": "Plugin Keeper",
     "source": "path:plugins/voice-mode-keeper"

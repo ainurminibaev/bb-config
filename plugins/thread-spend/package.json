@@ -1,0 +1,34 @@
+{
+  "name": "bb-plugin-thread-spend",
+  "version": "0.1.2",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "bb": ">=0.49.0",
+    "bbPluginSdk": ">=0.6.132"
+  },
+  "bb": {
+    "name": "Thread Spend",
+    "description": "Локальные метрики расхода токенов в тредах BB",
+    "branding": {
+      "icon": "ChartNoAxesColumn"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test tests/*.test.ts",
+    "test:app": "node tests/app-smoke.mjs"
+  },
+  "dependencies": {
+    "@get-bb/plugin-sdk": "0.6.132",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "typescript": "^5.7.0"
+  }
+}

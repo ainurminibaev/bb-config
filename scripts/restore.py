@@ -4,7 +4,7 @@ import argparse
 import json
 from voice_source import is_voice_fork
 from pathlib import Path
-from plugin_scope import externally_managed
+from plugin_scope import externally_managed, RETIRED_PLUGINS
 import shlex
 import subprocess
 import sys
@@ -15,9 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 # These may change connectivity or provider routing. Preserve for explicit setup.
 MANUAL_SETTINGS = {'connect', 'proxy-manager', 'provider-acp'}
 MANUAL_STATES = {'connect', 'bb--connect-next', 'account-pool'}
-# Added by the reviewed managed-source patch, absent from the catalog release.
-# plugins/voice-mode/apply.py restores these after building the patched plugin.
-MANUAL_PLUGIN_KEYS = {'voice-mode': {'vadThreshold', 'silenceDurationMs', 'noiseReduction'}}
+# Settings restored separately or retired. Older snapshots may still include them.
+MANUAL_PLUGIN_KEYS = {
+    'voice-mode': {'vadThreshold', 'silenceDurationMs', 'noiseReduction'},
+    'thread-account-usage': {'hideGlobalTokenomics'},
+}
 
 
 def read(name, root=ROOT):
@@ -70,8 +72,15 @@ def plan(install_plugins=False, root=ROOT, installed=None):
     if (root / 'config/codex.json').is_file():
         commands.append([sys.executable, str(root / 'scripts/codex_defaults.py'),
                          '--defaults', str(root / 'config/codex.json'), '--apply'])
-    excluded = externally_managed(root)
-    manifest = [p for p in read('plugins', root) if p['id'] not in excluded]
+    excluded = externally_managed(root) | RETIRED_PLUGINS
+    saved = read('plugins', root)
+    manifest = [p for p in saved if p['id'] not in excluded]
+    legacy = next((p for p in saved if p['id'] == 'tokenomics'), None)
+    if legacy and 'thread-spend' not in excluded and not any(p['id'] == 'thread-spend' for p in manifest):
+        public = json.loads((root / 'config/plugins.json').read_text())
+        replacement = next((p for p in public if p['id'] == 'thread-spend'), None)
+        if replacement:
+            manifest.append({**replacement, 'enabled': legacy['enabled']})
     if install_plugins:
         for plugin in manifest:
             source = install_source(plugin)
@@ -138,6 +147,10 @@ def plan(install_plugins=False, root=ROOT, installed=None):
         for plugin in manifest:
             if not plugin['enabled'] and plugin['id'] not in MANUAL_STATES:
                 commands.append(['bb', 'plugin', 'disable', plugin['id']])
+        if installed is not None and 'tokenomics' in installed and any(
+            p['id'] == 'thread-spend' and p['enabled'] for p in manifest
+        ):
+            commands.append([sys.executable, str(root / 'scripts/switch_thread_spend.py'), '--apply'])
     return commands
 
 

@@ -15,7 +15,7 @@ export type KeeperStatus = z.infer<typeof Status>;
 export const rpcContract = defineRpcContract({ status: { input: z.null(), output: Status } });
 const PREFERENCE_KEYS = ["voice", "connection", "messageText", "prefixMessages", "widgetStyle", "vadThreshold", "silenceDurationMs", "noiseReduction"];
 const INITIAL: KeeperStatus = { state: "checking", message: "Проверяю совместимость Voice Mode…", version: "", kept: [] };
-const KEPT_PLUGINS = ["inbox", "tokenomics", "kodaforge"];
+const KEPT_PLUGINS = ["inbox", "kodaforge"];
 /** Recheck kept fixes this often even without an update (cheap when in place). */
 const KEPT_RECHECK_MS = 10 * 60_000;
 

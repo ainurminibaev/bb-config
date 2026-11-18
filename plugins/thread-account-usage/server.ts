@@ -8,7 +8,6 @@ const string = (v: unknown): string | null => typeof v === 'string' && v.length 
 
 export default function plugin(bb: BbPluginApi) {
   const hostClient = bb.hosts.experimental_client({ contract: hostContract });
-  bb.settings.define({ hideGlobalTokenomics: { type: 'boolean', label: 'Hide duplicate global Tokenomics indicator', default: true } });
   // Cache in memory only. No account identities or usage history persisted.
   const cache = new Map<string, { at: number; accounts: Account[] }>();
   const pending = new Map<string, Promise<Account[]>>();

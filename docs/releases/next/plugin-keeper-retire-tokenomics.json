@@ -1,0 +1,13 @@
+{
+  "id": "plugin-keeper-retire-tokenomics",
+  "title": "Plugin Keeper без сопровождения Tokenomics",
+  "component": "voice-mode-keeper",
+  "where": "server",
+  "kind": "local-plugin",
+  "plugin": "voice-mode-keeper",
+  "rerun": "Сверяет версию и источник установленного плагина.",
+  "rollback": "Вернуть предыдущую версию из сохранённого checkout, собрать и перезагрузить.",
+  "after": [
+    "next/thread-spend-plugin"
+  ]
+}

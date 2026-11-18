@@ -223,12 +223,9 @@ sidebar.threadListProvider '"thread-list/thread-list"'` или
 ## Индикаторы usage
 
 Для общего обзора расхода подключённых машин используется `Usage` (`usage`),
-для статистики тредов и детализации по сообщениям — `Tokenomics` (`tokenomics`),
-для лимитов аккаунта треда и общего обзора — собственный `Thread Account Usage`
-(`plugins/thread-account-usage/`). Usage и Tokenomics остаются установленными
-из каталога `bb-community`, чтобы сохранять штатные обновления.
+для статистики тредов — `Thread Spend` (`plugins/thread-spend/`), для квот
+аккаунта — `Thread Account Usage` (`plugins/thread-account-usage/`).
 Usage Tracker также сохранён из каталога, но отключён как дублирующий индикатор.
-Исходники сторонних плагинов здесь не копируются.
 
 В Usage Tracker штатная настройка `compactLimit` установлена в `Five-hour`:
 `bb plugin config usage-tracker set compactLimit Five-hour`. Она сохраняется
@@ -238,28 +235,29 @@ Usage Tracker также сохранён из каталога, но отклю
 сбросов лимитов, а не дополнительные аккаунты. Дополнительные окна, включая
 Fable, видны при открытии деталей конкретного аккаунта.
 
-Восстановление: `bb plugin install usage@bb-community --yes`,
-`bb plugin install tokenomics@bb-community --yes` и
-`bb plugin install usage-tracker@bb-community --yes`, либо общий
-`python3 scripts/restore.py --plugins --apply` с приватным снимком.
+Восстановление: `python3 scripts/restore.py --plugins --apply`.
+Изолированная установка Thread Spend описана в [README плагина](../plugins/thread-spend).
+Старый приватный снимок с Tokenomics восстанавливается с Thread Spend и
+сохраняет прежнее состояние включения. Restore отключает установленный
+Tokenomics только после запуска Thread Spend.
 Прежние `bb--provider-usage`, `limits` и `usage-tracker` отключены штатной командой
 `bb plugin disable <id>`, их настройки сохранены. Вернуть индикатор можно
 командой `bb plugin enable <id>`. Плагин `ai-usage` не устанавливается.
 
-Usage собирает историю с доступных подключённых машин; первый сбор может
-занять время. Tokenomics читает доступные события истории BB и продолжает
-учёт новых событий после установки.
+Usage собирает историю с доступных подключённых машин. Thread Spend
+читает сохранённые события BB. Если часть истории сокращена при очистке
+событий, статистика показывает доступное покрытие.
 Авторизации CLI и нестандартные пути профилей проверяются отдельно на каждой
 машине; снимок настроек не содержит авторизации или историю использования.
 
 ### Thread Account Usage
 
-В заголовке треда слева от существующего графика Tokenomics: логотип агента,
+В заголовке треда слева от индикатора Thread Spend: логотип агента,
 аккаунт CLI, сервер и единый значок с двумя вложенными кольцами. Рядом указаны
 до двух применимых окон и время сброса каждого. Порядок колонок и колец
 фиксирован: сначала 5ч, затем неделя, независимо от расхода. Модельные
 и прочие окна следуют за общими, отсутствующие окна не подставляются.
-График Tokenomics подписан «Тред / 24ч»: он описывает расход этой беседы,
+Индикатор «Тред / 24ч»: он описывает расход этой беседы,
 а кольца — общие лимиты аккаунта.
 Плагин поддерживает несколько одновременно открытых тредов через SDK split
 layout. Кнопки терминала остаются после блока usage. Кружок контекста BB
@@ -309,12 +307,6 @@ host worker читает количество сбросов Codex через с
 Отдельный профиль/маршрут, включённый пул или отсутствие метаданных дают
 явный статус «Аккаунт не подтверждён» вместо чужих лимитов.
 
-Настройка `hideGlobalTokenomics` скрывает верхний левый индикатор Tokenomics
-адресным стилем нашего плагина; файлы готового плагина не меняются.
-Можно вернуть через `bb plugin config thread-account-usage set
-hideGlobalTokenomics false`. После отключения нашего плагина скрытие и
-добавленные DOM-элементы удаляются.
-
 Восстановление на сервере BB: `npm ci --prefix plugins/thread-account-usage`,
 `bb plugin build plugins/thread-account-usage`, затем
 `bb plugin install ./plugins/thread-account-usage --yes` и
@@ -324,29 +316,18 @@ hideGlobalTokenomics false`. После отключения нашего пла
 `node --test plugins/thread-account-usage/logic.test.ts`.
 Для отката отключите `thread-account-usage` и включите `usage-tracker`.
 
-### Совместимость Tokenomics 0.2.2
+### Переход на Thread Spend
 
-В ответе `usage_limits` неизвестная оценка `sizeTokens` возвращалась как
-`undefined`. BB отклоняет её с `non_json_result`. Исправление добавляет
-`?? null` в единственном совпавшем месте в локальной копии Tokenomics.
-[Апстрим](https://github.com/danielbachhuber/bb-plugins/tree/b5614806ae4456546fcf00d25ea6be302ada4382/bb-plugin-tokenomics)
-задан в `plugins/tokenomics-compat/upstream.json` вместе с версией и
-контрольными суммами исходника и результата.
-
-На машине сервера BB выполните `python3 scripts/apply_tokenomics_compat.py`
-для проверки и `python3 scripts/apply_tokenomics_compat.py --apply` для
-применения. Скрипт читает установленный каталоговый исходник. При одном
-подходящем якоре и совпадении контрольных сумм он собирает исправленную
-копию и перезагружает плагин. Повтор на исправленном файле не запускает
-сборку и перезагрузку. Если апстрим изменил код, скрипт останавливается с
-сообщением, а Keeper показывает статус внимания. Наличие исправления у
-апстрима распознаётся по тому же якорю.
-
-`restore.py --plugins --apply` устанавливает Tokenomics из исходного
-каталога и восстанавливает Plugin Keeper. Keeper проверяет установленный
-исходник при запуске и после обновлений, используя ту же программную правку.
-Проверка результата: `bb plugin rpc call tokenomics usage_limits --json`
-и `bb tokenomics threads --limit 3 --json`.
+После сборки и установки Thread Spend проверьте индикатор «Тред / 24ч»,
+детализацию по ходам и `bb thread-spend threads --limit 3 --json`.
+Команда `python3 scripts/switch_thread_spend.py --apply` отключает
+Tokenomics после проверки RPC и сохранения приватных сводок за 1, 7 и 30 дней.
+В Thread Spend они доступны как «До перехода». Снимок лежит в
+`.local/docs/thread-spend-history.json` и восстанавливается с приватными документами.
+Повторная проверка
+доступна через `--check`. Для ручного отката отключите `thread-spend` и
+включите существующий `tokenomics`. Каталожная установка, её данные и
+история BB остаются доступны для отката.
 
 ## Установка
 
@@ -1785,7 +1766,7 @@ bb image-gen services                     # готовность машин
 
 Работают на Windows: `updates.py`, `snapshot.py`, `restore.py`, `codex_defaults.py`,
 `patch_keeper.py`; плагины `config-updates`, `voice-mode-keeper` (сопровождение Needs You,
-Tokenomics и KodaForge; часть для Voice Mode не проверялась), `file-local-open`,
+KodaForge; часть для Voice Mode не проверялась), `file-local-open`,
 `menubar-status` с клиентом на панели задач и все плагины без системных зависимостей.
 Не перенесены: резервные копии (`daily_backup.py`, `server_backup.py`, `private_backup.py`,
 `backup_keys.py` — `fcntl` и macOS Keychain), `setup_tracking.py`, службы macOS и systemd,
