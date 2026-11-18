@@ -35,6 +35,7 @@ import { ROW_MARK_CSS, RowMarkChooser } from "./lib/row-mark-chooser";
 import { FILTER_PICKER_CSS, FilterPicker, type FilterOption } from "./lib/filter-picker";
 import { textMatches } from "./lib/text-match";
 import { installSidebarView } from "./lib/sidebar-view";
+import { waitForThreadListBundle } from "./lib/thread-list-bundle";
 import { SearchExtras, SearchSettings, type SearchOptions } from "./lib/thread-search";
 
 const TABS_CHANGED = "machine-tabs-changed";
@@ -43,7 +44,6 @@ const ICONS_REFRESH_MS = 5 * 60 * 1000;
 // Marks are grey on purpose: they tell projects apart without pulling the eye.
 const GREY_MARK_BG = "oklch(0.6 0 0 / 0.16)";
 const GREY_MARK_FG = "oklch(0.5 0 0)";
-const THREAD_LIST_PLUGIN = "thread-list";
 
 /** The machine whose threads the wrapped list shows; null shows all. */
 type Grouping = "none" | "project" | "machine" | "day";
@@ -100,6 +100,7 @@ const MachineFilter = createContext<ListView>(DEFAULT_VIEW);
 
 type ThreadListComponent = ComponentType<PluginThreadListProps>;
 type Sdk = ReturnType<typeof useSdk>;
+type ThreadListBundle = NonNullable<Awaited<ReturnType<Sdk["plugins"]["list"]>>["plugins"][number]["app"]["bundle"]>;
 type AnyRecord = Record<string, unknown>;
 
 interface ThreadLike {
@@ -401,17 +402,9 @@ function swallow(): unknown {
 }
 
 async function loadNativeList(
-  sdk: Sdk,
+  bundle: ThreadListBundle,
   kind: ListKind,
 ): Promise<ThreadListComponent> {
-  const { plugins } = await sdk.plugins.list();
-  const bundle =
-    plugins.find((plugin) => plugin.id === THREAD_LIST_PLUGIN)?.app.bundle ??
-    null;
-  if (bundle === null) {
-    throw new Error("bb's Thread list plugin is disabled; enable it first.");
-  }
-
   const runtime = (globalThis as AnyRecord).__bbPluginRuntime as
     | AnyRecord
     | undefined;
@@ -595,15 +588,36 @@ async function loadNativeList(
   return component;
 }
 
-function useNativeList(kind: ListKind) {
+function useNativeListBundle() {
   const sdk = useSdk();
+  const [bundle, setBundle] = useState<ThreadListBundle | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    waitForThreadListBundle(() => sdk.plugins.list(), controller.signal).then(
+      (loaded) => {
+        if (!controller.signal.aborted) setBundle(loaded);
+      },
+      (cause: unknown) => {
+        if (!controller.signal.aborted) {
+          setError(cause instanceof Error ? cause.message : String(cause));
+        }
+      },
+    );
+    return () => controller.abort();
+  }, [sdk]);
+  return { bundle, error };
+}
+
+function useNativeList(kind: ListKind, bundle: ThreadListBundle | null) {
   const [component, setComponent] = useState<ThreadListComponent | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
+    if (!bundle) return;
     let cancelled = false;
     let promise = nativeListPromises.get(kind);
     if (!promise) {
-      promise = loadQueue.then(() => loadNativeList(sdk, kind));
+      promise = loadQueue.then(() => loadNativeList(bundle, kind));
       loadQueue = promise.catch(() => undefined);
       nativeListPromises.set(kind, promise);
     }
@@ -621,7 +635,7 @@ function useNativeList(kind: ListKind) {
     return () => {
       cancelled = true;
     };
-  }, [sdk, kind]);
+  }, [bundle, kind]);
   return { component, error };
 }
 
@@ -731,6 +745,7 @@ function MenuSection({
  * the second, repeats inside each group.
  */
 function OrganizeMenu({
+  ready,
   outer,
   byDay,
   onView,
@@ -738,6 +753,7 @@ function OrganizeMenu({
   onMode,
   onChanged,
 }: {
+  ready: boolean;
   outer: Grouping;
   byDay: boolean;
   onView: (view: { byDay: boolean; outer: Grouping }) => void;
@@ -757,6 +773,7 @@ function OrganizeMenu({
   onModeRef.current = onMode;
 
   const refetch = useCallback(() => {
+    if (!ready) return;
     rpc.call("listPreferences", null).then(
       ({ preferences }) => {
         const mode = preferences.organizationMode;
@@ -770,7 +787,7 @@ function OrganizeMenu({
       },
       () => undefined,
     );
-  }, [rpc]);
+  }, [ready, rpc]);
   useEffect(refetch, [refetch]);
   useRealtime("preferences", refetch);
 
@@ -1144,8 +1161,10 @@ const HIDE_EMPTY_GROUPS = `
 
 function MachineThreadList(props: PluginThreadListProps) {
   const { state, select, setView } = useTabs();
-  const { component: NativeList, error } = useNativeList("main");
-  const { component: RecentList } = useNativeList("recent");
+  const { bundle, error: bundleError } = useNativeListBundle();
+  const { component: NativeList, error: listError } = useNativeList("main", bundle);
+  const { component: RecentList } = useNativeList("recent", bundle);
+  const error = bundleError ?? listError;
   const [query, setQuery] = useState("");
   const [searchOptions, setSearchOptions] = useState<SearchOptions>({ archive: false, messages: false });
   // Filters last for the sidebar session; "all" is no filter.
@@ -1450,6 +1469,7 @@ function MachineThreadList(props: PluginThreadListProps) {
             ))}
           </div>
           <OrganizeMenu
+            ready={NativeList !== null}
             outer={outer}
             byDay={byDay}
             onView={setView}
@@ -1652,11 +1672,14 @@ function MachineThreadList(props: PluginThreadListProps) {
         </div>
         </ProjectBadges.Provider>
       ) : error ? (
-        <p className="px-3 py-2 text-xs text-muted-foreground">
-          Machine tabs could not load bb's thread list: {error} Switch back
-          under Settings → Appearance → Sidebar.
+        <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
+          Machine Tabs could not load bb’s thread list. {error}
         </p>
-      ) : null}
+      ) : (
+        <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
+          Waiting for bb’s thread list…
+        </p>
+      )}
     </>
   );
 }

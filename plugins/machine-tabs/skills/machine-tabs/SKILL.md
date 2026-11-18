@@ -71,6 +71,10 @@ preferences and other plugins still active. It does not freeze an old version
 or disable all customizations. If the header anchor changes after a BB update,
 use Settings → Appearance → Sidebar or the CLI command above.
 
+During BB startup, Custom waits for the built-in Thread List automatically.
+The waiting message clears when the list is ready. If BB reports Thread List
+is disabled or failed, check it in Settings → Plugins.
+
 ## Project images
 
 A thread row and a project header show the project's mark: two letters, or
