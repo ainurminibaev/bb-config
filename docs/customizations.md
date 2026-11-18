@@ -347,9 +347,6 @@ bb plugin rpc call tokenomics usage_limits --json
 ```
 
 Исправление принято в [Tokenomics PR #100](https://github.com/danielbachhuber/bb-plugins/pull/100).
-Thread Spend остаётся отдельным необязательным плагином, выключенным по
-умолчанию. Приватный снимок прежних сводок хранится отдельно от установок
-плагинов.
 
 ## Установка
 

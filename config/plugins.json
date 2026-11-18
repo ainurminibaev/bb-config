@@ -447,13 +447,6 @@
     "source": "builtin:thread-list"
   },
   {
-    "id": "thread-spend",
-    "version": "0.1.2",
-    "enabled": false,
-    "name": "Thread Spend",
-    "source": "path:plugins/thread-spend"
-  },
-  {
     "id": "tokenomics",
     "version": "0.2.2",
     "enabled": true,
