@@ -25,18 +25,14 @@ tests, the added regression tests, TypeScript and build in staging; on any
 failure the release keeps running unmodified and a notice explains why. This
 is a tested compatibility layer, not a guarantee about every future version.
 
-It also keeps the small fixes of two more catalog plugins, Needs You (`inbox`)
-Tokenomics and KodaForge, with `patch_keeper.py`: after an update (and every 10 minutes)
-it checks whether the fix is in place, whether the author has shipped it (then
-the patch is no longer needed), and otherwise applies the stored diff to a
-copy with `patch --fuzz=2` (moved lines, small nearby changes), builds it with
-the installed dependencies, then installs the files and reloads; a failed
-start restores the original files and bundle. Tests: `test_patch_keeper.py`
-(moved code with a nearby edit, successive patches, shipped fix, misfit,
-failed start). KodaForge shows Close all only in the workspace tab context menu.
-The Needs You and Tokenomics fixes were sent upstream: notpritam/bb-plugin-inbox#3 and
-danielbachhuber/bb-plugins#100; once released, the keeper reports the patch as
-no longer needed.
+It also checks three catalog plugins with `patch_keeper.py` after startup,
+after an update and every 10 minutes. Needs You and KodaForge can use patch
+files with `patch --fuzz=2`. Tokenomics uses a single source anchor and version
+and checksum checks on the installed catalog copy. A fixed release needs no
+changes. The keeper builds the staged copy against installed dependencies
+before reloading it. A failed start restores the previous files and bundle.
+Tests: `python3 plugins/voice-mode-keeper/test_patch_keeper.py`.
+KodaForge shows Close all only in the workspace tab context menu.
 
 Restore from bb-config with `python3 scripts/restore.py --plugins --apply`.
 The sibling `plugins/voice-mode` patch directory must remain alongside this

@@ -14,8 +14,9 @@ remains available without unverified customizations. Do not claim all future
 versions are compatible. Every new release is attempted (anchors may move or be
 reformatted but must be unique); failed validation keeps the release unmodified
 and requires adapting the patch. The status also lists `kept`: Needs You, KodaForge and
-Tokenomics fixes re-applied by `patch_keeper.py` (fuzzy patch, staged build,
-rollback), or reported as shipped upstream. Test with
+Tokenomics fixes re-applied by `patch_keeper.py` with a staged build and rollback.
+Tokenomics uses a unique anchor and a checksum-verified installed version, and
+keeps releases with the fix already present. Test with
 `python3 plugins/voice-mode-keeper/test_patch_keeper.py`.
 
 Source and recovery: `plugins/voice-mode/auto_update.py`, `changes.json` and
