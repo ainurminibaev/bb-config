@@ -1,0 +1,20 @@
+{
+  "id": "chrome-devtools-shared",
+  "title": "Chrome для агентов: одно общее подключение без повторных «Allow remote debugging?»",
+  "component": "chrome-devtools-shared",
+  "where": "executors",
+  "kind": "command",
+  "introduces": true,
+  "apply": [
+    "{python}",
+    "scripts/chrome_devtools_shared.py",
+    "--apply"
+  ],
+  "verify": [
+    "{python}",
+    "scripts/chrome_devtools_shared.py",
+    "--check"
+  ],
+  "rerun": "Безопасно: скрипт идемпотентен; без изменений служба не перезапускается.",
+  "rollback": "python3 scripts/chrome_devtools_shared.py --remove: снимает службу и возвращает прежнюю запись chrome-devtools в ~/.codex/config.toml из ~/.local/share/chrome-devtools-mcp-shared/backup/."
+}

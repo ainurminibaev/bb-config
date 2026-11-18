@@ -1887,3 +1887,62 @@ OpenCodex 12,780 с, direct 14,047 с. Прямой режим ускорени�
 прошёл. Задержанное сообщение повторяется через 30 секунд. Режим `inherit`
 возвращает собственные настройки CLI. Проверено тестами на Linux; на машине с
 работающим OpenCodex исправления не проверялись.
+
+## Chrome для агентов без повторных «Allow remote debugging?» (18 ноября 2026)
+
+**Проблема.** chrome-devtools-mcp с `--autoConnect` подключается к основному
+профилю Chrome (логины, сохранённые пароли). Начиная с Chrome 144 браузер
+спрашивает «Allow remote debugging?» на каждое новое DevTools-подключение;
+флага или политики, запоминающих разрешение, нет. `--remote-debugging-port` на
+профиле по умолчанию Chrome 136+ не разрешает. Раньше каждая сессия Codex
+запускала свой экземпляр MCP, и диалог появлялся на каждую сессию, а агенты
+зависали в ожидании.
+
+**Решение.** Одна фоновая служба macOS (LaunchAgent
+`dev.bb-config.chrome-devtools-mcp-shared`) держит один экземпляр
+chrome-devtools-mcp (`--autoConnect`, версия закреплена в
+`services/chrome-devtools-shared/package-lock.json`). Служба раздаёт его всем
+агентам через `mcp-proxy` 0.15.0 по MCP Streamable HTTP на `127.0.0.1:8766/mcp`.
+В `~/.codex/config.toml` таблица `[mcp_servers.chrome-devtools]` заменяется на
+`url = "http://127.0.0.1:8766/mcp"`. Остальные строки конфигурации не трогаются,
+секретов в шаблоне нет. Итог: одно «Allow» после запуска Chrome или перезапуска
+службы. Последующие подключения агентов идут без диалога (проверено: 5 новых
+клиентов, в том числе 2 параллельных, по 0,1 с, без диалога).
+`--allow-unrestricted-paths` возвращает агентам запись скриншотов и файлов вне
+временного каталога: через прокси MCP roots не передаются.
+
+**Файлы.** Исходники — `services/chrome-devtools-shared/` (`package.json`, lock,
+`run.sh.template`, `launchd.plist.template`, `codex.toml.template`). Установщик —
+`scripts/chrome_devtools_shared.py`. На машине: `~/.local/share/chrome-devtools-mcp-shared/`
+(служба, `backup/` с копиями `config.toml` и прежней записью chrome-devtools),
+`~/Library/LaunchAgents/dev.bb-config.chrome-devtools-mcp-shared.plist`,
+лог `~/Library/Logs/chrome-devtools-mcp-shared.log`.
+
+**Установка и восстановление** (на Mac под пользователем, запускающим Codex;
+нужны Node.js ≥ 20.19 и uv):
+
+```
+python3 scripts/chrome_devtools_shared.py --apply   # идемпотентно
+python3 scripts/chrome_devtools_shared.py --check   # Chrome не трогает, диалога нет
+```
+
+Один раз в Chrome включить `chrome://inspect/#remote-debugging`, если ещё не
+включено. При первом обращении агента нажать «Allow». Уже открытые сессии Codex
+переходят на общую службу после перезапуска. Если вручную созданный
+LaunchAgent запускает тот же `run.sh` под другой меткой, `--apply` переносит его,
+и Chrome один раз спросит «Allow».
+
+**Откат:** `python3 scripts/chrome_devtools_shared.py --remove`. Скрипт снимает
+службу и возвращает прежнюю запись Codex из `backup/`. Каталог службы и
+mcp-proxy остаются.
+
+**Ограничения.** Выбранная вкладка и состояние MCP общие для всех агентов:
+параллельные агенты в браузере могут мешать друг другу. Порт слушает только
+127.0.0.1, но любой локальный процесс пользователя получает через него
+управление основным Chrome, как и при прежнем autoConnect. Claude Code и
+BB browser-automation этой настройкой не затрагиваются. Запасные пути — Playwright
+MCP `--extension` и AppleScript `execute javascript`.
+
+**Состояние у автора.** Служба поставлена вручную до оформления, под
+другой меткой. `--check` проходит и сообщает о прежней метке. Перенос выполнит
+`--apply` при удобном перезапуске (одно «Allow»).
