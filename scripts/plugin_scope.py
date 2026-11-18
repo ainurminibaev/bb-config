@@ -1,8 +1,6 @@
 """Plugins installed independently are outside bb-config management."""
 import json
 
-RETIRED_PLUGINS = {"tokenomics"}
-
 def externally_managed(root):
     path = root / "config/externally-managed-plugins.json"
     if not path.exists():

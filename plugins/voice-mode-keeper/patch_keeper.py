@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Keeps small source fixes on catalog plugins across their updates.
 
-For each kept plugin (Needs You and KodaForge), on every run:
+For each kept plugin (Needs You, Tokenomics, KodaForge), on every run:
 
 - the fix is already in the installed source → nothing to do;
 - the author has shipped the fix (our pull request merged, or their own) →
   nothing to do, and the status says so: the patch is no longer needed;
-- otherwise the patch is applied to a copy of the installed source, allowing
-  for moved lines and small changes around it (patch --fuzz), the copy is
-  built, and only then the files are put in place and the plugin reloaded.
+- otherwise the fix is applied to a copy of the installed source using a
+  source rewrite or a patch with fuzz. The copy is built before the files
+  are put in place and the plugin is reloaded.
   A failed reload restores the original files and bundle.
 
 Nothing is applied when the patch does not fit: the plugin keeps running as
@@ -28,6 +28,7 @@ REPO = Path(__file__).resolve().parents[2]
 STATE_DIR = REPO / '.local/plugin-patches/kept'
 sys.path.insert(0, str(REPO / 'scripts'))
 import platform_compat as compat  # noqa: E402
+import tokenomics_compat
 
 KEPT = {
     'inbox': {
@@ -38,6 +39,12 @@ KEPT = {
         # Shipped upstream when the listener no longer uses the ignored slot.
         'shipped': lambda text: 'experimental_sidebarAccessory' not in text['app.tsx']
                                 and 'experimental_appOverlay' in text['app.tsx'],
+    },
+    'tokenomics': {
+        'name': 'Tokenomics',
+        'source': 'git:https://github.com/danielbachhuber/bb-plugins.git@',
+        'files': ['server.ts'],
+        'rewrite': tokenomics_compat.rewrite,
     },
     'kodaforge': {
         'name': 'KodaForge',
@@ -136,23 +143,29 @@ def keep(plugin_id, spec, installed):
     if not plugin['source'].startswith(spec['source']):
         return {**status, 'state': 'idle', 'message': f"{spec['name']} установлен не из каталога: исправление не нужно."}
     root = Path(plugin['rootDir'])
-    text = {name: (root / name).read_text() for name in spec['files']}
-    receipt_path = STATE_DIR / f'{plugin_id}-receipt.json'
-    hashes = {name: digest((root / name).read_bytes()) for name in spec['files']}
-    # Applied by us earlier, possibly with fuzz: the exact result is recorded.
-    overlays = spec.get('overlays', [])
-    patch_digest = digest(patch_text({'patches': spec['patches'] + overlays}).encode())
-    receipt = json.loads(receipt_path.read_text()) if receipt_path.exists() else {}
-    if receipt.get('hashes') == hashes and receipt.get('patchDigest') == patch_digest:
-        return {**status, 'state': 'ready', 'message': f"Исправление {spec['name']} на месте."}
-    pending = pending_patches(root, spec, text)
-    if not pending:
-        upstream = not overlays and spec['shipped'](text) and not applied(root, spec)
-        message = (f"Исправление уже есть у автора {spec['name']}: патч больше не нужен." if upstream
-                   else f"Исправление {spec['name']} на месте.")
-        return {**status, 'state': 'ready', 'message': message}
-
     before = {name: (root / name).read_bytes() for name in spec['files']}
+    rewrite = spec.get('rewrite')
+    if rewrite:
+        fixed = rewrite(before['server.ts'], plugin['version'])
+        if fixed == before['server.ts']:
+            return {**status, 'state': 'ready', 'message': f"Исправление {spec['name']} на месте."}
+    else:
+        receipt_path = STATE_DIR / f'{plugin_id}-receipt.json'
+        hashes = {name: digest(data) for name, data in before.items()}
+        # Applied by us earlier, possibly with fuzz: the exact result is recorded.
+        overlays = spec.get('overlays', [])
+        patch_digest = digest(patch_text({'patches': spec['patches'] + overlays}).encode())
+        receipt = json.loads(receipt_path.read_text()) if receipt_path.exists() else {}
+        if receipt.get('hashes') == hashes and receipt.get('patchDigest') == patch_digest:
+            return {**status, 'state': 'ready', 'message': f"Исправление {spec['name']} на месте."}
+        text = {name: unix_lines(data).decode() for name, data in before.items()}
+        pending = pending_patches(root, spec, text)
+        if not pending:
+            upstream = not overlays and spec['shipped'](text) and not applied(root, spec)
+            message = (f"Исправление уже есть у автора {spec['name']}: патч больше не нужен." if upstream
+                       else f"Исправление {spec['name']} на месте.")
+            return {**status, 'state': 'ready', 'message': message}
+
     with tempfile.TemporaryDirectory(prefix=f'kept-{plugin_id}-') as directory:
         stage = Path(directory) / 'plugin'
         shutil.copytree(root, stage, ignore=shutil.ignore_patterns('node_modules', 'dist', '.git'))
@@ -163,17 +176,19 @@ def keep(plugin_id, spec, installed):
         if modules:
             compat.link_directory(stage / 'node_modules', modules)
         try:
-            # The patch has LF endings; a CRLF checkout gets them back below.
-            crlf = [name for name in spec['files'] if b'\r\n' in before[name]]
-            for name in crlf:
-                (stage / name).write_bytes(unix_lines(before[name]))
-            # Lines may have moved and small things around them changed; the build
-            # below decides whether the result still holds together.
-            run(['patch', '--batch', '--silent', '--forward', '--no-backup-if-mismatch', '-p1', '--fuzz=2'],
-                cwd=stage, data=patch_text({'patches': pending}))
+            if rewrite:
+                (stage / 'server.ts').write_bytes(fixed)
+            else:
+                # Normalize for patch; restore the checkout's line endings afterward.
+                crlf = [name for name in spec['files'] if b'\r\n' in before[name]]
+                for name in crlf:
+                    (stage / name).write_bytes(unix_lines(before[name]))
+                run(['patch', '--batch', '--silent', '--forward', '--no-backup-if-mismatch', '-p1', '--fuzz=2'],
+                    cwd=stage, data=patch_text({'patches': pending}))
             run(['bb', 'plugin', 'build', str(stage)])
-            for name in crlf:
-                (stage / name).write_bytes(unix_lines((stage / name).read_bytes()).replace(b'\n', b'\r\n'))
+            if not rewrite:
+                for name in crlf:
+                    (stage / name).write_bytes(unix_lines((stage / name).read_bytes()).replace(b'\n', b'\r\n'))
         finally:
             # Before the temporary copy is deleted: the link leads to the installed dependencies.
             compat.unlink_directory(stage / 'node_modules')
@@ -202,8 +217,11 @@ def keep(plugin_id, spec, installed):
             raise
         finally:
             shutil.rmtree(backup, ignore_errors=True)
-    receipt_path.write_text(json.dumps({'hashes': {name: digest((root / name).read_bytes()) for name in spec['files']},
-                                        'version': plugin.get('version', ''), 'patchDigest': patch_digest}))
+    if not rewrite:
+        receipt_path.write_text(json.dumps({
+            'hashes': {name: digest((root / name).read_bytes()) for name in spec['files']},
+            'version': plugin.get('version', ''), 'patchDigest': patch_digest,
+        }))
     return {**status, 'state': 'ready', 'message': f"Исправление {spec['name']} восстановлено после обновления."}
 
 
@@ -218,6 +236,10 @@ def main():
             spec = KEPT[plugin_id]
             try:
                 result = keep(plugin_id, spec, installed)
+            except tokenomics_compat.AnchorMismatch as error:
+                result = {'plugin': plugin_id, 'name': spec['name'], 'version': installed.get(plugin_id, {}).get('version', ''),
+                          'state': 'attention',
+                          'message': f"Tokenomics: {error} Выпуск оставлен без изменения."}
             except Exception as error:  # noqa: BLE001 - report, never break the plugin
                 (STATE_DIR / f'{plugin_id}-error.txt').write_text(type(error).__name__ + ': ' + str(error)[:1000])
                 result = {'plugin': plugin_id, 'name': spec['name'], 'version': installed.get(plugin_id, {}).get('version', ''),

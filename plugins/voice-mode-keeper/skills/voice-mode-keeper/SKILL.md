@@ -1,6 +1,6 @@
 ---
 name: voice-mode-keeper
-description: Inspect how customizations of catalog plugins (Voice Mode edits, Needs You and KodaForge fixes) are kept across their updates, or diagnose a compatibility warning.
+description: Inspect how customizations of catalog plugins (Voice Mode edits, Needs You, Tokenomics and KodaForge fixes) are kept across their updates, or diagnose a compatibility warning.
 ---
 
 Voice Mode Keeper supports the catalog installation and a reviewed fork. For the catalog it checks after
@@ -13,9 +13,12 @@ Inspect: `bb plugin rpc call voice-mode-keeper status --json` and
 remains available without unverified customizations. Do not claim all future
 versions are compatible. Every new release is attempted (anchors may move or be
 reformatted but must be unique); failed validation keeps the release unmodified
-and requires adapting the patch. The status also lists `kept`: Needs You and
-KodaForge fixes checked and applied by `patch_keeper.py` with a staged build
-and rollback. Test with `python3 plugins/voice-mode-keeper/test_patch_keeper.py`.
+and requires adapting the patch. The status also lists `kept`: Needs You, KodaForge and
+Tokenomics fixes re-applied by `patch_keeper.py` with a staged build and rollback.
+Tokenomics uses a unique anchor in the installed catalog copy; releases with
+the fix already present are left alone and a missing or ambiguous anchor
+raises a clear status warning. Test with
+`python3 plugins/voice-mode-keeper/test_patch_keeper.py`.
 
 Source and recovery: `plugins/voice-mode/auto_update.py`, `changes.json` and
 the keeper plugin in the bb-config checkout. The worker uses pinned packages

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { definePluginApp, experimental_useProviders, useBbContext, useBbNavigate, useRpc, useSidebarSplitLayout } from '@get-bb/plugin-sdk/app';
+import { definePluginApp, experimental_useProviders, useBbContext, useBbNavigate, useRpc, useSettings, useSidebarSplitLayout } from '@get-bb/plugin-sdk/app';
 import type { rpcContract, Account, Snapshot, QuotaWindow } from './contract';
 import { accountExhausted, appliesToModel, planLabel } from './logic';
 import './app.css';
@@ -264,6 +264,7 @@ function Overlay() {
   const mobile=useCompactViewport();
   const context = useBbContext();
   const split = useSidebarSplitLayout();
+  const { values } = useSettings();
   const [mounts, setMounts] = useState<Mount[]>([]);
   const paneKey = split?.panes.map(p => `${p.paneId}:${p.threadId ?? ''}`).join('|') ?? '';
   const paneMap = useMemo(() => new Map(split?.panes.map(p => [p.paneId, p.threadId]) ?? []), [paneKey]);
@@ -293,16 +294,12 @@ function Overlay() {
         const pane = host.closest('[data-split-pane-id]')?.getAttribute('data-split-pane-id');
         const threadId = paneMap.size ? paneMap.get(pane ?? '') ?? null : context.threadId;
         if (!threadId) continue;
-        const spend = host.querySelector<HTMLElement>(':scope > [data-bb-plugin="thread-spend"]');
         let anchor = host.querySelector<HTMLElement>(':scope > [data-tau-root]');
-        if (!anchor) {
-          anchor = document.createElement('span');
-          anchor.dataset.tauRoot = '';
-          anchor.className = 'tau-mount';
-          host.insertBefore(anchor, spend);
-          owned.add(anchor);
-        }
-        if (spend && anchor.nextElementSibling !== spend) host.insertBefore(anchor, spend);
+        if (!anchor) { anchor = document.createElement('span'); anchor.dataset.tauRoot = ''; anchor.className = 'tau-mount'; const tokens = host.querySelector(':scope > [data-bb-plugin="tokenomics"]'); host.insertBefore(anchor, tokens); owned.add(anchor); }
+        // Tokenomics can mount after the header. Keep the block together then,
+        // as well as after route changes and late plugin loading.
+        const tokens = host.querySelector(':scope > [data-bb-plugin="tokenomics"]');
+        if (tokens && anchor.nextElementSibling !== tokens) host.insertBefore(anchor, tokens);
         next.push({ element: anchor, threadId });
       }
       if(mobile)for(const footer of document.querySelectorAll<HTMLElement>('[data-follow-up-composer-footer]')){
@@ -332,6 +329,7 @@ function Overlay() {
     return () => { observer.disconnect(); window.removeEventListener('resize', schedule); document.removeEventListener('pointerdown', preserveEditorFocus, true); document.removeEventListener('mousedown', preserveEditorFocus, true); cancelAnimationFrame(frame); for (const node of owned) node.remove(); };
   }, [context.threadId, paneMap,mobile]);
   return <>
+    {values?.hideGlobalTokenomics !== false && <style>{'[data-bb-plugin="tokenomics"][data-top-bar-slot="tokenomics"]{display:none!important}'}</style>}
     {mounts.map(m => <QuotaControl key={m.threadId ?? 'all'} threadId={m.threadId} target={m.element}/>)}
   </>;
 }

@@ -45,6 +45,8 @@
 .tau-grid-value[data-level=warning] strong{color:var(--warning-text,var(--warning))}.tau-grid-value[data-level=warning] .tau-bar>span{background:var(--warning,var(--chart-2))}
 .tau-grid-none{display:flex;flex-direction:column;gap:6px;color:var(--muted-foreground);font-size:15px}.tau-grid-none small{font-size:9px}.tau-grid-row[data-stale=true]>div{opacity:.6}
 .tau-agent-logo{width:17px;height:17px;object-fit:contain;flex:none}.tau-agent-fallback{font-size:18px}.tau-identity{max-width:112px;gap:2px}.tau-identity>small{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tau-mount + [data-bb-plugin="tokenomics"]{display:inline-flex;align-items:center;gap:4px;border-left:1px solid var(--border);padding-left:7px;margin-left:3px}
+.tau-mount + [data-bb-plugin="tokenomics"]::before{content:'Тред\A 24ч';white-space:pre;line-height:1.1;color:var(--muted-foreground);font:9px var(--font-sans,system-ui)}
 .tau-global{gap:5px;padding:3px 5px}.tau-spark{display:flex;align-items:flex-end;gap:2px;width:19px;height:14px}.tau-spark i{flex:1;background:currentColor;opacity:.65;border-radius:1px}.tau-spark i[data-level=blocked]{background:var(--destructive);opacity:1}
 .tau-summary-number{display:inline-flex;align-items:baseline;gap:4px;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}.tau-summary-number small{font-size:9px;font-weight:400;color:var(--muted-foreground)}
 .tau-alert-dot{width:4px;height:4px;background:var(--destructive);border-radius:50%;display:inline-block;align-self:flex-start;margin-top:3px}

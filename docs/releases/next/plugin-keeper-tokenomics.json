@@ -1,0 +1,10 @@
+{
+  "id": "plugin-keeper-tokenomics",
+  "title": "Plugin Keeper для Tokenomics",
+  "component": "voice-mode-keeper",
+  "where": "server",
+  "kind": "local-plugin",
+  "plugin": "voice-mode-keeper",
+  "rerun": "Повтор проверяет версию Keeper. Исправленный Tokenomics остаётся без изменения.",
+  "rollback": "Восстановить прежнюю сборку Keeper. Его проверка не меняет состояние включения Tokenomics."
+}
