@@ -24,7 +24,7 @@ const repoSyncSchema = z.object({
   fetched: z.boolean(), fetchError: z.string().nullable(), action: z.enum(['pulled', 'up-to-date', 'skipped']), reason: syncReason.nullable(),
   ahead: z.number(), behind: z.number(), dirty: z.number(), commits: z.array(z.string()), stat: z.string().nullable(),
 });
-const pullResultSchema = z.object({ kind: z.enum(['git', 'plain', 'missing', 'error']), repos: z.array(repoSyncSchema), error: z.string().nullable() });
+const pullResultSchema = z.object({ kind: z.enum(['git', 'plain', 'missing', 'hands-off', 'error']), repos: z.array(repoSyncSchema), error: z.string().nullable() });
 export const worktreeSchema = z.object({
   environmentId: z.string(), projectId: z.string(), hostId: z.string(), hostName: z.string(), path: z.string(), branch: z.string().nullable(),
   liveThreads: z.number(), archivedThreads: z.number(), lastActivity: z.number().nullable(), retireAt: z.number().nullable(),
@@ -32,7 +32,7 @@ export const worktreeSchema = z.object({
 });
 export const syncEventSchema = z.object({
   at: z.number(), hostId: z.string(), hostName: z.string(), path: z.string(), threadId: z.string().nullable(),
-  apply: z.boolean(), kind: z.enum(['git', 'plain', 'missing', 'error']),
+  apply: z.boolean(), kind: z.enum(['git', 'plain', 'missing', 'hands-off', 'error']),
   repos: z.array(z.object({ path: z.string(), branch: z.string().nullable(), action: z.enum(['pulled', 'up-to-date', 'skipped']), reason: syncReason.nullable(), commits: z.number(), behind: z.number(), ahead: z.number(), dirty: z.number() })),
 });
 
@@ -40,6 +40,11 @@ export const hostContract = defineRpcContract({
   scan: {
     input: z.object({ targets: z.array(z.object({ id: z.string(), path: z.string(), manifest: z.boolean() })).max(200) }),
     output: z.object({ results: z.array(z.object({ id: z.string(), scan: scanSchema, manifest: manifestSchema.nullable() })) }),
+    experimental_retryable: true,
+  },
+  fetch: {
+    input: z.object({ paths: z.array(z.string().min(1)).max(100) }),
+    output: z.object({ results: z.array(z.object({ path: z.string(), ok: z.boolean(), error: z.string().nullable() })) }),
     experimental_retryable: true,
   },
   sizes: {

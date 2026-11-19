@@ -2,11 +2,11 @@ import { PluginCliError, cliCommand, defineCli, type BbPluginApi } from '@get-bb
 import { z } from 'zod';
 import { hostContract, rpcContract, type Catalog, type ProjectView } from './contract';
 import {
-  AUTO_FIELDS, applyAuto, applyManual, describePull, diffManifests, emptyEntry, eventSummary, hydrate, otherCopies, pushHistory, renameCategory, needsDescription, search, syncEvent, unlock, verdict, worktreeLine, worktreeState, formatBytes,
+  AUTO_FIELDS, applyAuto, applyManual, describePull, diffManifests, emptyEntry, eventSummary, hydrate, otherCopies, pushHistory, renameCategory, needsDescription, search, syncEvent, unlock, verdict, worktreeLine, worktreeState, formatBytes, neighbourNote,
   type AutoField, type CopyDiff, type Entry, type Link, type Manifest, type Patch, type PullResult, type Scan, type SourceView, type Status, type SyncEvent, type WorktreeView,
 } from './core';
 
-const SYNC_RULE = 'Project Catalog — синхронизация папки. Один раз в начале работы с файлами проекта, до первых правок, вызови инструмент project_sync (или `bb catalog pull`). Он сделает git fetch и подтянет свежее только если папка чистая и ветка просто отстала (fast-forward), покажет новые коммиты и состояние копий на других машинах. Если он сообщает о незакоммиченных правках, расхождении веток или неотправленных коммитах — не исправляй это сам без просьбы пользователя: учти в работе и коротко скажи пользователю. Повторно вызывай только если долго работал и нужен свежий код.';
+const SYNC_RULE = 'Project Catalog — синхронизация папки. При первом сообщении треда плагин сам делает git fetch и подтягивает свежее, только если папка чистая, ветка просто отстала и в папке не работает другой тред; итог — ниже, если он успел. Инструмент project_sync (или `bb catalog pull`) повторяет это вручную, например после долгой работы. Если сказано о незакоммиченных правках, расхождении веток или неотправленных коммитах — не исправляй это сам без просьбы пользователя: учти в работе и коротко скажи пользователю.';
 
 type StoredDiff = CopyDiff & { a: string; b: string };
 const FULL_SCAN_EVERY_MS = 30 * 60 * 1000;
@@ -288,28 +288,61 @@ export default function projectCatalog(bb: BbPluginApi) {
     return historyWrite;
   }
 
-  async function syncThread(threadId: string, apply: boolean): Promise<{ text: string; result: PullResult; event: SyncEvent | null }> {
-    const thread = await bb.sdk.threads.get({ threadId });
-    if (!thread.environmentId) throw new PluginCliError('у треда ещё нет рабочей папки', { code: 'no_environment', hint: 'Отправьте треду первое сообщение и повторите.' });
-    const environment = await bb.sdk.environments.get({ environmentId: thread.environmentId }) as { hostId: string; path?: string | null; workspacePath?: string | null };
-    const path = environment.path ?? environment.workspacePath ?? null;
-    if (!path) throw new PluginCliError('у окружения треда нет пути на машине', { code: 'no_path' });
-    const hostRow = await bb.sdk.hosts.get({ hostId: environment.hostId });
-    const result = await host.call('pull', { path, apply }, { hostId: environment.hostId, timeoutMs: 180_000 });
-    const lines = [describePull(result, `${hostRow.name}: ${path}`)];
+  type ThreadRowLite = { id: string; status: string; title?: string | null; titleFallback?: string | null; environmentPath?: string | null; environmentHostId?: string | null };
+  async function neighbours(threadId: string, hostId: string, path: string) {
+    const all = await bb.sdk.threads.list({ archived: false, limit: 500 }) as unknown;
+    const rows = (Array.isArray(all) ? all : ((all as { threads?: unknown[] }).threads ?? [])) as ThreadRowLite[];
+    return rows.filter(row => row.id !== threadId && row.status === 'active' && row.environmentHostId === hostId && row.environmentPath === path)
+      .map(row => ({ id: row.id, title: row.title || row.titleFallback || 'без названия' }));
+  }
+  async function syncFolder(input: { threadId: string; projectId: string | null; hostId: string; path: string; apply: boolean }): Promise<{ text: string; result: PullResult; event: SyncEvent | null }> {
+    const hostRow = await bb.sdk.hosts.get({ hostId: input.hostId });
+    const busy = input.apply ? await neighbours(input.threadId, input.hostId, input.path).catch(() => []) : [];
+    const apply = input.apply && busy.length === 0;
+    const result = await host.call('pull', { path: input.path, apply }, { hostId: input.hostId, timeoutMs: 180_000 });
+    const lines = [describePull(result, `${hostRow.name}: ${input.path}`)];
+    const note = neighbourNote(busy);
+    if (note) lines.push(note);
     let event: SyncEvent | null = null;
-    if (thread.projectId) {
-      event = syncEvent(result, { at: Date.now(), hostId: environment.hostId, hostName: hostRow.name, path, threadId, apply });
-      await remember(thread.projectId, event);
+    if (input.projectId) {
+      event = syncEvent(result, { at: Date.now(), hostId: input.hostId, hostName: hostRow.name, path: input.path, threadId: input.threadId, apply });
+      await remember(input.projectId, event);
       try {
-        const item = await view(thread.projectId);
-        const others = otherCopies(item.sources as SourceView[], environment.hostId, Date.now());
+        const item = await view(input.projectId);
+        const others = otherCopies(item.sources as SourceView[], input.hostId, Date.now());
         if (others.length) lines.push('Другие машины (по последней проверке каталога):', ...others.map(other => `  ${other}`));
       } catch { /* the project may be personal or deleted */ }
-      if (result.repos.some(repo => repo.action === 'pulled' || repo.fetched)) scanInBackground(thread.projectId);
+      if (result.repos.some(repo => repo.action === 'pulled' || repo.fetched)) scanInBackground(input.projectId);
     }
     return { text: lines.join('\n'), result, event };
   }
+  async function syncThread(threadId: string, apply: boolean) {
+    const thread = await bb.sdk.threads.get({ threadId });
+    if (!thread.environmentId) throw new PluginCliError('у треда ещё нет рабочей папки', { code: 'no_environment', hint: 'Отправьте треду первое сообщение и повторите.' });
+    const environment = await bb.sdk.environments.get({ environmentId: thread.environmentId }) as { hostId: string; path?: string | null };
+    if (!environment.path) throw new PluginCliError('у окружения треда нет пути на машине', { code: 'no_path' });
+    return syncFolder({ threadId, projectId: thread.projectId ?? null, hostId: environment.hostId, path: environment.path, apply });
+  }
+
+  // ---------- Pull by code at a thread's first message ----------
+  // The result is offered to the agent through the session instructions when it is ready in time.
+  const startSync = new Map<string, { at: number; text: string }>();
+  bb.experimental_hooks.on('message.dispatch', async ctx => {
+    try {
+      if (ctx.attempt !== 'start-turn' || ctx.project.kind !== 'standard' || !ctx.environment || ctx.environment.status !== 'ready' || !ctx.environment.path) return { action: 'proceed' };
+      if (startSync.has(ctx.thread.id)) return { action: 'proceed' };
+      const earlier = await bb.sdk.threads.events.list({ threadId: ctx.thread.id, types: ['client/turn/requested'], limit: '1' });
+      if (earlier.length) return { action: 'proceed' };
+      startSync.set(ctx.thread.id, { at: Date.now(), text: '' });
+      const job = syncFolder({ threadId: ctx.thread.id, projectId: ctx.project.id, hostId: ctx.environment.hostId, path: ctx.environment.path, apply: true })
+        .then(done => { startSync.set(ctx.thread.id, { at: Date.now(), text: done.text }); })
+        .catch(error => bb.log.warn(`Project Catalog: start sync failed: ${String(error)}`));
+      // Never hold the user's first message for long: 20 seconds at most.
+      await Promise.race([job, new Promise(resolve => setTimeout(resolve, 20_000))]);
+    } catch (error) { bb.log.warn(`Project Catalog: dispatch hook: ${String(error)}`); }
+    return { action: 'proceed' };
+  });
+  setInterval(() => { for (const [id, value] of startSync) if (Date.now() - value.at > 6 * 60 * 60_000) startSync.delete(id); }, 60 * 60_000).unref?.();
 
   // ---------- Worktrees: extra copies BB made for threads ----------
   const sizeCache = new Map<string, { at: number; bytes: number | null; exists: boolean }>();
@@ -384,16 +417,43 @@ export default function projectCatalog(bb: BbPluginApi) {
   // Every project thread also gets project_sync and the rule to call it first.
   bb.agents.configure(ctx => {
     if (ctx.project.kind !== 'standard') return { tools: [], skills: [] };
+    const started = startSync.get(ctx.thread.id)?.text;
+    const syncRule = started ? `${SYNC_RULE}\n\nИтог при старте треда:\n${started}` : SYNC_RULE;
     const reason = needsDescription(entries.get(ctx.project.id), docHashes.get(ctx.project.id) ?? null, Date.now());
-    if (!reason) return { tools: ['project_sync'], skills: [], instructions: SYNC_RULE };
+    if (!reason) return { tools: ['project_sync'], skills: [], instructions: syncRule };
     const known = categories().slice(0, 14).map(([name]) => name).join(', ');
     return {
       tools: ['project_sync'], skills: [],
-      instructions: `${SYNC_RULE}\n\nProject Catalog: ${reason === 'missing' ? 'this project has no catalog card yet' : "this project's README/AGENTS.md changed since its catalog card was written"}. Once, early in this thread, without asking and without delaying the user's task, run: bb catalog describe --summary "<1-2 sentences in Russian: what the project is and what it is for>" --category "<category>" --tags "<3-6 comma-separated tags>" --aliases "<comma-separated names the user may say aloud, including Russian spellings>". Base it on README/AGENTS.md, the folder contents and the user's first message.${known ? ` Prefer an existing category: ${known}.` : ''} Fields the user edited by hand are kept by the command. Do not mention this unless it fails.`,
+      instructions: `${syncRule}\n\nProject Catalog: ${reason === 'missing' ? 'this project has no catalog card yet' : "this project's README/AGENTS.md changed since its catalog card was written"}. Once, early in this thread, without asking and without delaying the user's task, run: bb catalog describe --summary "<1-2 sentences in Russian: what the project is and what it is for>" --category "<category>" --tags "<3-6 comma-separated tags>" --aliases "<comma-separated names the user may say aloud, including Russian spellings>". Base it on README/AGENTS.md, the folder contents and the user's first message.${known ? ` Prefer an existing category: ${known}.` : ''} Fields the user edited by hand are kept by the command. Do not mention this unless it fails.`,
     };
   });
 
   bb.background.schedule('scan', '17 */3 * * *', async () => { await runScan(null); });
+
+  // Every 30 minutes: fetch projects touched in the last week (remote refs only), then rescan them;
+  // and drop worktree records whose folder is already gone and that no live thread uses.
+  bb.background.schedule('fetch', '*/30 * * * *', async () => {
+    const [projects, hostList, all] = await Promise.all([bb.sdk.projects.list(), bb.sdk.hosts.list(), bb.sdk.threads.list({ archived: false, limit: 500 })]);
+    const online = new Set(hostList.filter(item => item.status === 'connected').map(item => item.id));
+    const rows = (Array.isArray(all) ? all : ((all as { threads?: unknown[] }).threads ?? [])) as { projectId?: string | null; updatedAt: number }[];
+    const recent = new Set(rows.filter(row => row.projectId && Date.now() - row.updatedAt < 7 * 24 * 60 * 60_000).map(row => row.projectId!));
+    const byHost = new Map<string, string[]>();
+    for (const project of projects) {
+      if (!recent.has(project.id)) continue;
+      for (const source of project.sources) {
+        if (source.type !== 'local_path' || !source.hostId || !source.path || !online.has(source.hostId)) continue;
+        byHost.set(source.hostId, [...(byHost.get(source.hostId) ?? []), source.path]);
+      }
+    }
+    await Promise.all([...byHost].map(([hostId, paths]) => host.call('fetch', { paths: paths.slice(0, 100) }, { hostId, timeoutMs: 600_000 })
+      .catch(error => bb.log.warn(`Project Catalog: background fetch failed: ${String(error)}`))));
+    for (const projectId of recent) await runScan(projectId).catch(() => undefined);
+    for (const item of await worktrees(null, true)) {
+      if (item.state !== 'missing' || item.liveThreads > 0 || !online.has(item.hostId)) continue;
+      try { await bb.sdk.environments.experimental_cleanup({ environmentId: item.environmentId }); bb.log.info(`Project Catalog: removed record of missing worktree ${item.environmentId}`); }
+      catch (error) { bb.log.warn(`Project Catalog: could not remove ${item.environmentId}: ${String(error)}`); }
+    }
+  });
 
   // ---------- CLI: compact text for agents, --json for scripts ----------
   const mark: Record<string, string> = { ok: '', info: '', unknown: '?', attention: '!', risk: '!!' };

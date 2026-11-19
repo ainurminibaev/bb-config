@@ -170,7 +170,8 @@ export async function pullRepo(root: string, rel: string, apply: boolean, signal
     action: 'skipped', reason: null, ahead: 0, behind: 0, dirty: 0, commits: [], stat: null };
   const hasRemote = Boolean((await git(path, ['remote'], signal))?.trim());
   if (hasRemote) {
-    const fetch = await run(path, ['fetch', '--quiet'], 45_000, signal);
+    // --no-write-fetch-head: never overwrite FETCH_HEAD someone else in this folder relies on.
+    const fetch = await run(path, ['fetch', '--quiet', '--no-write-fetch-head'], 45_000, signal);
     result.fetched = fetch.ok;
     if (!fetch.ok) result.fetchError = fetch.err || 'git fetch не удался';
   }
@@ -216,6 +217,23 @@ function diskUsage(path: string, signal: AbortSignal) {
 export default experimental_defineHostEntry({
   contract: hostContract,
   handlers: {
+    // Background refresh of what the server has: updates remote refs only, never files or branches.
+    fetch: async ({ paths }, ctx) => {
+      const results: { path: string; ok: boolean; error: string | null }[] = [];
+      for (const path of paths) {
+        try { await stat(join(path, '.bb', 'hands-off')); results.push({ path, ok: false, error: 'hands-off' }); continue; } catch { /* allowed */ }
+        const repos = (await git(path, ['rev-parse', '--is-inside-work-tree'], ctx.signal))?.trim() === 'true' ? [''] : await nestedRepos(path).catch(() => []);
+        let ok = true; let error: string | null = null;
+        for (const rel of repos) {
+          const dir = rel ? join(path, rel) : path;
+          if (!(await git(dir, ['remote'], ctx.signal))?.trim()) continue;
+          const done = await run(dir, ['fetch', '--quiet', '--no-write-fetch-head'], 45_000, ctx.signal);
+          if (!done.ok) { ok = false; error = done.err; }
+        }
+        results.push({ path, ok, error });
+      }
+      return { results };
+    },
     sizes: async ({ paths }, ctx) => {
       const sizes: { path: string; bytes: number | null; exists: boolean }[] = [];
       for (const path of paths) {
@@ -229,6 +247,7 @@ export default experimental_defineHostEntry({
       try {
         try { if (!(await stat(path)).isDirectory()) return { kind: 'missing', repos: [], error: null }; }
         catch { return { kind: 'missing', repos: [], error: null }; }
+        try { await stat(join(path, '.bb', 'hands-off')); return { kind: 'hands-off', repos: [], error: null }; } catch { /* allowed */ }
         if ((await git(path, ['rev-parse', '--is-inside-work-tree'], ctx.signal))?.trim() === 'true') {
           return { kind: 'git', repos: [await pullRepo(path, '', apply, ctx.signal)], error: null };
         }

@@ -369,7 +369,7 @@ export type RepoSync = {
   action: 'pulled' | 'up-to-date' | 'skipped'; reason: SyncReason | null;
   ahead: number; behind: number; dirty: number; commits: string[]; stat: string | null;
 };
-export type PullResult = { kind: 'git' | 'plain' | 'missing' | 'error'; repos: RepoSync[]; error: string | null };
+export type PullResult = { kind: 'git' | 'plain' | 'missing' | 'hands-off' | 'error'; repos: RepoSync[]; error: string | null };
 export type SyncEvent = {
   at: number; hostId: string; hostName: string; path: string; threadId: string | null;
   apply: boolean; kind: PullResult['kind'];
@@ -408,6 +408,7 @@ export function describeRepo(repo: RepoSync): string {
 
 export function describePull(result: PullResult, place: string): string {
   if (result.kind === 'missing') return `${place}: папка не найдена.`;
+  if (result.kind === 'hands-off') return `${place}: папка помечена .bb/hands-off — автоматика её не трогает.`;
   if (result.kind === 'error') return `${place}: ошибка — ${result.error ?? 'неизвестно'}.`;
   if (result.repos.length === 0) return `${place}: папка без git. Синхронизировать нечем; если она нужна на нескольких машинах — держите её на одной (Tru) или сделайте git-репозиторий.`;
   const head = result.kind === 'plain' ? `${place}: сама папка без git, внутри репозитории:` : `${place}:`;
@@ -427,6 +428,7 @@ export function pushHistory(history: SyncEvent[], event: SyncEvent, limit = HIST
 
 export function eventSummary(event: SyncEvent): string {
   if (event.kind === 'missing') return 'папка не найдена';
+  if (event.kind === 'hands-off') return 'не трогать (.bb/hands-off)';
   if (event.kind === 'error') return 'ошибка проверки';
   if (event.repos.length === 0) return 'без git';
   return event.repos.map(repo => {
@@ -451,7 +453,10 @@ export function otherCopies(sources: SourceView[], currentHostId: string, now: n
       if (g.behind) bits.push(`отстаёт: ${g.behind}`);
       return `${source.hostName}${source.connected ? '' : ' (не на связи)'}: ${bits.join(', ')}${age}`;
     }
-    if (scan.kind === 'plain') return `${source.hostName}${source.connected ? '' : ' (не на связи)'}: без git${age}`;
+    if (scan.kind === 'plain') {
+      const parts = (scan.parts ?? []).map(part => `${part.path}/ ${part.git.branch ?? 'detached'}${part.git.dirty + part.git.untracked ? `, не закоммичено: ${part.git.dirty + part.git.untracked}` : ''}${part.git.ahead ? `, не отправлено: ${part.git.ahead}` : ''}${part.git.behind ? `, отстаёт: ${part.git.behind}` : ''}`);
+      return `${source.hostName}${source.connected ? '' : ' (не на связи)'}: без git${parts.length ? `; внутри: ${parts.join('; ')}` : ''}${age}`;
+    }
     return `${source.hostName}: ${scan.kind === 'missing' ? 'папка не найдена' : 'ошибка проверки'}${age}`;
   });
 }
@@ -494,4 +499,10 @@ export const WORKTREE_STATE_TEXT: Record<WorktreeState, string> = {
 export function worktreeLine(w: WorktreeView, now: number): string {
   const ago = w.lastActivity === null ? 'активности нет' : `активность ${Math.max(0, Math.round((now - w.lastActivity) / 86_400_000))} дн назад`;
   return `${w.hostName}: ${w.branch ?? 'без ветки'} — ${w.state === 'missing' ? 'папки нет' : formatBytes(w.bytes)}, тредов ${w.liveThreads}${w.archivedThreads ? ` (+${w.archivedThreads} в архиве)` : ''}, ${ago}; ${WORKTREE_STATE_TEXT[w.state]}\n  ${w.path}  (${w.environmentId})`;
+}
+
+/** Another active thread in the same folder: pulling under it could change files it is reading. */
+export function neighbourNote(neighbours: { id: string; title: string }[]): string | null {
+  if (!neighbours.length) return null;
+  return `в этой папке сейчас работает ${neighbours.length === 1 ? 'тред' : 'треды'} ${neighbours.slice(0, 3).map(n => `«${n.title}» (${n.id})`).join(', ')} — свежее не подтягиваю, только проверяю`;
 }

@@ -76,3 +76,21 @@ test('sizes read naturally', () => {
   assert.equal(formatBytes(5 * 1024 * 1024), '5 МБ');
   assert.equal(formatBytes(3.26 * 1024 ** 3), '3.3 ГБ');
 });
+
+import { neighbourNote } from '../core';
+
+test('hands-off folders and busy folders are explained', () => {
+  assert.match(describePull({ kind: 'hands-off', repos: [], error: null }, 'Tru: /srv/p'), /\.bb\/hands-off/);
+  assert.equal(eventSummary(syncEvent({ kind: 'hands-off', repos: [], error: null }, base)), 'не трогать (.bb/hands-off)');
+  assert.equal(neighbourNote([]), null);
+  assert.match(neighbourNote([{ id: 'thr_x', title: 'Другая задача' }])!, /работает тред «Другая задача» \(thr_x\) — свежее не подтягиваю/);
+});
+
+test('other machines show repositories nested in a plain folder', () => {
+  const sources: SourceView[] = [
+    { id: 's1', hostId: 'h1', hostName: 'Tru', path: '/srv/m', connected: true, scan: null },
+    { id: 's2', hostId: 'h2', hostName: 'Mac', path: '~/m', connected: true, scan: { scannedAt: 0, kind: 'plain', docHash: null,
+      parts: [{ path: 'app', git: { branch: 'main', head: 'a', headTime: null, dirty: 2, untracked: 0, ahead: 1, behind: 0, hasUpstream: true, remote: null, stash: 0 } }] } },
+  ];
+  assert.match(otherCopies(sources, 'h1', 60_000)[0]!, /^Mac: без git; внутри: app\/ main, не закоммичено: 2, не отправлено: 1/);
+});
