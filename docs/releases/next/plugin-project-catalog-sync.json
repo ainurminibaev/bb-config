@@ -1,10 +1,10 @@
 {
   "id": "plugin-project-catalog-sync",
-  "title": "Project Catalog 0.6.0: подтягивание при старте треда, фоновый fetch, история и worktree-копии",
+  "title": "Project Catalog 0.7.0: синхронизация при старте, изоляция второго треда, история и worktree-копии",
   "component": "project-catalog",
   "where": "server",
   "kind": "local-plugin",
   "plugin": "project-catalog",
   "rerun": "Проверяет установленную версию project-catalog; при совпадении ничего не делает. Карточки и история в хранилище BB сохраняются.",
-  "rollback": "Установить предыдущую версию плагина из прошлого релиза bb-config; карточки каталога не теряются. Агенты перестанут получать project_sync."
+  "rollback": "Установить предыдущую версию плагина из прошлого релиза bb-config; карточки каталога не теряются. Копии изоляции (ветки bb/iso-*, worktree в данных плагина) остаются: убрать — git worktree remove <путь> и git branch -D bb/iso-<id> в папке проекта."
 }

@@ -1,6 +1,6 @@
 ---
 name: project-catalog
-description: Find a BB project by meaning (aliases, Russian names, tags, description), read or update its catalog card, check whether its copies on different machines are in sync, and safely pull the thread folder before work (project_sync, `bb catalog pull`, history), with `bb catalog`.
+description: Find a BB project by meaning (aliases, Russian names, tags, description), read or update its catalog card, check whether its copies on different machines are in sync, safely pull the thread folder before work (project_sync, `bb catalog pull`, history), list worktree copies, or isolate a second thread in a busy folder (project_isolate, project_land), with `bb catalog`.
 ---
 
 # Project Catalog
@@ -146,3 +146,13 @@ without folder), `живых тредов нет` (orphaned), `не трогал
 are cached for an hour. Never delete a worktree or archive threads on your own:
 report and let the user decide. BB removes a worktree five minutes after its
 last thread is archived; `bb environment cleanup <id>` removes one by hand.
+
+## Isolation of a second thread
+
+When the session instructions say «ПАПКА ЗАНЯТА» and the task changes files:
+call `project_isolate` first, then `update_environment_directory` with the path
+it returns, and end the turn. Work and commit in the copy. At the end call
+`project_land`; if the main folder is busy or has edits, the plugin lands the
+commits later by itself. Conflicts are reported and change nothing. A
+read-only task needs no copy. Settings: `bb plugin config project-catalog set
+autoPull auto|check|off`, `cleanupMissingWorktrees true|false`.

@@ -36,15 +36,21 @@ anything itself.
     directory on that machine, with ref `refs/heads/snapshots`.
   - Triggers: any failed turn, entering finish, an idle thread with changes
     (at most every 10 minutes per folder), and archiving a worktree thread.
-  - Push only to a remote GitHub confirms as private (`gh api`) and only when
-    no changed file looks like a secret. Otherwise the snapshot stays local.
+  - Local by default. With `push-private`, push only to a remote GitHub
+    confirms as private (`gh api`) and only when nothing leaving (including
+    unpushed commits) looks like a secret; a dropped snapshot drops its server
+    ref too.
+  - Shadow snapshots refuse home folders, disk roots and BB data, stop at
+    200 MB and skip secret-like files; nested repositories get `<ref>--<dir>`.
+  - A clean folder drops the old snapshot only when its work is in the branch.
 - Thresholds:
   - five-hour window: economy 75%, finish 90%, or by pace when the window
     would be full within 40 / 10 minutes;
   - weekly and model windows: 90% / 97%.
 
-  A poll every 2 minutes sends one note into a running turn when its mode gets
-  worse; it never starts a new turn.
+  A poll every 2 minutes sends one note per window and reset into a running
+  turn (`steer-if-active`); the plugin's own dispatch hook refuses it if the
+  turn has ended, so it never starts a new turn.
 - Stuck threads:
   - after a rate-limit failure, the plugin waits up to a minute for
     provider-retry's decision;
@@ -59,7 +65,7 @@ anything itself.
 ## Switches
 
 - `.bb/hands-off` in a folder: no snapshots and no pulls there.
-- `bb plugin config limit-guard set snapshots push-private|local|off`.
+- `bb plugin config limit-guard set snapshots local|push-private|off` (local by default).
 - Also `steer`, `onLimit`, the six threshold settings, `notifyAfterMinutes`
   and `timeZone`.
 - `bb plugin disable limit-guard` turns everything off.

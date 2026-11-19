@@ -58,20 +58,30 @@ folder) can be marked in the card or with `bb catalog set <project>
 that are meant to differ on every machine are listed in the card or with
 `--local-paths "a,b"`; unsaved git work inside them is still reported.
 
-- **Safe pull before work (0.4.0, by code since 0.6.0).** At a project thread's
-  first message the `message.dispatch` hook runs `git fetch` on the thread's
-  own machine and folder, then fast-forwards only a clean branch that has an
-  upstream. It waits at most 20 seconds and puts the result into the session
-  instructions. It never pulls while another thread is active in the same
-  folder or when `.bb/hands-off` exists. Uncommitted edits, diverged branches,
-  a task branch without upstream, no remote or no network change nothing; the
-  agent is told why. It lists the incoming commits and the other machines'
-  copies from the last scan, including repositories nested in a plain folder.
-  The tool `project_sync` and `bb catalog pull [--check] [--thread <id>]` repeat
-  it by hand. Fetch never writes `FETCH_HEAD`.
+- **Safe pull before work (0.4.0; by code since 0.6.0, queued since 0.7.0).**
+  A project thread's first message waits in the queue («Синхронизирую папку
+  проекта», at most 5 minutes) while the plugin runs `git fetch` on the
+  thread's machine and folder and fast-forwards only a clean branch that has an
+  upstream; then the message goes and the result is in the session
+  instructions. Files never change under a running turn. Nothing is pulled
+  when another thread (hidden ones too) works in the same, a nested or an
+  enclosing folder now or in the last 15 minutes, when the thread list cannot
+  be read, or when `.bb/hands-off` exists. Setting `autoPull`:
+  `auto` / `check` / `off`. Fetch never writes `FETCH_HEAD`. The tool
+  `project_sync` and `bb catalog pull [--check] [--thread <id>]` repeat it.
 - **Background (0.6.0).** Every 30 minutes: fetch the projects touched in the
-  last week (remote refs only) and rescan them; remove BB records of worktrees
-  whose folder is gone and that no live thread uses.
+  last week (remote refs only), rescan them, and land finished isolated work.
+  Removing BB records of worktrees whose folder is gone is off by default
+  (`cleanupMissingWorktrees`).
+- **Isolation (0.7.0).** A thread that starts in a busy git folder must call
+  `project_isolate` before editing: a git worktree from the folder's HEAD on
+  branch `bb/iso-<thread>`, with `.worktreeinclude` files and
+  `.bb-env-setup.sh`; the agent moves there with `update_environment_directory`.
+  Committed work lands back by fast-forward, or by rebasing the copy's own
+  branch, when the copy is clean and the main folder is clean and free
+  (`project_land`, idle threads, every 30 minutes). Conflicts change nothing.
+  The copy and branch are removed after landing; uncommitted work is never
+  landed or removed.
 - **Sync history.** The last 40 pulls and checks per project (machine, thread,
   result) are kept in plugin storage, shown in the card as «Синхронизация» and
   printed by `bb catalog history [project]`.

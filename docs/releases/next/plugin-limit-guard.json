@@ -6,5 +6,5 @@
   "kind": "local-plugin",
   "plugin": "limit-guard",
   "rerun": "Проверяет установленную версию limit-guard; если она совпадает, ничего не переустанавливает.",
-  "rollback": "bb plugin uninstall limit-guard — агенты перестают получать правила и инструмент limit_status; остальное не затронуто."
+  "rollback": "bb plugin uninstall limit-guard — агенты перестают получать правила, сообщения и снимки. Остаются ссылки снимков refs/wip/bb/* в репозиториях (git for-each-ref refs/wip/bb; убрать: git update-ref -d <ref>, на сервере: git push origin :<ref>) и теневые репозитории в данных плагина на машинах (<dataDir>/shadow)."
 }
