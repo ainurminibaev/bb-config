@@ -134,6 +134,13 @@
     "source": "path:plugins/code-open"
   },
   {
+    "id": "codex-project-trust",
+    "version": "1.0.0",
+    "enabled": true,
+    "name": "Codex Project Trust",
+    "source": "git:https://github.com/ainurminibaev/bb-codex-project-trust.git@semver:^1.0.0"
+  },
+  {
     "id": "codex-realtime",
     "version": "0.1.0",
     "enabled": true,
