@@ -50,9 +50,9 @@ test('the worst window decides', () => {
 test('pace is estimated from recent growth only', () => {
   assert.equal(etaMinutes([{ at: 0, used: 50 }]), null);
   assert.equal(etaMinutes([{ at: 0, used: 50 }, { at: 8 * 60_000, used: 60 }]), null, 'two samples are not enough');
-  assert.equal(etaMinutes([{ at: 0, used: 50 }, { at: 2 * 60_000, used: 55 }, { at: 4 * 60_000, used: 60 }]), null, 'less than six minutes of data');
+  assert.equal(etaMinutes([{ at: 0, used: 50 }, { at: 4 * 60_000, used: 55 }, { at: 8 * 60_000, used: 60 }]), null, 'less than ten minutes of data');
   assert.equal(etaMinutes([{ at: 0, used: 50 }, { at: 5 * 60_000, used: 50 }, { at: 10 * 60_000, used: 50 }]), null, 'not growing');
-  assert.equal(Math.round(etaMinutes([{ at: 0, used: 20 }, { at: 4 * 60_000, used: 27 }, { at: 8 * 60_000, used: 33 }])!), 41);
+  assert.equal(Math.round(etaMinutes([{ at: 0, used: 20 }, { at: 6 * 60_000, used: 27 }, { at: 12 * 60_000, used: 33 }])!), 62);
 });
 
 test('no data is unknown and reads as normal work', () => {

@@ -19,7 +19,7 @@
     "host": "./host.ts"
   },
   "scripts": {
-    "test": "node --test logic.test.ts snapshot.test.ts",
+    "test": "node --test logic.test.ts snapshot.test.ts priority.test.ts",
     "typecheck": "tsc --noEmit --skipLibCheck"
   },
   "dependencies": {

@@ -222,7 +222,9 @@ export default function plugin(bb: BbPluginApi) {
       const { windows } = windowsOf(u, row.environmentHostId!, row.providerId);
       const a = assess(windows, await threadModel(row.id), thresholds);
       if (!a.driver || a.mode === 'unknown' || a.mode === 'normal') continue;
-      const key = `${a.driver.label}|${a.driver.resetsAt ?? ''}`;
+      // The reset time jitters by seconds between reads: round it so one window stays one key.
+      const resetKey = a.driver.resetsAt ? Math.round(Date.parse(a.driver.resetsAt) / 600_000) : '';
+      const key = `${a.driver.label}|${resetKey}`;
       const earlier = (await sentFor(row.id)).find(item => item.key === key);
       if (earlier && RANK[a.mode] <= RANK[earlier.mode]) continue;
       if (a.mode === 'finish') void snapshot(row, 'финиш по лимиту', [row.id]).catch(() => undefined);
