@@ -108,12 +108,13 @@ export function assess(windows: QuotaWindow[], model: string | null, t: Threshol
 
 /** Pace from samples of one window: minutes until 100%, or null when it is not growing. */
 export function etaMinutes(samples: { at: number; used: number }[], windowMs = 30 * 60_000): number | null {
-  if (samples.length < 2) return null;
+  if (samples.length < 3) return null;
   const last = samples[samples.length - 1]!;
   const recent = samples.filter(s => last.at - s.at <= windowMs);
+  if (recent.length < 3) return null;
   const first = recent[0]!;
   const minutes = (last.at - first.at) / 60_000;
-  if (minutes < 2 || last.used <= first.used) return null;
+  if (minutes < 6 || last.used <= first.used) return null;
   const rate = (last.used - first.used) / minutes;
   return Math.max(0, (100 - last.used) / rate);
 }

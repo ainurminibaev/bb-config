@@ -2,7 +2,7 @@ import { defineRpcContract } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
 
 const snapshotResult = z.object({
-  kind: z.enum(['git', 'shadow', 'missing', 'hands-off', 'error']),
+  kind: z.enum(['git', 'shadow', 'missing', 'hands-off', 'skipped', 'error']),
   commit: z.string().nullable(),
   /** HEAD the snapshot was taken on (git folders). */
   base: z.string().nullable(),
@@ -12,9 +12,13 @@ const snapshotResult = z.object({
   pushed: z.boolean(),
   pushNote: z.string().nullable(),
   secrets: z.array(z.string()),
-  /** The folder matched its branch, so the old local snapshot was dropped. */
+  /** The folder matched its branch and the old snapshot's work is in the branch, so it was dropped. */
   removed: z.boolean(),
+  /** The folder is clean but the old snapshot's work is not in the branch: kept on purpose. */
+  kept: z.boolean(),
   error: z.string().nullable(),
+  /** Git repositories nested in a folder without git, snapshotted separately. */
+  nested: z.array(z.object({ path: z.string(), commit: z.string().nullable(), files: z.number(), error: z.string().nullable() })),
 });
 export type SnapshotResult = z.infer<typeof snapshotResult>;
 const restoreResult = z.object({ ok: z.boolean(), message: z.string() });

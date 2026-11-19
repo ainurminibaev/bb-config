@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { restoreGit, snapshotGit, snapshotShadow } from './host.ts';
-import { findSecrets, snapshotRef } from './snapshot-logic.ts';
+import { findSecrets, nestedRef, snapshotRef, unsafeShadowRoot } from './snapshot-logic.ts';
 
 const root = mkdtempSync(join(tmpdir(), 'limit-guard-snap-'));
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -51,10 +51,28 @@ test('an unchanged snapshot is not repeated; a clean folder drops the old one', 
   writeFileSync(join(a, 'n.txt'), 'y\n');
   const third = await snapshotGit(a, REF, 'm', false, signal);
   assert.equal(g(a, 'rev-parse', `${third.commit}^1`).trim(), first.commit, 'previous snapshot is the first parent: no force push needed');
+  // The work is thrown away (not committed): the snapshot must survive as its only copy.
   rmSync(join(a, 'n.txt'));
-  const clean = await snapshotGit(a, REF, 'm', false, signal);
-  assert.equal(clean.removed, true);
+  const discarded = await snapshotGit(a, REF, 'm', false, signal);
+  assert.equal(discarded.removed, false);
+  assert.equal(discarded.kept, true);
+  assert.equal(g(a, 'rev-parse', REF).trim(), third.commit);
+  // The work is committed: now the snapshot is no longer needed.
+  writeFileSync(join(a, 'n.txt'), 'y\n'); g(a, 'add', 'n.txt'); g(a, 'commit', '-qm', 'done');
+  const committed = await snapshotGit(a, REF, 'm', false, signal);
+  assert.equal(committed.removed, true);
   assert.throws(() => g(a, 'rev-parse', '--verify', '-q', REF));
+});
+
+test('an untracked nested repository does not break the snapshot', async () => {
+  const { a } = repo('nested-untracked');
+  mkdirSync(join(a, 'inner'));
+  execFileSync('git', ['init', '-q', join(a, 'inner')]);
+  writeFileSync(join(a, 'inner', 'x.txt'), 'x\n');
+  writeFileSync(join(a, 'top.txt'), 't\n');
+  const r = await snapshotGit(a, REF, 'm', false, signal);
+  assert.equal(r.error, null);
+  assert.equal(r.changed, true);
 });
 
 test('push is refused for a remote that is not confirmed private', async () => {
@@ -73,6 +91,15 @@ test('a snapshot is laid out on another clean copy at the same base', async () =
   g(a, 'push', '-q', 'origin', `${r.commit}:${REF}`);
   const b = join(root, 'restore-b');
   execFileSync('git', ['clone', '-q', bare, b], { env });
+  // A newer local snapshot that never reached the server must win over the server's older one.
+  writeFileSync(join(a, 'f.txt'), 'newer local work\n');
+  const newer = await snapshotGit(a, REF, 'm', false, signal);
+  execFileSync('git', ['-C', a, 'worktree', 'add', '-q', '--detach', join(root, 'restore-a2'), 'HEAD'], { env });
+  const local = await restoreGit(join(root, 'restore-a2'), REF, signal);
+  assert.equal(local.ok, true, local.message);
+  assert.match(local.message, new RegExp(newer.commit!.slice(0, 8)));
+  assert.equal(readFileSync(join(root, 'restore-a2', 'f.txt'), 'utf8'), 'newer local work\n');
+  writeFileSync(join(a, 'f.txt'), 'work in progress\n');
   const done = await restoreGit(b, REF, signal);
   assert.equal(done.ok, true, done.message);
   assert.equal(readFileSync(join(b, 'f.txt'), 'utf8'), 'work in progress\n');
@@ -82,15 +109,39 @@ test('a snapshot is laid out on another clean copy at the same base', async () =
   assert.equal((await restoreGit(b, REF, signal)).ok, false, 'a dirty folder is refused');
 });
 
+test('a plain folder: nested repositories get their own snapshots; secrets and home folders are refused', async () => {
+  const plain = join(root, 'plain-mixed'); const data = join(root, 'data2');
+  mkdirSync(plain);
+  writeFileSync(join(plain, 'notes.md'), 'hello\n');
+  writeFileSync(join(plain, '.env'), 'TOKEN=1\n');
+  const inner = join(plain, 'app');
+  execFileSync('git', ['init', '-q', '-b', 'main', inner]);
+  writeFileSync(join(inner, 'a.txt'), '1\n'); g(inner, 'add', '.'); g(inner, 'commit', '-qm', 'one');
+  writeFileSync(join(inner, 'a.txt'), 'edited inside nested repo\n');
+  const r = await snapshotShadow(plain, data, REF, 'm', signal);
+  assert.equal(r.kind, 'shadow');
+  assert.equal(r.files, 1, 'only notes.md: .env skipped, app/ handled separately');
+  assert.deepEqual(r.secrets, ['.env']);
+  assert.equal(r.nested.length, 1);
+  assert.equal(r.nested[0]!.path, 'app');
+  assert.ok(r.nested[0]!.commit);
+  assert.equal(g(inner, 'show', `${nestedRef(REF, 'app')}:a.txt`), 'edited inside nested repo\n');
+  assert.ok(unsafeShadowRoot('/root', '/root'));
+  assert.ok(unsafeShadowRoot('/Users/me', '/Users/me'));
+  assert.ok(unsafeShadowRoot('/srv/projects', '/root'));
+  assert.ok(unsafeShadowRoot('/root/.bb-machines/x/y', '/root'));
+  assert.equal(unsafeShadowRoot('/srv/projects/notes', '/root'), null);
+});
+
 test('a folder without git gets a shadow repository and stays without .git', async () => {
   const plain = join(root, 'plain'); const data = join(root, 'data');
   mkdirSync(join(plain, 'node_modules', 'x'), { recursive: true });
   writeFileSync(join(plain, 'notes.md'), 'hello\n');
   writeFileSync(join(plain, 'node_modules', 'x', 'big.js'), 'skip\n');
-  const r = await snapshotShadow(plain, data, 'm', signal);
+  const r = await snapshotShadow(plain, data, REF, 'm', signal);
   assert.equal(r.kind, 'shadow'); assert.equal(r.changed, true); assert.equal(r.files, 1);
   assert.equal(existsSync(join(plain, '.git')), false);
-  const again = await snapshotShadow(plain, data, 'm', signal);
+  const again = await snapshotShadow(plain, data, REF, 'm', signal);
   assert.equal(again.changed, false);
 });
 

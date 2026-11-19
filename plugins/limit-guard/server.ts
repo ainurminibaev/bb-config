@@ -44,7 +44,7 @@ export default function plugin(bb: BbPluginApi) {
     etaFinish: { type: 'number', label: 'Финиш, если до упора меньше, мин', default: DEFAULT_THRESHOLDS.etaFinishMinutes },
     steer: { type: 'boolean', label: 'Сообщать агенту в идущий ход, когда режим ухудшился', default: true },
     snapshots: {
-      type: 'select', label: 'Снимки незаконченной работы', options: ['push-private', 'local', 'off'], default: 'push-private',
+      type: 'select', label: 'Снимки незаконченной работы', options: ['local', 'push-private', 'off'], default: 'local',
       experimental_optionLabels: {
         'push-private': 'Сохранять и отправлять в приватный репозиторий (если нет похожих на секреты файлов)',
         local: 'Только на машине треда', off: 'Выключено',
@@ -63,7 +63,7 @@ export default function plugin(bb: BbPluginApi) {
     timeZone: { type: 'string', label: 'Часовой пояс для времени в уведомлениях', default: '', description: 'Например Europe/Moscow. Пусто — пояс сервера BB.' },
   });
   let thresholds: Thresholds = DEFAULT_THRESHOLDS;
-  let cfg = { steer: true, snapshots: 'push-private', onLimit: 'suggest', notifyAfterMinutes: 60 };
+  let cfg = { steer: true, snapshots: 'local', onLimit: 'suggest', notifyAfterMinutes: 60 };
   const load = (v: Awaited<ReturnType<typeof settings.get>>) => {
     thresholds = normalizeThresholds({ shortEconomy: v.shortEconomy, shortFinish: v.shortFinish, longEconomy: v.longEconomy, longFinish: v.longFinish, etaEconomy: v.etaEconomy, etaFinish: v.etaFinish });
     cfg = { steer: v.steer, snapshots: v.snapshots, onLimit: v.onLimit, notifyAfterMinutes: Number.isFinite(v.notifyAfterMinutes) ? Math.max(0, v.notifyAfterMinutes) : 60 };
@@ -175,7 +175,7 @@ export default function plugin(bb: BbPluginApi) {
       message: snapshotMessage({ reason, branch: row.environmentBranchName ?? null, at: Date.now() }),
     }, { hostId: row.environmentHostId, timeoutMs: 300_000 });
     const entry: SnapshotRecord = { environmentId: row.environmentId, hostId: row.environmentHostId, path: row.environmentPath, ref, at: Date.now(), reason, threadIds, result };
-    if (result.changed || result.removed || result.error) {
+    if (result.changed || result.removed || result.error || result.nested.some(n => n.commit)) {
       if (result.removed) await bb.storage.kv.delete(`snap:${row.environmentId}`);
       else await bb.storage.kv.set(`snap:${row.environmentId}`, entry);
     }
@@ -196,15 +196,21 @@ export default function plugin(bb: BbPluginApi) {
     };
   }
   const snapshotLater = (threadId: string, reason: string, minIntervalMs = 0, onlyWorktree = false) => {
-    void threadRow(threadId).then(row => row && SUPPORTED.has(row.providerId) && (!onlyWorktree || row.environmentIsWorktree)
+    void threadRow(threadId).then(row => row && (!onlyWorktree || row.environmentIsWorktree)
       ? snapshot(row, reason, [threadId], minIntervalMs) : null)
       .catch(error => bb.log.warn(`Limit Guard: snapshot (${reason}) failed: ${message(error)}`));
   };
 
   // ---------- Steer a short note into running turns when their mode gets worse ----------
-  const sentMode = new Map<string, { mode: Mode; key: string }>();
+  // One note per thread, window and reset: kept in storage so restarts and new turns do not repeat it.
+  type Sent = { key: string; mode: Mode; at: number };
+  async function sentFor(threadId: string) { return (await bb.storage.kv.get<Sent[]>(`sent:${threadId}`)) ?? []; }
+  async function markSent(threadId: string, entry: Sent) {
+    const list = (await sentFor(threadId)).filter(item => item.key !== entry.key && Date.now() - item.at < 8 * 24 * 60 * 60_000);
+    await bb.storage.kv.set(`sent:${threadId}`, [...list, entry].slice(-20));
+  }
   async function poll() {
-    const all = await bb.sdk.threads.list({ archived: false, limit: 500 }) as unknown;
+    const all = await bb.sdk.threads.list({ archived: false, limit: 500, includeHidden: true }) as unknown;
     const rows = ((Array.isArray(all) ? all : record(all).threads ?? []) as ThreadRow[])
       .filter(row => row.status === 'active' && SUPPORTED.has(row.providerId) && row.environmentHostId);
     const hosts = [...new Set(rows.map(row => row.environmentHostId!))];
@@ -215,21 +221,23 @@ export default function plugin(bb: BbPluginApi) {
       if (!u) continue;
       const { windows } = windowsOf(u, row.environmentHostId!, row.providerId);
       const a = assess(windows, await threadModel(row.id), thresholds);
-      if (!a.driver || a.mode === 'unknown') continue;
+      if (!a.driver || a.mode === 'unknown' || a.mode === 'normal') continue;
       const key = `${a.driver.label}|${a.driver.resetsAt ?? ''}`;
-      const previous = sentMode.get(row.id);
-      if (previous && previous.key === key && RANK[a.mode] <= RANK[previous.mode]) continue;
-      sentMode.set(row.id, { mode: a.mode, key });
-      if (a.mode === 'normal' || (previous && previous.key === key && RANK[a.mode] <= RANK[previous.mode])) continue;
+      const earlier = (await sentFor(row.id)).find(item => item.key === key);
+      if (earlier && RANK[a.mode] <= RANK[earlier.mode]) continue;
       if (a.mode === 'finish') void snapshot(row, 'финиш по лимиту', [row.id]).catch(() => undefined);
-      if (!cfg.steer) continue;
+      if (!cfg.steer) { await markSent(row.id, { key, mode: a.mode, at: Date.now() }); continue; }
       try {
-        const fresh = await bb.sdk.threads.get({ threadId: row.id });
-        if (fresh.status !== 'active') continue; // never start a new turn just to say this
-        await bb.sdk.threads.send({ threadId: row.id, input: [{ type: 'text', text: thresholdMessage(a, Date.now(), row.providerId), mentions: [] }] } as never);
+        // steer-if-active joins the running turn; our dispatch hook refuses it if the turn has just ended.
+        await bb.sdk.threads.send({ threadId: row.id, mode: 'steer-if-active', input: [{ type: 'text', text: thresholdMessage(a, Date.now(), row.providerId), mentions: [] }] });
+        await markSent(row.id, { key, mode: a.mode, at: Date.now() });
       } catch (error) { bb.log.warn(`Limit Guard: could not message ${row.id}: ${message(error)}`); }
     }
   }
+  // A limit note must never start a turn of its own.
+  bb.experimental_hooks.on('message.dispatch', ctx => (ctx.originPluginId === bb.pluginId && ctx.attempt === 'start-turn'
+    ? { action: 'reject', message: 'limit-guard: тред уже не работает — сообщение о лимите не нужно' }
+    : { action: 'proceed' }));
   bb.background.schedule('poll', '*/2 * * * *', async () => { await poll(); });
 
   // ---------- A turn already hit the limit ----------
@@ -242,7 +250,6 @@ export default function plugin(bb: BbPluginApi) {
   })().catch(error => bb.log.warn(`Limit Guard: could not load stuck threads: ${message(error)}`));
   async function forget(threadId: string) {
     await stuckReady;
-    sentMode.delete(threadId);
     if (stuck.delete(threadId)) await bb.storage.kv.delete(`stuck:${threadId}`);
   }
   const loose = z.any();
@@ -273,10 +280,10 @@ export default function plugin(bb: BbPluginApi) {
   }
   async function onTurnFailed(event: { threadId: string; requestId: string; errorInfo: { category?: string } | null; rateLimits: unknown }) {
     const row = await threadRow(event.threadId);
-    if (!row || !SUPPORTED.has(row.providerId)) return;
-    // Whatever stopped the turn, keep what it left in the folder.
+    if (!row) return;
+    // Whatever stopped the turn, and whichever agent ran it, keep what it left in the folder.
     void snapshot(row, `ход прервался (${event.errorInfo?.category ?? 'ошибка'})`, [row.id]).catch(error => bb.log.warn(`Limit Guard: snapshot failed: ${message(error)}`));
-    if (cfg.onLimit === 'off' || event.errorInfo?.category !== 'rate-limit' || !row.environmentHostId) return;
+    if (!SUPPORTED.has(row.providerId) || cfg.onLimit === 'off' || event.errorInfo?.category !== 'rate-limit' || !row.environmentHostId) return;
     await stuckReady;
     const windows = Array.isArray(record(event.rateLimits).windows) ? record(event.rateLimits).windows as { usedPercent?: number | null; resetsAtMs?: number | null; label?: string }[] : [];
     const model = await threadModel(row.id);
@@ -305,11 +312,15 @@ export default function plugin(bb: BbPluginApi) {
   /** A handoff of a stuck thread: drop the source's automatic retry so two agents do not do the same work. */
   async function onHandoffStarted(threadId: string) {
     await stuckReady;
-    if (!stuck.size) return;
+    if (!stuck.size || await bb.storage.kv.get<boolean>(`handoff:${threadId}`)) return;
+    await bb.storage.kv.set(`handoff:${threadId}`, true);
+    const thread = await bb.sdk.threads.get({ threadId }) as unknown as { createdAt?: number; sourceThreadId?: string | null };
+    const createdAt = typeof thread.createdAt === 'number' ? thread.createdAt : Date.now();
     const first = await bb.sdk.threads.events.list({ threadId, types: ['client/turn/requested'], order: 'asc', limit: '1' });
     const body = JSON.stringify(first[0]?.data ?? '');
     for (const source of [...stuck.keys()]) {
-      if (!body.includes(source)) continue;
+      const named = thread.sourceThreadId ? thread.sourceThreadId === source : new RegExp(`@thread:${source}\\b|\\b${source}\\b`).test(body);
+      if (!named || (stuck.get(source)?.failedAt ?? Infinity) > createdAt) continue;
       const queued = await bb.sdk.threads.queuedMessages.list({ threadId: source }) as unknown;
       const rows = (Array.isArray(queued) ? queued : record(queued).queuedMessages ?? record(queued).messages ?? []) as { id: string; payload?: { kind?: string } }[];
       for (const q of rows) if (q.payload?.kind === 'retry') await bb.sdk.threads.queuedMessages.delete({ threadId: source, queuedMessageId: q.id });
@@ -359,9 +370,11 @@ export default function plugin(bb: BbPluginApi) {
     const r = s.result;
     const state = r.kind === 'hands-off' ? 'папка помечена .bb/hands-off — не трогаю'
       : r.kind === 'missing' ? 'папка не найдена' : r.kind === 'error' ? `ошибка: ${r.error}`
-      : r.removed ? 'папка совпадает с веткой — снимок не нужен (старый убран)'
+      : r.kind === 'skipped' ? 'не сохранено'
+      : r.removed ? 'работа уже в ветке — снимок не нужен (старый убран)'
+      : r.kept ? `папка чистая, но работа из прошлого снимка ${r.commit?.slice(0, 8)} не в ветке — снимок сохранён`
       : !r.commit ? 'изменений нет' : `${r.commit.slice(0, 8)}, файлов: ${r.files}${r.skippedFiles ? ` (пропущено крупных/лишних: ${r.skippedFiles})` : ''}${r.pushed ? ', отправлен на сервер' : ''}`;
-    return `${new Date(s.at).toISOString().slice(0, 16).replace('T', ' ')} UTC  ${s.path}\n  ${s.reason}: ${state}${r.pushNote ? `\n  ${r.pushNote}` : ''}${r.secrets.length ? `\n  похоже на секреты: ${r.secrets.slice(0, 5).join(', ')}` : ''}${r.kind === 'git' && r.commit ? `\n  ссылка: ${s.ref}` : ''}`;
+    return `${new Date(s.at).toISOString().slice(0, 16).replace('T', ' ')} UTC  ${s.path}\n  ${s.reason}: ${state}${r.pushNote ? `\n  ${r.pushNote}` : ''}${r.secrets.length ? `\n  похоже на секреты: ${r.secrets.slice(0, 5).join(', ')}` : ''}${r.kind === 'git' && r.commit ? `\n  ссылка: ${s.ref}` : ''}${r.nested.map(n => `\n  внутри ${n.path}/: ${n.error ? `ошибка: ${n.error}` : n.commit ? `${n.commit.slice(0, 8)}, файлов: ${n.files}` : 'изменений нет'}`).join('')}`;
   };
   bb.cli.register(defineCli({
     name: 'limit',
