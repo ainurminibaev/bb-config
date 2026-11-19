@@ -8,6 +8,10 @@ import {
   type Assessment, type Mode, type QuotaWindow, type RetryState, type StuckThread, type Thresholds,
 } from './logic.ts';
 import { snapshotMessage, snapshotRef } from './snapshot-logic.ts';
+import {
+  decideHold, DEFAULT_POLICIES, holdReason, MODE_LABEL, nextCheckAt, normalizePolicy, parseMode, POLICY_LABEL, priorityStatus,
+  type HoldDecision, type Policies, type PriorityMode,
+} from './priority-logic.ts';
 
 const SUPPORTED = new Set(['claude-code', 'codex']);
 const CACHE_MS = 60_000;
@@ -61,13 +65,31 @@ export default function plugin(bb: BbPluginApi) {
       description: 'Короткую паузу BB переждёт сам (provider-retry). Если автоповтора нет, уведомление приходит всегда.',
     },
     timeZone: { type: 'string', label: 'Часовой пояс для времени в уведомлениях', default: '', description: 'Например Europe/Moscow. Пусто — пояс сервера BB.' },
+    priShortOn: { type: 'boolean', label: 'Неприоритетные треды: учитывать 5-часовое окно', default: true },
+    priShortLow: { type: 'number', label: '5-часовое окно: порог сразу после сброса, %', default: 40 },
+    priShortHigh: { type: 'number', label: '5-часовое окно: порог перед сбросом, %', default: 90 },
+    priShortNear: { type: 'number', label: '5-часовое окно: «перед сбросом» — за сколько минут', default: 30 },
+    priLongOn: { type: 'boolean', label: 'Неприоритетные треды: учитывать недельное окно', default: true },
+    priLongLow: { type: 'number', label: 'Недельное окно: порог сразу после сброса, %', default: 60 },
+    priLongHigh: { type: 'number', label: 'Недельное окно: порог перед сбросом, %', default: 95 },
+    priLongNear: { type: 'number', label: 'Недельное окно: «перед сбросом» — за сколько минут', default: 720 },
+    priModelOn: { type: 'boolean', label: 'Неприоритетные треды: учитывать окно модели (например, fable)', default: true },
+    priModelLow: { type: 'number', label: 'Окно модели (например, Fable): порог сразу после сброса, %', default: 60 },
+    priModelHigh: { type: 'number', label: 'Окно модели (например, Fable): порог перед сбросом, %', default: 95 },
+    priModelNear: { type: 'number', label: 'Окно модели (например, Fable): «перед сбросом» — за сколько минут', default: 720 },
   });
   let thresholds: Thresholds = DEFAULT_THRESHOLDS;
+  let policies: Policies = DEFAULT_POLICIES;
   let cfg = { steer: true, snapshots: 'local', onLimit: 'suggest', notifyAfterMinutes: 60 };
   const load = (v: Awaited<ReturnType<typeof settings.get>>) => {
     thresholds = normalizeThresholds({ shortEconomy: v.shortEconomy, shortFinish: v.shortFinish, longEconomy: v.longEconomy, longFinish: v.longFinish, etaEconomy: v.etaEconomy, etaFinish: v.etaFinish });
     cfg = { steer: v.steer, snapshots: v.snapshots, onLimit: v.onLimit, notifyAfterMinutes: Number.isFinite(v.notifyAfterMinutes) ? Math.max(0, v.notifyAfterMinutes) : 60 };
     setTimeZone(v.timeZone);
+    policies = {
+      short: normalizePolicy({ enabled: v.priShortOn, low: v.priShortLow, high: v.priShortHigh, nearMinutes: v.priShortNear }, DEFAULT_POLICIES.short),
+      long: normalizePolicy({ enabled: v.priLongOn, low: v.priLongLow, high: v.priLongHigh, nearMinutes: v.priLongNear }, DEFAULT_POLICIES.long),
+      model: normalizePolicy({ enabled: v.priModelOn, low: v.priModelLow, high: v.priModelHigh, nearMinutes: v.priModelNear }, DEFAULT_POLICIES.model),
+    };
   };
   void settings.get().then(load).catch(() => undefined);
   settings.onChange(next => load(next));
@@ -216,6 +238,7 @@ export default function plugin(bb: BbPluginApi) {
     const hosts = [...new Set(rows.map(row => row.environmentHostId!))];
     const usage = new Map<string, HostUsage>();
     await Promise.all(hosts.map(async hostId => { try { usage.set(hostId, await hostUsage(hostId, true)); } catch { /* offline */ } }));
+    for (const row of rows) await notePriority(row, usage).catch(error => bb.log.warn(`Limit Guard: priority note: ${message(error)}`));
     for (const row of rows) {
       const u = usage.get(row.environmentHostId!);
       if (!u) continue;
@@ -236,11 +259,88 @@ export default function plugin(bb: BbPluginApi) {
       } catch (error) { bb.log.warn(`Limit Guard: could not message ${row.id}: ${message(error)}`); }
     }
   }
-  // A limit note must never start a turn of its own.
-  bb.experimental_hooks.on('message.dispatch', ctx => (ctx.originPluginId === bb.pluginId && ctx.attempt === 'start-turn'
-    ? { action: 'reject', message: 'limit-guard: тред уже не работает — сообщение о лимите не нужно' }
-    : { action: 'proceed' }));
-  bb.background.schedule('poll', '*/2 * * * *', async () => { await poll(); });
+  // ---------- Low-priority threads: new turns wait above a floating threshold ----------
+  const modes = new Map<string, PriorityMode>();
+  const modesReady = (async () => {
+    for (const key of await bb.storage.kv.list('prio:')) {
+      const value = await bb.storage.kv.get<{ mode: PriorityMode }>(key);
+      if (value && value.mode !== 'normal') modes.set(key.slice(5), value.mode);
+    }
+  })().catch(error => bb.log.warn(`Limit Guard: could not load priorities: ${message(error)}`));
+  const held = new Set<string>();
+  /** The thread's own mode, or the nearest ancestor's: subthreads inherit. */
+  async function effectiveMode(threadId: string, parentHint?: string | null): Promise<{ mode: PriorityMode; from: string | null }> {
+    await modesReady;
+    let id: string | null = threadId;
+    let parent: string | null | undefined = parentHint;
+    for (let depth = 0; id && depth < 10; depth++) {
+      const own = modes.get(id);
+      if (own) return { mode: own, from: id === threadId ? null : id };
+      if (parent === undefined) parent = ((await bb.sdk.threads.get({ threadId: id }).catch(() => null)) as { parentThreadId?: string | null } | null)?.parentThreadId ?? null;
+      id = parent; parent = undefined;
+    }
+    return { mode: 'normal', from: null };
+  }
+  /** Usage for a dispatch decision: cached data within ten minutes, otherwise a quick fresh read; never slow. */
+  async function quickUsage(hostId: string): Promise<HostUsage | null> {
+    const saved = cache.get(hostId);
+    if (saved && Date.now() - saved.at < 10 * 60_000) return saved;
+    return Promise.race([hostUsage(hostId, true).catch(() => null), new Promise<null>(resolve => setTimeout(() => resolve(null), 5_000))]);
+  }
+  async function priorityFor(threadId: string, parentHint?: string | null): Promise<{ mode: PriorityMode; from: string | null; decision: HoldDecision }> {
+    const { mode, from } = await effectiveMode(threadId, parentHint);
+    if (mode === 'normal') return { mode, from, decision: { hold: false, unknown: false, closest: null } };
+    const row = await threadRow(threadId);
+    const usage = row?.environmentHostId ? await quickUsage(row.environmentHostId) : null;
+    const windows = usage && row ? windowsOf(usage, row.environmentHostId!, row.providerId) : null;
+    return { mode, from, decision: decideHold(mode, policies, windows && !windows.error ? windows.windows : null, await threadModel(threadId), Date.now()) };
+  }
+  async function setMode(threadId: string, mode: PriorityMode) {
+    await modesReady;
+    if (mode === 'normal') { modes.delete(threadId); await bb.storage.kv.delete(`prio:${threadId}`); }
+    else { modes.set(threadId, mode); await bb.storage.kv.set(`prio:${threadId}`, { mode }); }
+    await bb.experimental_hooks.recheck('message.dispatch').catch(() => undefined);
+  }
+
+  bb.experimental_hooks.on('message.dispatch', async ctx => {
+    // A limit note must never start a turn of its own.
+    if (ctx.originPluginId === bb.pluginId && ctx.attempt === 'start-turn') return { action: 'reject', message: 'limit-guard: тред уже не работает — сообщение о лимите не нужно' };
+    // A steer into a running turn is the user talking to work already under way.
+    if (ctx.attempt !== 'start-turn') return { action: 'proceed' };
+    try {
+      const { mode, decision } = await priorityFor(ctx.thread.id, ctx.thread.parentThreadId ?? null);
+      if (!decision.hold) { held.delete(ctx.thread.id); return { action: 'proceed' }; }
+      held.add(ctx.thread.id);
+      return { action: 'wait', reason: holdReason(mode, decision), sendAt: nextCheckAt(decision, Date.now()) };
+    } catch (error) {
+      bb.log.warn(`Limit Guard: priority check failed, letting the message through: ${message(error)}`);
+      return { action: 'proceed' };
+    }
+  });
+
+  /** A running low-priority turn above its threshold is asked once to finish its step and stop. */
+  async function notePriority(row: ThreadRow, usage: Map<string, HostUsage>) {
+    const { mode } = await effectiveMode(row.id);
+    if (mode === 'normal' || !cfg.steer) return;
+    const u = usage.get(row.environmentHostId!);
+    if (!u) return;
+    const { windows, error } = windowsOf(u, row.environmentHostId!, row.providerId);
+    if (error) return;
+    const d = decideHold(mode, policies, windows, await threadModel(row.id), Date.now());
+    if (!d.hold) return;
+    const key = `prio|${d.label}|${d.resetsAt ? Math.round(d.resetsAt / 600_000) : ''}`;
+    if ((await sentFor(row.id)).some(item => item.key === key)) return;
+    try {
+      await bb.sdk.threads.send({ threadId: row.id, mode: 'steer-if-active', input: [{ type: 'text', text: `[limit-guard] ${holdReason(mode, d)} Доведи текущий шаг до рабочего состояния, коротко напиши «что сделано / что дальше» и остановись: следующие задания подождут.`, mentions: [] }] });
+      await markSent(row.id, { key, mode: 'finish', at: Date.now() });
+    } catch (error) { bb.log.warn(`Limit Guard: could not message ${row.id}: ${message(error)}`); }
+  }
+
+  bb.background.schedule('poll', '*/2 * * * *', async () => {
+    await poll();
+    // Waiting messages are re-decided by the limit itself, not by a timer guess.
+    if (held.size) await bb.experimental_hooks.recheck('message.dispatch').catch(() => undefined);
+  });
 
   // ---------- A turn already hit the limit ----------
   const stuck = new Map<string, StuckThread>();
@@ -382,6 +482,23 @@ export default function plugin(bb: BbPluginApi) {
     name: 'limit',
     summary: 'Лимиты подписки и снимки незаконченной работы (limit-guard)',
     commands: {
+      priority: cliCommand({
+        summary: 'Режим треда: обычный, неприоритетный (ждёт выше плавающего порога) или фоновый (строже); без значения — показать',
+        positionals: [{ name: 'mode', description: 'normal | low | background (обычный | неприоритетный | фоновый)' }],
+        options: { thread: threadOption, json: jsonOption },
+        async run(input, ctx) {
+          const threadId = requireThread(input.options.thread, ctx);
+          if (input.positionals.mode !== undefined) {
+            const mode = parseMode(input.positionals.mode);
+            if (!mode) throw new PluginCliError(`неизвестный режим «${input.positionals.mode}»`, { code: 'bad_mode', hint: 'Режимы: normal, low, background.' });
+            await setMode(threadId, mode);
+          }
+          const p = await priorityFor(threadId);
+          if (input.options.json) return { exitCode: 0, stdout: JSON.stringify({ threadId, ...p, policies }, null, 2) };
+          const rules = (['short', 'long', 'model'] as const).map(k => `  ${POLICY_LABEL[k]}: ${policies[k].enabled ? `${policies[k].low}% → ${policies[k].high}% за ${policies[k].nearMinutes} мин до сброса` : 'не учитывается'}`);
+          return { exitCode: 0, stdout: [priorityStatus(p.mode, p.decision, p.from), ...(p.mode === 'normal' ? [] : [`Пороги (${MODE_LABEL[p.mode]}${p.mode === 'background' ? ', на 20 ниже' : ''}):`, ...rules])].join('\n') };
+        },
+      }),
       status: cliCommand({
         summary: 'Показать лимит и режим: обычный, экономный, финиш',
         options: { thread: threadOption, refresh: { type: 'boolean', description: 'Не брать кэш за последнюю минуту' }, json: jsonOption },
