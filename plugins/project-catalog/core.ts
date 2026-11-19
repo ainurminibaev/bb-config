@@ -455,3 +455,40 @@ export function otherCopies(sources: SourceView[], currentHostId: string, now: n
     return `${source.hostName}: ${scan.kind === 'missing' ? 'папка не найдена' : 'ошибка проверки'}${age}`;
   });
 }
+
+// ---------- Worktrees: extra copies BB made for threads ----------
+
+export type WorktreeState = 'active' | 'idle' | 'orphan' | 'retiring';
+export type WorktreeView = {
+  environmentId: string; projectId: string; hostId: string; hostName: string; path: string; branch: string | null;
+  liveThreads: number; archivedThreads: number; lastActivity: number | null; retireAt: number | null;
+  bytes: number | null; state: WorktreeState;
+};
+export const IDLE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Orphan: no live thread keeps it, yet BB is not removing it. Idle: live threads, but nothing for a week. */
+export function worktreeState(w: { liveThreads: number; lastActivity: number | null; retireAt: number | null }, now: number): WorktreeState {
+  if (w.retireAt !== null) return 'retiring';
+  if (w.liveThreads === 0) return 'orphan';
+  if (w.lastActivity !== null && now - w.lastActivity > IDLE_AFTER_MS) return 'idle';
+  return 'active';
+}
+
+export function formatBytes(bytes: number | null): string {
+  if (bytes === null) return 'размер неизвестен';
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} КБ`;
+  if (bytes < 1024 ** 3) return `${Math.round(bytes / 1024 ** 2)} МБ`;
+  return `${(bytes / 1024 ** 3).toFixed(1)} ГБ`;
+}
+
+export const WORKTREE_STATE_TEXT: Record<WorktreeState, string> = {
+  active: 'в работе',
+  idle: 'не трогали больше недели — если тред не нужен, архивируйте его, и BB удалит копию',
+  orphan: 'живых тредов нет, но копия не удаляется — проверьте и удалите через bb environment cleanup',
+  retiring: 'BB скоро удалит',
+};
+
+export function worktreeLine(w: WorktreeView, now: number): string {
+  const ago = w.lastActivity === null ? 'активности нет' : `активность ${Math.max(0, Math.round((now - w.lastActivity) / 86_400_000))} дн назад`;
+  return `${w.hostName}: ${w.branch ?? 'без ветки'} — ${formatBytes(w.bytes)}, тредов ${w.liveThreads}${w.archivedThreads ? ` (+${w.archivedThreads} в архиве)` : ''}, ${ago}; ${WORKTREE_STATE_TEXT[w.state]}\n  ${w.path}  (${w.environmentId})`;
+}

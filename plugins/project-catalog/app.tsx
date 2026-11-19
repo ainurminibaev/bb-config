@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { GridIcon, Icon } from './icons';
 import { Input } from '@/components/ui/input';
 import type { Catalog, ProjectView, rpcContract } from './contract';
-import { eventSummary, normalize, search, translit, type AutoField, type Level, type Status, type SyncEvent } from './core';
+import { eventSummary, formatBytes, normalize, search, translit, WORKTREE_STATE_TEXT, type AutoField, type Level, type Status, type SyncEvent, type WorktreeView } from './core';
 import './catalog.css';
 
 type Source = ProjectView['sources'][number];
@@ -131,6 +131,36 @@ function SyncHistory({ projectId }: { projectId: string }) {
       </div>
     </li>)}</ul>
     {events.length > 8 && <p className="text-xs text-muted-foreground">Ещё {events.length - 8} — <span className="font-mono">bb catalog history</span></p>}
+  </Section>;
+}
+/** Extra copies BB made for this project's threads: forgotten ones first, with their size. */
+function Worktrees({ projectId }: { projectId: string }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [items, setItems] = useState<WorktreeView[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setItems(null);
+    void rpc.call('worktrees', { projectId, sizes: false }).then(first => {
+      if (!alive) return;
+      setItems(first.worktrees);
+      if (first.worktrees.length) void rpc.call('worktrees', { projectId, sizes: true }).then(next => { if (alive) setItems(next.worktrees); }).catch(() => undefined);
+    }).catch(() => { if (alive) setItems([]); });
+    return () => { alive = false; };
+  }, [rpc, projectId]);
+  if (!items?.length) return null;
+  const copy = (value: string, what: string) => { void navigator.clipboard?.writeText(value).then(() => toast.success(`${what} скопирован`)); };
+  const total = items.reduce((sum, item) => sum + (item.bytes ?? 0), 0);
+  const dot: Record<WorktreeView['state'], string> = { orphan: 'bg-red-500', idle: 'bg-amber-500', active: 'bg-emerald-500', retiring: 'bg-muted-foreground' };
+  return <Section title={`Worktree · ${items.length}${total ? ` · ${formatBytes(total)}` : ''}`}>
+    <ul className="space-y-2">{items.map(item => <li key={item.environmentId} className="flex items-start gap-2 text-xs">
+      <span className={`mt-1.5 size-1.5 shrink-0 rounded-full ${dot[item.state]}`} aria-hidden="true"/>
+      <div className="min-w-0 flex-1">
+        <p className="text-foreground/90">{item.branch ?? 'без ветки'} · {formatBytes(item.bytes)} · {shortHost(item.hostName)}</p>
+        <p className="text-muted-foreground">тредов {item.liveThreads}{item.archivedThreads ? ` (+${item.archivedThreads} в архиве)` : ''} · {WORKTREE_STATE_TEXT[item.state]}</p>
+        <button type="button" className="block max-w-full cursor-pointer truncate text-left font-mono text-[11px] text-muted-foreground/80 hover:text-foreground" title="Скопировать путь" onClick={() => copy(item.path, 'Путь')}>{item.path}</button>
+      </div>
+    </li>)}</ul>
+    <p className="text-xs text-muted-foreground">BB удаляет копию через 5 минут после архивации последнего её треда.</p>
   </Section>;
 }
 function ThreadList({ projectId, enabled, onNavigate }: { projectId: string; enabled: boolean; onNavigate?: () => void }) {
@@ -397,6 +427,7 @@ function Detail({ project, categories, scanning, startEditing, onClose, onSaved 
           {entry.independent && <p className="text-xs text-muted-foreground">Копии помечены как разные и не сравниваются.</p>}
         </Section>
         <SyncHistory projectId={project.id}/>
+        <Worktrees projectId={project.id}/>
       </>}
       {editing && <div className="space-y-4">
         <Field label="Описание" locked={locked('summary')} onUnlock={() => void release('summary')}>

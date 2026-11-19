@@ -25,6 +25,11 @@ const repoSyncSchema = z.object({
   ahead: z.number(), behind: z.number(), dirty: z.number(), commits: z.array(z.string()), stat: z.string().nullable(),
 });
 const pullResultSchema = z.object({ kind: z.enum(['git', 'plain', 'missing', 'error']), repos: z.array(repoSyncSchema), error: z.string().nullable() });
+export const worktreeSchema = z.object({
+  environmentId: z.string(), projectId: z.string(), hostId: z.string(), hostName: z.string(), path: z.string(), branch: z.string().nullable(),
+  liveThreads: z.number(), archivedThreads: z.number(), lastActivity: z.number().nullable(), retireAt: z.number().nullable(),
+  bytes: z.number().nullable(), state: z.enum(['active', 'idle', 'orphan', 'retiring']),
+});
 export const syncEventSchema = z.object({
   at: z.number(), hostId: z.string(), hostName: z.string(), path: z.string(), threadId: z.string().nullable(),
   apply: z.boolean(), kind: z.enum(['git', 'plain', 'missing', 'error']),
@@ -35,6 +40,11 @@ export const hostContract = defineRpcContract({
   scan: {
     input: z.object({ targets: z.array(z.object({ id: z.string(), path: z.string(), manifest: z.boolean() })).max(200) }),
     output: z.object({ results: z.array(z.object({ id: z.string(), scan: scanSchema, manifest: manifestSchema.nullable() })) }),
+    experimental_retryable: true,
+  },
+  sizes: {
+    input: z.object({ paths: z.array(z.string().min(1)).max(50) }),
+    output: z.object({ sizes: z.array(z.object({ path: z.string(), bytes: z.number().nullable() })) }),
     experimental_retryable: true,
   },
   // Writes into the project (fast-forward only), so never retried automatically.
@@ -92,4 +102,5 @@ export const rpcContract = defineRpcContract({
   },
   describe_with_agent: { input: z.object({ projectId: z.string() }).strict(), output: z.object({ threadId: z.string() }) },
   history: { input: z.object({ projectId: z.string() }).strict(), output: z.object({ events: z.array(syncEventSchema) }) },
+  worktrees: { input: z.object({ projectId: z.string().nullable(), sizes: z.boolean() }).strict(), output: z.object({ worktrees: z.array(worktreeSchema) }) },
 });

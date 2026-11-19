@@ -2,8 +2,8 @@ import { PluginCliError, cliCommand, defineCli, type BbPluginApi } from '@get-bb
 import { z } from 'zod';
 import { hostContract, rpcContract, type Catalog, type ProjectView } from './contract';
 import {
-  AUTO_FIELDS, applyAuto, applyManual, describePull, diffManifests, emptyEntry, eventSummary, hydrate, otherCopies, pushHistory, renameCategory, needsDescription, search, syncEvent, unlock, verdict,
-  type AutoField, type CopyDiff, type Entry, type Link, type Manifest, type Patch, type PullResult, type Scan, type SourceView, type Status, type SyncEvent,
+  AUTO_FIELDS, applyAuto, applyManual, describePull, diffManifests, emptyEntry, eventSummary, hydrate, otherCopies, pushHistory, renameCategory, needsDescription, search, syncEvent, unlock, verdict, worktreeLine, worktreeState, formatBytes,
+  type AutoField, type CopyDiff, type Entry, type Link, type Manifest, type Patch, type PullResult, type Scan, type SourceView, type Status, type SyncEvent, type WorktreeView,
 } from './core';
 
 const SYNC_RULE = 'Project Catalog — синхронизация папки. Один раз в начале работы с файлами проекта, до первых правок, вызови инструмент project_sync (или `bb catalog pull`). Он сделает git fetch и подтянет свежее только если папка чистая и ветка просто отстала (fast-forward), покажет новые коммиты и состояние копий на других машинах. Если он сообщает о незакоммиченных правках, расхождении веток или неотправленных коммитах — не исправляй это сам без просьбы пользователя: учти в работе и коротко скажи пользователю. Повторно вызывай только если долго работал и нужен свежий код.';
@@ -262,6 +262,9 @@ export default function projectCatalog(bb: BbPluginApi) {
     async history({ projectId }) {
       return { events: await history(projectId) };
     },
+    async worktrees({ projectId, sizes }) {
+      return { worktrees: await worktrees(projectId, sizes) };
+    },
   });
 
   // ---------- Safe pull on the thread's own machine ----------
@@ -306,6 +309,60 @@ export default function projectCatalog(bb: BbPluginApi) {
       if (result.repos.some(repo => repo.action === 'pulled' || repo.fetched)) scanInBackground(thread.projectId);
     }
     return { text: lines.join('\n'), result, event };
+  }
+
+  // ---------- Worktrees: extra copies BB made for threads ----------
+  const sizeCache = new Map<string, { at: number; bytes: number | null }>();
+  async function worktrees(projectId: string | null, withSizes: boolean): Promise<WorktreeView[]> {
+    const [environments, hostList] = await Promise.all([
+      bb.sdk.environments.list({ ...(projectId ? { projectId } : {}), status: 'ready', limit: 500 }),
+      bb.sdk.hosts.list(),
+    ]);
+    const hostNames = new Map(hostList.map(item => [item.id, item.name]));
+    const online = new Set(hostList.filter(item => item.status === 'connected').map(item => item.id));
+    const list = (environments as unknown as Record<string, unknown>[]).filter(env => env.isWorktree === true && typeof env.path === 'string' && typeof env.projectId === 'string');
+    const now = Date.now();
+    const views = await Promise.all(list.map(async env => {
+      const environmentId = String(env.id);
+      const rows = async (archived: boolean) => {
+        const result = await bb.sdk.threads.list({ environmentId, archived, limit: 200, includeHidden: true });
+        return (Array.isArray(result) ? result : ((result as { threads?: unknown[] }).threads ?? [])) as { updatedAt: number }[];
+      };
+      const [live, archived] = await Promise.all([rows(false), rows(true)]);
+      const lifecycle = (env.lifecycle ?? {}) as { retireAt?: number | string | null };
+      const retireAt = lifecycle.retireAt === null || lifecycle.retireAt === undefined ? null : typeof lifecycle.retireAt === 'number' ? lifecycle.retireAt : Date.parse(lifecycle.retireAt) || null;
+      const times = [...live, ...archived].map(row => row.updatedAt).filter(Number.isFinite);
+      const lastActivity = times.length ? Math.max(...times) : (typeof env.updatedAt === 'number' ? env.updatedAt : null);
+      const hostId = String(env.hostId);
+      const view: WorktreeView = {
+        environmentId, projectId: String(env.projectId), hostId, hostName: hostNames.get(hostId) ?? hostId, path: String(env.path),
+        branch: typeof env.branchName === 'string' ? env.branchName : null, liveThreads: live.length, archivedThreads: archived.length,
+        lastActivity, retireAt, bytes: sizeCache.get(environmentId)?.bytes ?? null, state: 'active',
+      };
+      view.state = worktreeState(view, now);
+      return view;
+    }));
+    if (withSizes) {
+      const byHost = new Map<string, WorktreeView[]>();
+      for (const view of views) {
+        const cached = sizeCache.get(view.environmentId);
+        if (cached && now - cached.at < 60 * 60_000) continue;
+        if (!online.has(view.hostId)) continue;
+        byHost.set(view.hostId, [...(byHost.get(view.hostId) ?? []), view]);
+      }
+      await Promise.all([...byHost].map(async ([hostId, items]) => {
+        try {
+          const { sizes } = await host.call('sizes', { paths: items.slice(0, 50).map(item => item.path) }, { hostId, timeoutMs: 120_000 });
+          for (const item of items) {
+            const bytes = sizes.find(size => size.path === item.path)?.bytes ?? null;
+            sizeCache.set(item.environmentId, { at: Date.now(), bytes });
+            item.bytes = bytes;
+          }
+        } catch (error) { bb.log.warn(`Project Catalog: worktree sizes failed on ${hostNames.get(hostId) ?? hostId}: ${String(error)}`); }
+      }));
+    }
+    const order: Record<WorktreeView['state'], number> = { orphan: 0, idle: 1, active: 2, retiring: 3 };
+    return views.sort((a, b) => order[a.state] - order[b.state] || (b.bytes ?? 0) - (a.bytes ?? 0));
   }
 
   bb.agents.registerTool({
@@ -557,6 +614,22 @@ export default function projectCatalog(bb: BbPluginApi) {
           if (!threadId) throw new PluginCliError('не указан тред', { code: 'thread_required', hint: 'Добавьте --thread <id> или запустите команду внутри треда.' });
           const done = await syncThread(threadId, !input.options.check);
           return input.options.json ? json({ result: done.result, event: done.event }) : text(done.text);
+        },
+      }),
+      worktrees: cliCommand({
+        summary: 'Worktree-копии, которые BB создал для тредов: где лежат, сколько занимают, есть ли живые треды; забытые — первыми',
+        positionals: [{ name: 'project', description: 'ID, название или алиас; без него — все проекты' }],
+        options: { 'no-sizes': { type: 'boolean', description: 'Не считать размеры (быстрее)' }, json: jsonFlag },
+        async run(input, ctx) {
+          const target = input.positionals.project ? await resolve(input.positionals.project, ctx.projectId) : null;
+          const list = await worktrees(target?.id ?? null, !input.options['no-sizes']);
+          if (input.options.json) return json(list);
+          if (!list.length) return text(target ? `${target.name}: worktree-копий нет.` : 'Worktree-копий нет.');
+          const names = new Map((await views()).list.map(item => [item.id, item.name]));
+          const total = list.reduce((sum, item) => sum + (item.bytes ?? 0), 0);
+          const now = Date.now();
+          return text([`Worktree: ${list.length}, всего ${formatBytes(total)}. BB удаляет копию через 5 минут после архивации последнего её треда.`,
+            ...list.map(item => `${target ? '' : `[${names.get(item.projectId) ?? item.projectId}] `}${worktreeLine(item, now)}`)].join('\n'));
         },
       }),
       history: cliCommand({

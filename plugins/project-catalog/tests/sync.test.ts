@@ -57,3 +57,20 @@ test('other machines come from the last scan', () => {
   assert.match(lines[0]!, /^Mac \(не на связи\): main, abcdef12, не закоммичено: 2, не отправлено: 2 \(проверено 10 мин назад\)$/);
   assert.match(lines[1]!, /^UA: без git/);
 });
+
+import { formatBytes, worktreeState, IDLE_AFTER_MS } from '../core';
+
+test('worktree states', () => {
+  const now = 10 * IDLE_AFTER_MS;
+  assert.equal(worktreeState({ liveThreads: 1, lastActivity: now - 1000, retireAt: null }, now), 'active');
+  assert.equal(worktreeState({ liveThreads: 2, lastActivity: now - IDLE_AFTER_MS - 1, retireAt: null }, now), 'idle');
+  assert.equal(worktreeState({ liveThreads: 0, lastActivity: now, retireAt: null }, now), 'orphan');
+  assert.equal(worktreeState({ liveThreads: 0, lastActivity: null, retireAt: now + 5 }, now), 'retiring');
+});
+
+test('sizes read naturally', () => {
+  assert.equal(formatBytes(null), 'размер неизвестен');
+  assert.equal(formatBytes(10), '1 КБ');
+  assert.equal(formatBytes(5 * 1024 * 1024), '5 МБ');
+  assert.equal(formatBytes(3.26 * 1024 ** 3), '3.3 ГБ');
+});

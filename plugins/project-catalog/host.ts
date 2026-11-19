@@ -202,9 +202,25 @@ export async function pullRepo(root: string, rel: string, apply: boolean, signal
   return result;
 }
 
+/** Disk usage in bytes via `du -sk` (Linux and macOS); null when unknown or too slow. */
+function diskUsage(path: string, signal: AbortSignal) {
+  return new Promise<number | null>(resolve => {
+    execFile('du', ['-sk', path], { timeout: 60_000, maxBuffer: 64 * 1024, signal }, (_error, stdout) => {
+      const kb = Number(String(stdout).split(/\s/)[0]);
+      // du exits non-zero when a few entries are unreadable but still prints the total.
+      resolve(Number.isFinite(kb) && String(stdout).trim() !== '' ? kb * 1024 : null);
+    });
+  });
+}
+
 export default experimental_defineHostEntry({
   contract: hostContract,
   handlers: {
+    sizes: async ({ paths }, ctx) => {
+      const sizes: { path: string; bytes: number | null }[] = [];
+      for (const path of paths) sizes.push({ path, bytes: await diskUsage(path, ctx.signal) });
+      return { sizes };
+    },
     pull: async ({ path, apply }, ctx): Promise<PullResult> => {
       try {
         try { if (!(await stat(path)).isDirectory()) return { kind: 'missing', repos: [], error: null }; }
