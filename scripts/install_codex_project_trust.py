@@ -6,8 +6,6 @@ import os
 import re
 import subprocess
 
-from compat import utf8_main
-
 PLUGIN = 'codex-project-trust'
 REPOSITORY = 'git:https://github.com/ainurminibaev/bb-codex-project-trust.git'
 SOURCE = f'{REPOSITORY}@^1.0.0'
@@ -16,7 +14,7 @@ SOURCE = f'{REPOSITORY}@^1.0.0'
 def bb(*args):
     return subprocess.run(
         [os.environ.get('BB_CLI') or 'bb', *args],
-        capture_output=True, text=True, check=True,
+        capture_output=True, encoding="utf-8", check=True,
     ).stdout
 
 
@@ -31,7 +29,7 @@ def check(plugin):
         print('Codex Project Trust is absent.')
         return False
     source = plugin.get('source', '')
-    if not source.startswith(f'{REPOSITORY}@semver:'):
+    if source not in {SOURCE, f'{REPOSITORY}@semver:^1.0.0'}:
         print('Codex Project Trust is already installed from a different source.')
         return False
     if not re.fullmatch(r'1\.\d+\.\d+', plugin.get('version', '')):
@@ -66,5 +64,4 @@ def main():
 
 
 if __name__ == '__main__':
-    utf8_main()
     raise SystemExit(main())
