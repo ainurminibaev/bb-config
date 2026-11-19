@@ -1,7 +1,7 @@
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
 import { PluginCliError, cliCommand, defineCli } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
-import { hostContract, type SnapshotResult } from './contract.ts';
+import { hostContract, rpcContract, type PriorityView, type SnapshotResult } from './contract.ts';
 import {
   agentRules, assess, blockingReset, classifyWindow, DEFAULT_THRESHOLDS, etaMinutes, normalizeThresholds, notification, render,
   setTimeZone, shouldNotify, stuckText, thresholdMessage,
@@ -302,6 +302,34 @@ export default function plugin(bb: BbPluginApi) {
     await bb.experimental_hooks.recheck('message.dispatch').catch(() => undefined);
   }
 
+  const rulesText = (mode: PriorityMode) => mode === 'normal' ? [] : (['short', 'long', 'model'] as const).map(k => {
+    const p = mode === 'background' ? { ...policies[k], low: Math.max(5, policies[k].low - 20), high: Math.max(5, policies[k].high - 20) } : policies[k];
+    return `${POLICY_LABEL[k]}: ${p.enabled ? `${p.low}% → ${p.high}% за ${p.nearMinutes >= 60 ? `${Math.round(p.nearMinutes / 60)} ч` : `${p.nearMinutes} мин`} до сброса` : 'не учитывается'}`;
+  });
+  async function priorityView(threadId: string): Promise<PriorityView> {
+    const p = await priorityFor(threadId);
+    const d = p.decision;
+    return {
+      mode: p.mode, from: p.from, holding: d.hold, unknown: !d.hold && d.unknown, text: priorityStatus(p.mode, d, p.from),
+      window: d.hold ? d.label : d.closest?.label ?? null, used: d.hold ? d.used : d.closest?.used ?? null,
+      threshold: d.hold ? d.threshold : d.closest?.threshold ?? null, rules: rulesText(p.mode),
+    };
+  }
+  bb.rpc.register(rpcContract, {
+    priority: ({ threadId }) => priorityView(threadId),
+    setPriority: async ({ threadId, mode }) => { await setMode(threadId, mode); bb.realtime.publish('priority', { threadId }); return priorityView(threadId); },
+    marks: async ({ threadIds }) => {
+      await modesReady;
+      const out: Record<string, { mode: 'low' | 'background'; holding: boolean; title: string }> = {};
+      for (const id of threadIds) {
+        const own = modes.get(id);
+        if (!own || own === 'normal') continue;
+        out[id] = { mode: own, holding: held.has(id), title: held.has(id) ? `${MODE_LABEL[own]} тред на паузе: ждёт, пока лимит станет ниже порога` : `${MODE_LABEL[own]} тред` };
+      }
+      return out;
+    },
+  });
+
   bb.experimental_hooks.on('message.dispatch', async ctx => {
     // A limit note must never start a turn of its own.
     if (ctx.originPluginId === bb.pluginId && ctx.attempt === 'start-turn') return { action: 'reject', message: 'limit-guard: тред уже не работает — сообщение о лимите не нужно' };
@@ -309,8 +337,8 @@ export default function plugin(bb: BbPluginApi) {
     if (ctx.attempt !== 'start-turn') return { action: 'proceed' };
     try {
       const { mode, decision } = await priorityFor(ctx.thread.id, ctx.thread.parentThreadId ?? null);
-      if (!decision.hold) { held.delete(ctx.thread.id); return { action: 'proceed' }; }
-      held.add(ctx.thread.id);
+      if (!decision.hold) { if (held.delete(ctx.thread.id)) bb.realtime.publish('priority', { threadId: ctx.thread.id }); return { action: 'proceed' }; }
+      if (!held.has(ctx.thread.id)) { held.add(ctx.thread.id); bb.realtime.publish('priority', { threadId: ctx.thread.id }); }
       return { action: 'wait', reason: holdReason(mode, decision), sendAt: nextCheckAt(decision, Date.now()) };
     } catch (error) {
       bb.log.warn(`Limit Guard: priority check failed, letting the message through: ${message(error)}`);

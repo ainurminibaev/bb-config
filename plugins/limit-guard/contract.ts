@@ -35,3 +35,25 @@ export const hostContract = defineRpcContract({
     output: restoreResult,
   },
 });
+
+const priorityView = z.object({
+  mode: z.enum(['normal', 'low', 'background']),
+  /** The ancestor the mode comes from, when inherited. */
+  from: z.string().nullable(),
+  holding: z.boolean(),
+  unknown: z.boolean(),
+  /** One line for people: state, window, usage and the current threshold. */
+  text: z.string(),
+  window: z.string().nullable(),
+  used: z.number().nullable(),
+  threshold: z.number().nullable(),
+  rules: z.array(z.string()),
+});
+export type PriorityView = z.infer<typeof priorityView>;
+
+export const rpcContract = defineRpcContract({
+  priority: { input: z.object({ threadId: z.string().min(1) }).strict(), output: priorityView },
+  setPriority: { input: z.object({ threadId: z.string().min(1), mode: z.enum(['normal', 'low', 'background']) }).strict(), output: priorityView },
+  /** Sidebar marks for many threads at once: only threads that are not normal. */
+  marks: { input: z.object({ threadIds: z.array(z.string()).max(500) }).strict(), output: z.record(z.string(), z.object({ mode: z.enum(['low', 'background']), holding: z.boolean(), title: z.string() })) },
+});
