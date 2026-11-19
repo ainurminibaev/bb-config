@@ -120,6 +120,16 @@ class UpdatesTests(unittest.TestCase):
         self.assertIn('before changing the pinned release', self.call('begin', 'v1.0.1', '--commit', second)[1])
         self.assertEqual(self.call('status')[1]['run']['commit'], first)
 
+    def test_historical_helpers_keep_the_installation_state(self):
+        marker = '{root}/.local/plugin-patches/demo.done'
+        sha = self.repo.release('v1.0.0', [step('legacy', apply=MARK + [marker], verify=HAS + [marker])])
+        checkout = Path(self.call('fetch', 'v1.0.0', '--commit', sha)[1]['checkout'])
+        self.assertEqual((checkout / '.local/config').resolve(), self.repo.root / '.local/config')
+        self.call('begin', 'v1.0.0', '--commit', sha)
+        self.assertEqual(self.call('run', 'v1.0.0/legacy', root=checkout)[1]['how'], 'applied')
+        self.assertTrue((self.repo.root / '.local/plugin-patches/demo.done').is_file())
+        self.assertEqual(self.call('finish')[0], 0)
+
     def test_prepares_a_release_without_touching_dirty_or_diverged_checkout(self):
         sha = self.repo.release('v1.0.0', [step('one')])
         self.assertIn('moved', self.call('fetch', 'v1.0.0', '--commit', '0' * 40)[1])

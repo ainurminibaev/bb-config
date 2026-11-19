@@ -36,6 +36,7 @@ SERVER = 'server'
 # Steps written during development wait in docs/releases/next/<id>.json (+ .md),
 # one pair per step, until `release` assembles them into a version.
 NEXT = 'next'
+LOCAL_STATE = ('config', 'plugin-patches')
 
 
 class UpdateError(Exception):
@@ -287,11 +288,25 @@ def state_dir(root):
 
 def release_tree(root, commit):
     directory = state_dir(root) / 'releases' / commit
-    if not release_location(directory) or git(directory, 'rev-parse', 'HEAD') != commit:
+    location = release_location(directory)
+    if not location or git(directory, 'rev-parse', 'HEAD') != commit:
         raise UpdateError('The pinned release is not prepared. Run `fetch` first.')
     if git(directory, 'status', '--porcelain'):
         raise UpdateError('The prepared release contains local changes. Use a clean release checkout.')
+    if any((directory / '.local' / name).resolve() != (Path(location['root']) / '.local' / name).resolve()
+           for name in LOCAL_STATE):
+        raise UpdateError('The prepared release no longer points to the installation state.')
     return directory
+
+
+def connect_local_state(checkout, root):
+    """Historical release helpers keep reading and writing the installation's state."""
+    local = checkout / '.local'
+    local.mkdir()
+    for name in LOCAL_STATE:
+        target = (root / '.local' / name).resolve()
+        target.mkdir(parents=True, exist_ok=True)
+        compat.link_directory(local / name, target)
 
 
 @contextlib.contextmanager
@@ -612,8 +627,10 @@ def command_fetch(args, root):
         if actual != args.commit:
             raise UpdateError(f'Tag {args.release} points at {actual}, expected {args.commit}. The tag was moved; stop.')
         git(staged, 'checkout', '--detach', '--quiet', args.commit)
+        original = installation_root(root).resolve()
+        connect_local_state(staged, original)
         (staged / '.git/bb-config-installation.json').write_text(
-            json.dumps({'root': str(installation_root(root).resolve())}), encoding='utf-8')
+            json.dumps({'root': str(original)}), encoding='utf-8')
         try:
             staged.rename(checkout)
         except OSError:
