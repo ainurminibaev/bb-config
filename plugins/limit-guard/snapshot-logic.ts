@@ -27,6 +27,7 @@ export function snapshotRef(environmentId: string): string {
   return `refs/wip/bb/${environmentId.replace(/[^A-Za-z0-9_-]/g, '_')}`;
 }
 
-export function snapshotMessage(input: { reason: string; threadIds: string[]; branch: string | null; at: number }): string {
-  return [`bb snapshot: ${input.reason}`, '', `threads: ${input.threadIds.join(', ') || '—'}`, `branch: ${input.branch ?? '—'}`, `at: ${new Date(input.at).toISOString()}`, ''].join('\n');
+/** No thread or machine ids here: the plugin keeps those in its own storage. */
+export function snapshotMessage(input: { reason: string; branch: string | null; at: number }): string {
+  return [`bb snapshot: ${input.reason}`, '', `branch: ${input.branch ?? '—'}`, `at: ${new Date(input.at).toISOString()}`, ''].join('\n');
 }

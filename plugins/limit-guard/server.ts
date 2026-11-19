@@ -172,7 +172,7 @@ export default function plugin(bb: BbPluginApi) {
     const ref = snapshotRef(row.environmentId);
     const result = await host.call('snapshot', {
       path: row.environmentPath, ref, push: cfg.snapshots === 'push-private',
-      message: snapshotMessage({ reason, threadIds, branch: row.environmentBranchName ?? null, at: Date.now() }),
+      message: snapshotMessage({ reason, branch: row.environmentBranchName ?? null, at: Date.now() }),
     }, { hostId: row.environmentHostId, timeoutMs: 300_000 });
     const entry: SnapshotRecord = { environmentId: row.environmentId, hostId: row.environmentHostId, path: row.environmentPath, ref, at: Date.now(), reason, threadIds, result };
     if (result.changed || result.removed || result.error) {

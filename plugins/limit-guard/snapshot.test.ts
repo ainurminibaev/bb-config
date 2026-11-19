@@ -98,6 +98,6 @@ test('secret detection by name and by token shape', () => {
   assert.equal(findSecrets('.env', ''), true);
   assert.equal(findSecrets('.env.example', ''), false);
   assert.equal(findSecrets('config/app.ts', 'const t = "ghp_' + 'a'.repeat(36) + '"'), true);
-  assert.equal(findSecrets('notes.md', '-----BEGIN OPENSSH PRIVATE KEY-----'), true);
+  assert.equal(findSecrets('notes.md', ['-----BEGIN', 'OPENSSH', 'PRIVATE', 'KEY-----'].join(' ')), true);
   assert.equal(findSecrets('notes.md', 'just text'), false);
 });
