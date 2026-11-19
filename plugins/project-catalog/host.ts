@@ -1,12 +1,14 @@
 // Runs on each enrolled machine: reads the state of project folders there.
-// Read-only: never fetches, never writes into a project.
+// `scan` is read-only: never fetches, never writes into a project.
+// `pull` runs only when an agent or a person asks: git fetch, then a
+// fast-forward of a clean branch. It never merges, rebases, stashes or resets.
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { experimental_defineHostEntry } from '@get-bb/plugin-sdk/host';
 import { hostContract } from './contract';
-import type { GitState, Manifest, PlainState, Scan } from './core';
+import type { GitState, Manifest, PlainState, PullResult, RepoSync, Scan } from './core';
 
 const SKIP = new Set(['.git', 'node_modules', '.venv', 'venv', 'env', '__pycache__', '.mypy_cache', '.pytest_cache', '.ruff_cache', 'dist', 'build', '.next', '.nuxt', '.cache', '.turbo', 'target', '.gradle', '.idea', '.vscode', '.playwright-cli', '.playwright-mcp', 'Pods', 'DerivedData', '.DS_Store', '.Trash', 'tmp', 'logs']);
 const MAX_FILES = 4000;
@@ -131,9 +133,92 @@ async function scanOne(path: string, withManifest: boolean, cache: HashCache, si
   }
 }
 
+// ---------- Safe pull: the only handler that writes, and only fast-forwards ----------
+
+const NETWORK_ENV = {
+  ...process.env, GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C',
+  // Never hang on a password or host-key prompt in the background.
+  GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? 'ssh -o BatchMode=yes -o ConnectTimeout=15',
+};
+
+function run(cwd: string, args: string[], timeout: number, signal: AbortSignal) {
+  return new Promise<{ ok: boolean; out: string; err: string }>(resolve => {
+    execFile('git', ['-C', cwd, ...args], { timeout, maxBuffer: 4 * 1024 * 1024, signal, env: NETWORK_ENV },
+      (error, stdout, stderr) => resolve({ ok: !error, out: String(stdout), err: String(stderr || (error ? error.message : '')).trim().slice(0, 300) }));
+  });
+}
+
+export async function nestedRepos(root: string): Promise<string[]> {
+  const found: string[] = [];
+  const walk = async (dir: string, rel: string, depth: number) => {
+    let names: import('node:fs').Dirent[];
+    try { names = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const item of names) {
+      if (!item.isDirectory() || SKIP.has(item.name) || found.length >= 20) continue;
+      const path = rel ? `${rel}/${item.name}` : item.name;
+      try { await stat(join(dir, item.name, '.git')); found.push(path); continue; } catch { /* not a repository */ }
+      if (depth < 2) await walk(join(dir, item.name), path, depth + 1);
+    }
+  };
+  await walk(root, '', 0);
+  return found.sort();
+}
+
+export async function pullRepo(root: string, rel: string, apply: boolean, signal: AbortSignal): Promise<RepoSync> {
+  const path = rel ? join(root, rel) : root;
+  const result: RepoSync = { path: rel, branch: null, before: null, after: null, fetched: false, fetchError: null,
+    action: 'skipped', reason: null, ahead: 0, behind: 0, dirty: 0, commits: [], stat: null };
+  const hasRemote = Boolean((await git(path, ['remote'], signal))?.trim());
+  if (hasRemote) {
+    const fetch = await run(path, ['fetch', '--quiet'], 45_000, signal);
+    result.fetched = fetch.ok;
+    if (!fetch.ok) result.fetchError = fetch.err || 'git fetch не удался';
+  }
+  const state = await gitState(path, signal);
+  if (!state) { result.reason = 'error'; result.fetchError ??= 'git status не удался'; return result; }
+  Object.assign(result, { branch: state.branch, before: state.head, after: state.head, ahead: state.ahead, behind: state.behind, dirty: state.dirty });
+  if (!hasRemote) { result.reason = 'no-remote'; return result; }
+  if (!state.branch) { result.reason = 'detached'; return result; }
+  if (!state.hasUpstream) { result.reason = 'no-upstream'; return result; }
+  if (!result.fetched) { result.reason = 'fetch-failed'; return result; }
+  if (state.behind === 0) { result.action = 'up-to-date'; result.reason = state.ahead > 0 ? 'ahead' : null; return result; }
+  if (state.ahead > 0) { result.reason = 'diverged'; }
+  else if (state.dirty > 0) { result.reason = 'dirty'; }
+  if (result.reason || !apply) {
+    const incoming = await git(path, ['log', '--oneline', '--no-decorate', '-15', 'HEAD..@{u}'], signal);
+    result.commits = (incoming ?? '').split('\n').filter(Boolean);
+    return result;
+  }
+  const merge = await run(path, ['merge', '--ff-only', '--quiet', '@{u}'], 60_000, signal);
+  if (!merge.ok) { result.reason = 'merge-failed'; result.fetchError = merge.err; return result; }
+  const after = (await git(path, ['rev-parse', 'HEAD'], signal))?.trim() ?? null;
+  result.after = after;
+  result.action = 'pulled';
+  result.behind = 0;
+  if (state.head && after) {
+    result.commits = ((await git(path, ['log', '--oneline', '--no-decorate', '-15', `${state.head}..${after}`], signal)) ?? '').split('\n').filter(Boolean);
+    result.stat = (await git(path, ['diff', '--shortstat', state.head, after], signal))?.trim() || null;
+  }
+  return result;
+}
+
 export default experimental_defineHostEntry({
   contract: hostContract,
   handlers: {
+    pull: async ({ path, apply }, ctx): Promise<PullResult> => {
+      try {
+        try { if (!(await stat(path)).isDirectory()) return { kind: 'missing', repos: [], error: null }; }
+        catch { return { kind: 'missing', repos: [], error: null }; }
+        if ((await git(path, ['rev-parse', '--is-inside-work-tree'], ctx.signal))?.trim() === 'true') {
+          return { kind: 'git', repos: [await pullRepo(path, '', apply, ctx.signal)], error: null };
+        }
+        const repos: RepoSync[] = [];
+        for (const rel of await nestedRepos(path)) repos.push(await pullRepo(path, rel, apply, ctx.signal));
+        return { kind: 'plain', repos, error: null };
+      } catch (error) {
+        return { kind: 'error', repos: [], error: String((error as Error).message).slice(0, 200) };
+      }
+    },
     scan: async ({ targets }, ctx) => {
       const cacheFile = join(ctx.experimental_paths.dataDir, 'hashes.json');
       let cache: HashCache = {};

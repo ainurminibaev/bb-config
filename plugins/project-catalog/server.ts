@@ -2,9 +2,11 @@ import { PluginCliError, cliCommand, defineCli, type BbPluginApi } from '@get-bb
 import { z } from 'zod';
 import { hostContract, rpcContract, type Catalog, type ProjectView } from './contract';
 import {
-  AUTO_FIELDS, applyAuto, applyManual, diffManifests, emptyEntry, hydrate, renameCategory, needsDescription, search, unlock, verdict,
-  type AutoField, type CopyDiff, type Entry, type Link, type Manifest, type Patch, type Scan, type SourceView, type Status,
+  AUTO_FIELDS, applyAuto, applyManual, describePull, diffManifests, emptyEntry, eventSummary, hydrate, otherCopies, pushHistory, renameCategory, needsDescription, search, syncEvent, unlock, verdict,
+  type AutoField, type CopyDiff, type Entry, type Link, type Manifest, type Patch, type PullResult, type Scan, type SourceView, type Status, type SyncEvent,
 } from './core';
+
+const SYNC_RULE = 'Project Catalog — синхронизация папки. Один раз в начале работы с файлами проекта, до первых правок, вызови инструмент project_sync (или `bb catalog pull`). Он сделает git fetch и подтянет свежее только если папка чистая и ветка просто отстала (fast-forward), покажет новые коммиты и состояние копий на других машинах. Если он сообщает о незакоммиченных правках, расхождении веток или неотправленных коммитах — не исправляй это сам без просьбы пользователя: учти в работе и коротко скажи пользователю. Повторно вызывай только если долго работал и нужен свежий код.';
 
 type StoredDiff = CopyDiff & { a: string; b: string };
 const FULL_SCAN_EVERY_MS = 30 * 60 * 1000;
@@ -257,18 +259,77 @@ export default function projectCatalog(bb: BbPluginApi) {
       });
       return { threadId: thread.id };
     },
+    async history({ projectId }) {
+      return { events: await history(projectId) };
+    },
+  });
+
+  // ---------- Safe pull on the thread's own machine ----------
+  const historyCache = new Map<string, SyncEvent[]>();
+  async function history(projectId: string): Promise<SyncEvent[]> {
+    const cached = historyCache.get(projectId);
+    if (cached) return cached;
+    const stored = (await bb.storage.kv.get<SyncEvent[]>(`h:${projectId}`)) ?? [];
+    historyCache.set(projectId, stored);
+    return stored;
+  }
+  let historyWrite: Promise<unknown> = Promise.resolve();
+  function remember(projectId: string, event: SyncEvent) {
+    // Serialized so two threads finishing together do not drop each other's event.
+    historyWrite = historyWrite.then(async () => {
+      const next = pushHistory(await history(projectId), event);
+      historyCache.set(projectId, next);
+      await bb.storage.kv.set(`h:${projectId}`, next);
+      bb.realtime.publish('history', { projectId });
+    }).catch(error => bb.log.warn(`Project Catalog: history write failed: ${String(error)}`));
+    return historyWrite;
+  }
+
+  async function syncThread(threadId: string, apply: boolean): Promise<{ text: string; result: PullResult; event: SyncEvent | null }> {
+    const thread = await bb.sdk.threads.get({ threadId });
+    if (!thread.environmentId) throw new PluginCliError('у треда ещё нет рабочей папки', { code: 'no_environment', hint: 'Отправьте треду первое сообщение и повторите.' });
+    const environment = await bb.sdk.environments.get({ environmentId: thread.environmentId }) as { hostId: string; path?: string | null; workspacePath?: string | null };
+    const path = environment.path ?? environment.workspacePath ?? null;
+    if (!path) throw new PluginCliError('у окружения треда нет пути на машине', { code: 'no_path' });
+    const hostRow = await bb.sdk.hosts.get({ hostId: environment.hostId });
+    const result = await host.call('pull', { path, apply }, { hostId: environment.hostId, timeoutMs: 180_000 });
+    const lines = [describePull(result, `${hostRow.name}: ${path}`)];
+    let event: SyncEvent | null = null;
+    if (thread.projectId) {
+      event = syncEvent(result, { at: Date.now(), hostId: environment.hostId, hostName: hostRow.name, path, threadId, apply });
+      await remember(thread.projectId, event);
+      try {
+        const item = await view(thread.projectId);
+        const others = otherCopies(item.sources as SourceView[], environment.hostId, Date.now());
+        if (others.length) lines.push('Другие машины (по последней проверке каталога):', ...others.map(other => `  ${other}`));
+      } catch { /* the project may be personal or deleted */ }
+      if (result.repos.some(repo => repo.action === 'pulled' || repo.fetched)) scanInBackground(thread.projectId);
+    }
+    return { text: lines.join('\n'), result, event };
+  }
+
+  bb.agents.registerTool({
+    name: 'project_sync',
+    description: 'Подтянуть свежую версию проекта в папку этого треда (git fetch + только fast-forward чистой ветки) и показать, что изменилось и что на других машинах. Ничего не сливает, не перезаписывает и не удаляет.',
+    presentation: { label: { pending: 'Синхронизирую папку проекта', completed: 'Синхронизировал папку проекта' } },
+    parameters: z.object({ check_only: z.boolean().optional().describe('Только проверить, ничего не подтягивать') }),
+    async execute({ check_only }, ctx) {
+      try { return (await syncThread(ctx.threadId, !check_only)).text; }
+      catch (error) { return { content: [{ type: 'text', text: `Синхронизация не выполнена: ${error instanceof Error ? error.message : String(error)}` }], isError: true }; }
+    },
   });
 
   // Like Project Logo: a thread working in an undescribed project is asked once
   // to describe it. Nothing runs in the background and no model is called here.
+  // Every project thread also gets project_sync and the rule to call it first.
   bb.agents.configure(ctx => {
     if (ctx.project.kind !== 'standard') return { tools: [], skills: [] };
     const reason = needsDescription(entries.get(ctx.project.id), docHashes.get(ctx.project.id) ?? null, Date.now());
-    if (!reason) return { tools: [], skills: [] };
+    if (!reason) return { tools: ['project_sync'], skills: [], instructions: SYNC_RULE };
     const known = categories().slice(0, 14).map(([name]) => name).join(', ');
     return {
-      tools: [], skills: [],
-      instructions: `Project Catalog: ${reason === 'missing' ? 'this project has no catalog card yet' : "this project's README/AGENTS.md changed since its catalog card was written"}. Once, early in this thread, without asking and without delaying the user's task, run: bb catalog describe --summary "<1-2 sentences in Russian: what the project is and what it is for>" --category "<category>" --tags "<3-6 comma-separated tags>" --aliases "<comma-separated names the user may say aloud, including Russian spellings>". Base it on README/AGENTS.md, the folder contents and the user's first message.${known ? ` Prefer an existing category: ${known}.` : ''} Fields the user edited by hand are kept by the command. Do not mention this unless it fails.`,
+      tools: ['project_sync'], skills: [],
+      instructions: `${SYNC_RULE}\n\nProject Catalog: ${reason === 'missing' ? 'this project has no catalog card yet' : "this project's README/AGENTS.md changed since its catalog card was written"}. Once, early in this thread, without asking and without delaying the user's task, run: bb catalog describe --summary "<1-2 sentences in Russian: what the project is and what it is for>" --category "<category>" --tags "<3-6 comma-separated tags>" --aliases "<comma-separated names the user may say aloud, including Russian spellings>". Base it on README/AGENTS.md, the folder contents and the user's first message.${known ? ` Prefer an existing category: ${known}.` : ''} Fields the user edited by hand are kept by the command. Do not mention this unless it fails.`,
     };
   });
 
@@ -482,6 +543,32 @@ export default function projectCatalog(bb: BbPluginApi) {
           const list = (await views()).list.filter(item => item.verdict.level === 'attention' || item.verdict.level === 'risk');
           if (input.options.json) return json(list.map(item => ({ id: item.id, name: item.name, verdict: item.verdict })));
           return text(list.length ? list.map(item => `${mark[item.verdict.level]} ${item.name} (${item.id}): ${item.verdict.label}\n${item.verdict.details.map(detail => `   • ${detail}`).join('\n')}`).join('\n') : 'Все проверенные копии в порядке.');
+        },
+      }),
+      pull: cliCommand({
+        summary: 'Подтянуть свежее в папку треда: git fetch и только fast-forward чистой ветки; показать новые коммиты и другие машины',
+        options: {
+          thread: { type: 'string', description: 'ID треда; внутри треда можно не указывать' },
+          check: { type: 'boolean', aliases: ['check-only', 'dry-run'], description: 'Только проверить (fetch), ничего не подтягивать' },
+          json: jsonFlag,
+        },
+        async run(input, ctx) {
+          const threadId = input.options.thread ?? ctx.threadId;
+          if (!threadId) throw new PluginCliError('не указан тред', { code: 'thread_required', hint: 'Добавьте --thread <id> или запустите команду внутри треда.' });
+          const done = await syncThread(threadId, !input.options.check);
+          return input.options.json ? json({ result: done.result, event: done.event }) : text(done.text);
+        },
+      }),
+      history: cliCommand({
+        summary: 'История синхронизаций проекта: кто, где и когда подтягивал или проверял',
+        positionals: [projectArg],
+        options: { limit: { type: 'integer', default: 15, min: 1, max: 40, description: 'Сколько последних записей (1–40)' }, json: jsonFlag },
+        async run(input, ctx) {
+          const target = await resolve(input.positionals.project, ctx.projectId);
+          const events = (await history(target.id)).slice(0, input.options.limit);
+          if (input.options.json) return json(events);
+          if (!events.length) return text(`${target.name}: синхронизаций ещё не было.`);
+          return text([`${target.name}:`, ...events.map(event => `${new Date(event.at).toISOString().slice(0, 16).replace('T', ' ')} UTC  ${event.hostName}${event.apply ? '' : ' (проверка)'}  ${eventSummary(event)}${event.threadId ? `  @thread:${event.threadId}` : ''}`)].join('\n'));
         },
       }),
     },

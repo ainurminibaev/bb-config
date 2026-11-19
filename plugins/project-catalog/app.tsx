@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { GridIcon, Icon } from './icons';
 import { Input } from '@/components/ui/input';
 import type { Catalog, ProjectView, rpcContract } from './contract';
-import { normalize, search, translit, type AutoField, type Level, type Status } from './core';
+import { eventSummary, normalize, search, translit, type AutoField, type Level, type Status, type SyncEvent } from './core';
 import './catalog.css';
 
 type Source = ProjectView['sources'][number];
@@ -108,6 +108,30 @@ function revealInSidebar(projectId: string) {
   group.classList.add('catalog-flash');
   window.setTimeout(() => group.classList.remove('catalog-flash'), 2200);
   return true;
+}
+/** Who pulled or checked the project folder, where and with what result. Agents add rows through project_sync. */
+function SyncHistory({ projectId }: { projectId: string }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const navigate = useBbNavigate();
+  const [events, setEvents] = useState<SyncEvent[] | null>(null);
+  const load = useCallback(() => { void rpc.call('history', { projectId }).then(next => setEvents(next.events)).catch(() => setEvents(old => old ?? [])); }, [rpc, projectId]);
+  useEffect(() => { setEvents(null); load(); }, [load]);
+  useRealtime('history', (payload: unknown) => { if ((payload as { projectId?: string } | null)?.projectId === projectId) load(); });
+  if (!events?.length) return null;
+  const tone = (event: SyncEvent) => event.repos.some(repo => repo.reason === 'diverged' || repo.reason === 'merge-failed' || repo.reason === 'fetch-failed') ? 'bg-red-500'
+    : event.repos.some(repo => repo.reason === 'dirty' || repo.reason === 'ahead' || repo.behind > 0) ? 'bg-amber-500'
+    : event.repos.some(repo => repo.action === 'pulled') ? 'bg-sky-500' : 'bg-emerald-500';
+  return <Section title="Синхронизация">
+    <ul className="space-y-1.5">{events.slice(0, 8).map(event => <li key={`${event.at}:${event.hostId}`} className="flex items-start gap-2 text-xs">
+      <span className={`mt-1.5 size-1.5 shrink-0 rounded-full ${tone(event)}`} aria-hidden="true"/>
+      <div className="min-w-0 flex-1">
+        <p className="text-foreground/90">{eventSummary(event)}</p>
+        <p className="text-muted-foreground">{shortHost(event.hostName)}{event.apply ? '' : ' · проверка'} · {new Date(event.at).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+          {event.threadId && <> · <button type="button" className="cursor-pointer underline underline-offset-2 hover:text-foreground" onClick={() => navigate.toThread(event.threadId!)}>тред</button></>}</p>
+      </div>
+    </li>)}</ul>
+    {events.length > 8 && <p className="text-xs text-muted-foreground">Ещё {events.length - 8} — <span className="font-mono">bb catalog history</span></p>}
+  </Section>;
 }
 function ThreadList({ projectId, enabled, onNavigate }: { projectId: string; enabled: boolean; onNavigate?: () => void }) {
   const navigate = useBbNavigate();
@@ -372,6 +396,7 @@ function Detail({ project, categories, scanning, startEditing, onClose, onSaved 
           {entry.localPaths.length > 0 && <p className="text-xs text-muted-foreground">Не сравниваются (свои на каждой машине): {entry.localPaths.join(', ')}</p>}
           {entry.independent && <p className="text-xs text-muted-foreground">Копии помечены как разные и не сравниваются.</p>}
         </Section>
+        <SyncHistory projectId={project.id}/>
       </>}
       {editing && <div className="space-y-4">
         <Field label="Описание" locked={locked('summary')} onUnlock={() => void release('summary')}>

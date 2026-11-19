@@ -18,12 +18,29 @@ export const scanSchema = z.object({
   docHash: z.string().nullable(),
 });
 const manifestSchema = z.record(z.string(), z.tuple([z.string(), z.number()]));
+const syncReason = z.enum(['dirty', 'diverged', 'ahead', 'no-upstream', 'no-remote', 'detached', 'fetch-failed', 'merge-failed', 'error']);
+const repoSyncSchema = z.object({
+  path: z.string(), branch: z.string().nullable(), before: z.string().nullable(), after: z.string().nullable(),
+  fetched: z.boolean(), fetchError: z.string().nullable(), action: z.enum(['pulled', 'up-to-date', 'skipped']), reason: syncReason.nullable(),
+  ahead: z.number(), behind: z.number(), dirty: z.number(), commits: z.array(z.string()), stat: z.string().nullable(),
+});
+const pullResultSchema = z.object({ kind: z.enum(['git', 'plain', 'missing', 'error']), repos: z.array(repoSyncSchema), error: z.string().nullable() });
+export const syncEventSchema = z.object({
+  at: z.number(), hostId: z.string(), hostName: z.string(), path: z.string(), threadId: z.string().nullable(),
+  apply: z.boolean(), kind: z.enum(['git', 'plain', 'missing', 'error']),
+  repos: z.array(z.object({ path: z.string(), branch: z.string().nullable(), action: z.enum(['pulled', 'up-to-date', 'skipped']), reason: syncReason.nullable(), commits: z.number(), behind: z.number(), ahead: z.number(), dirty: z.number() })),
+});
 
 export const hostContract = defineRpcContract({
   scan: {
     input: z.object({ targets: z.array(z.object({ id: z.string(), path: z.string(), manifest: z.boolean() })).max(200) }),
     output: z.object({ results: z.array(z.object({ id: z.string(), scan: scanSchema, manifest: manifestSchema.nullable() })) }),
     experimental_retryable: true,
+  },
+  // Writes into the project (fast-forward only), so never retried automatically.
+  pull: {
+    input: z.object({ path: z.string().min(1), apply: z.boolean() }),
+    output: pullResultSchema,
   },
 });
 
@@ -74,4 +91,5 @@ export const rpcContract = defineRpcContract({
     output: z.object({ total: z.number(), threads: z.array(z.object({ id: z.string(), title: z.string(), status: z.string(), updatedAt: z.number(), hostName: z.string().nullable(), pinned: z.boolean() })) }),
   },
   describe_with_agent: { input: z.object({ projectId: z.string() }).strict(), output: z.object({ threadId: z.string() }) },
+  history: { input: z.object({ projectId: z.string() }).strict(), output: z.object({ events: z.array(syncEventSchema) }) },
 });

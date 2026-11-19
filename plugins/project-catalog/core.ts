@@ -358,3 +358,100 @@ export function verdict(sources: SourceView[], diff: CopyDiff | null = null, opt
     : 'В порядке';
   return { level, label, details };
 }
+
+// ---------- Safe pull on the thread's machine, and its history ----------
+
+export type SyncReason = 'dirty' | 'diverged' | 'ahead' | 'no-upstream' | 'no-remote' | 'detached' | 'fetch-failed' | 'merge-failed' | 'error';
+export type RepoSync = {
+  /** Path relative to the project folder; '' is the folder itself. */
+  path: string; branch: string | null; before: string | null; after: string | null;
+  fetched: boolean; fetchError: string | null;
+  action: 'pulled' | 'up-to-date' | 'skipped'; reason: SyncReason | null;
+  ahead: number; behind: number; dirty: number; commits: string[]; stat: string | null;
+};
+export type PullResult = { kind: 'git' | 'plain' | 'missing' | 'error'; repos: RepoSync[]; error: string | null };
+export type SyncEvent = {
+  at: number; hostId: string; hostName: string; path: string; threadId: string | null;
+  apply: boolean; kind: PullResult['kind'];
+  repos: { path: string; branch: string | null; action: RepoSync['action']; reason: SyncReason | null; commits: number; behind: number; ahead: number; dirty: number }[];
+};
+export const HISTORY_LIMIT = 40;
+
+const REASON_TEXT: Record<SyncReason, string> = {
+  dirty: 'есть незакоммиченные правки — свежее не подтянуто, чтобы ничего не потерять',
+  diverged: 'ветки разошлись: здесь есть свои коммиты и на сервере новые — нужно решить вручную',
+  ahead: 'здесь есть коммиты, которых нет на сервере (не отправлены)',
+  'no-upstream': 'у ветки нет пары на сервере (например, ветка задачи) — подтягивать нечего',
+  'no-remote': 'у репозитория нет сервера (remote) — синхронизировать не с чем',
+  detached: 'не на ветке (detached HEAD) — не трогаю',
+  'fetch-failed': 'не удалось связаться с сервером (сеть или авторизация)',
+  'merge-failed': 'git отказался подтягивать (вероятно, мешают неотслеживаемые файлы)',
+  error: 'не удалось прочитать состояние git',
+};
+
+export function describeRepo(repo: RepoSync): string {
+  const name = repo.path ? `${repo.path}/` : 'папка';
+  const where = `${name}${repo.branch ? ` (${repo.branch})` : ''}`;
+  const lines: string[] = [];
+  if (repo.action === 'pulled') {
+    lines.push(`${where}: подтянуто ${repo.commits.length}${repo.commits.length === 15 ? '+' : ''} коммит(ов)${repo.stat ? `, ${repo.stat}` : ''}`);
+  } else if (repo.action === 'up-to-date') {
+    lines.push(`${where}: актуально${repo.reason ? `; ${REASON_TEXT[repo.reason]}${repo.ahead ? ` (${repo.ahead})` : ''}` : ''}`);
+  } else {
+    const waiting = repo.behind > 0 ? `на сервере ${repo.behind} новых коммит(ов); ` : '';
+    lines.push(`${where}: ${waiting}${repo.reason ? REASON_TEXT[repo.reason] : 'только проверка, ничего не менял'}${repo.dirty ? ` (изменённых файлов: ${repo.dirty})` : ''}`);
+  }
+  if (repo.fetchError && (repo.reason === 'fetch-failed' || repo.reason === 'merge-failed')) lines.push(`  git: ${repo.fetchError}`);
+  for (const commit of repo.commits.slice(0, 10)) lines.push(`  ${commit}`);
+  return lines.join('\n');
+}
+
+export function describePull(result: PullResult, place: string): string {
+  if (result.kind === 'missing') return `${place}: папка не найдена.`;
+  if (result.kind === 'error') return `${place}: ошибка — ${result.error ?? 'неизвестно'}.`;
+  if (result.repos.length === 0) return `${place}: папка без git. Синхронизировать нечем; если она нужна на нескольких машинах — держите её на одной (Tru) или сделайте git-репозиторий.`;
+  const head = result.kind === 'plain' ? `${place}: сама папка без git, внутри репозитории:` : `${place}:`;
+  return [head, ...result.repos.map(describeRepo)].join('\n');
+}
+
+export function syncEvent(result: PullResult, base: Omit<SyncEvent, 'kind' | 'repos'>): SyncEvent {
+  return { ...base, kind: result.kind, repos: result.repos.map(repo => ({
+    path: repo.path, branch: repo.branch, action: repo.action, reason: repo.reason,
+    commits: repo.action === 'pulled' ? repo.commits.length : 0, behind: repo.behind, ahead: repo.ahead, dirty: repo.dirty,
+  })) };
+}
+
+export function pushHistory(history: SyncEvent[], event: SyncEvent, limit = HISTORY_LIMIT): SyncEvent[] {
+  return [event, ...history].slice(0, limit);
+}
+
+export function eventSummary(event: SyncEvent): string {
+  if (event.kind === 'missing') return 'папка не найдена';
+  if (event.kind === 'error') return 'ошибка проверки';
+  if (event.repos.length === 0) return 'без git';
+  return event.repos.map(repo => {
+    const name = repo.path ? `${repo.path}: ` : '';
+    if (repo.action === 'pulled') return `${name}подтянуто ${repo.commits}`;
+    if (repo.action === 'up-to-date') return `${name}актуально${repo.reason === 'ahead' ? `, не отправлено ${repo.ahead}` : ''}`;
+    return `${name}${repo.reason ? ({ dirty: 'есть правки', diverged: 'расхождение', ahead: 'не отправлено', 'no-upstream': 'ветка задачи', 'no-remote': 'нет сервера', detached: 'detached', 'fetch-failed': 'нет связи', 'merge-failed': 'git отказал', error: 'ошибка' } as const)[repo.reason] : 'проверено'}${repo.behind ? `, отстаёт на ${repo.behind}` : ''}`;
+  }).join('; ');
+}
+
+/** Other machines' copies, from the last scan, as one line each for an agent. */
+export function otherCopies(sources: SourceView[], currentHostId: string, now: number): string[] {
+  return sources.filter(source => source.hostId !== currentHostId).map(source => {
+    const scan = source.scan;
+    const age = scan ? ` (проверено ${Math.max(1, Math.round((now - scan.scannedAt) / 60_000))} мин назад)` : '';
+    if (!scan) return `${source.hostName}: ещё не проверялась`;
+    if (scan.kind === 'git' && scan.git) {
+      const g = scan.git;
+      const bits = [g.branch ?? 'detached', g.head?.slice(0, 8) ?? 'без коммитов'];
+      if (g.dirty + g.untracked) bits.push(`не закоммичено: ${g.dirty + g.untracked}`);
+      if (g.ahead) bits.push(`не отправлено: ${g.ahead}`);
+      if (g.behind) bits.push(`отстаёт: ${g.behind}`);
+      return `${source.hostName}${source.connected ? '' : ' (не на связи)'}: ${bits.join(', ')}${age}`;
+    }
+    if (scan.kind === 'plain') return `${source.hostName}${source.connected ? '' : ' (не на связи)'}: без git${age}`;
+    return `${source.hostName}: ${scan.kind === 'missing' ? 'папка не найдена' : 'ошибка проверки'}${age}`;
+  });
+}
