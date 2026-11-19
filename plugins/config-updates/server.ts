@@ -56,8 +56,6 @@ const STALE_MS = 6 * 3_600_000;
 const SHA = /^[0-9a-f]{40}$/;
 const NOTES_FOR = 5;
 const START_WINDOW_MS = 15 * 60_000;
-/** bb's key of this plugin's sidebar footer item (`plugin:<plugin id>/<item id>`). */
-const FOOTER_KEY = "plugin:config-updates/updates";
 
 /** Checkout root: the plugin runs from <checkout>/plugins/config-updates (or its dist/). */
 function findRoot(): string {
@@ -142,8 +140,6 @@ export default async function configUpdates(bb: BbPluginApi) {
       description: "Откуда брать стабильные релизы. Пусто — remote origin этого checkout." },
     autoAccept: { type: "boolean", label: "Принимать релиз без агента, если устанавливать нечего", default: true,
       description: "Когда все шаги релиза уже выполнены или неприменимы, версия отмечается установленной сразу при проверке. Ничего не собирается и не устанавливается." },
-    iconOnlyWhenNeeded: { type: "boolean", label: "Показывать значок в нижнем ряду только при обновлении", default: true,
-      description: "Без доступных обновлений значок убирается в меню «…» нижнего ряда боковой панели." },
     pythonPath: { type: "string", label: "Интерпретатор Python (3.11+)", default: "",
       description: "Чем запускать scripts/updates.py. Пусто — python3 из PATH сервера BB (на Windows — python). На Windows укажите полный путь, если python в PATH — заглушка Microsoft Store." },
     archiveWhenDone: { type: "boolean", label: "Архивировать тред после успешного обновления", default: true,
@@ -161,25 +157,6 @@ export default async function configUpdates(bb: BbPluginApi) {
     bb.realtime.publish("status", {});
     return status;
   };
-
-  /**
-   * Keep the sidebar footer icon on the row only while there is something to
-   * act on; otherwise it moves into the footer's More menu. Uses bb's own
-   * preference for footer items, so the user can still override it there.
-   */
-  async function syncFooter() {
-    try {
-      if (!(await settings.get()).iconOnlyWhenNeeded) return;
-      const wanted = status.pending.length === 0 && status.remaining === 0 && status.dependencyIssues.length === 0 && !status.runOwner;
-      const { preferences } = await bb.sdk.system.uiPreferences.list();
-      const current = preferences["sidebar.hiddenFooterItems"];
-      if (current.value.includes(FOOTER_KEY) === wanted) return;
-      await bb.sdk.system.uiPreferences.set({ key: "sidebar.hiddenFooterItems", expectedRevision: current.revision,
-        value: wanted ? [...current.value, FOOTER_KEY] : current.value.filter((key) => key !== FOOTER_KEY) });
-    } catch (error) {
-      bb.log.warn(`Sidebar footer icon was not updated: ${String(error)}`);
-    }
-  }
 
   async function checkOnce(): Promise<UpdateStatus> {
     const checkedAt = Date.now();
@@ -221,7 +198,6 @@ export default async function configUpdates(bb: BbPluginApi) {
         remaining: local.partial?.remaining.length ?? 0, dependencyIssues: local.dependencyIssues ?? [],
         runOwner: local.run?.owner ?? null, runRelease: local.run?.release ?? null,
         threadId: status.threadId, threadAt: status.threadAt, lastRunOwner: local.lastRun?.owner ?? null });
-      await syncFooter();
       return next;
     } catch (error) {
       // Keep the last known answer; never turn a failed check into "up to date".
