@@ -91,6 +91,8 @@ class UpdatesTests(unittest.TestCase):
         self.assertEqual(code, 2)
         result = json.loads(message)
         self.assertEqual(result['installed']['release'], 'v1.0.0')  # the partial release is not installed
+        self.assertIsNone(result['installed']['commit'])  # that tag's own commit was not fetched
+        self.assertEqual(result['installed']['appliedFrom'], second)
         self.assertEqual([row['step'] for row in result['partial']['remaining']], ['v1.1.0/broken'])
         self.assertIsNone(self.call('status')[1]['run'])
         self.assertEqual(self.repo.git(self.repo.root, 'rev-parse', 'HEAD'), original)
@@ -196,7 +198,9 @@ class UpdatesTests(unittest.TestCase):
         def execute(argv, root):
             commands.append(argv[:3])
             if argv[1:3] == ['plugin', 'install']:
-                installed['demo'].update(version='1.2.0', rootDir=argv[3].removeprefix('path:'), source=argv[3])
+                directory = Path(argv[3].removeprefix('path:'))
+                version = json.loads((directory / 'package.json').read_text())['version']
+                installed['demo'].update(version=version, rootDir=str(directory), source=argv[3])
             return 0, ''
         with patch.object(updates, 'installed_plugins', lambda: installed), patch.object(updates, 'execute', execute):
             self.assertEqual(self.call('run', 'v1.0.0/demo')[1]['status'], 'not-applicable')  # not chosen by the user
@@ -218,9 +222,20 @@ class UpdatesTests(unittest.TestCase):
             self.assertEqual(len(commands), count)
             installed['demo']['version'] = '1.3.0'  # the author's later build: nothing to apply from this release
             self.assertIn('newer than release 1.2.0', self.call('run', 'v1.0.0/demo')[1]['detail'])
+            installed['demo']['version'] = '1.2.0'
+            development = updates.run_step(self.repo.root, step('demo', **base))
+            self.assertEqual(development[:2], ('verified', 'applied'))
+            self.assertEqual(installed['demo']['version'], '9.9.9')
+            self.assertEqual(installed['demo']['rootDir'], str(legacy))
             installed['demo']['rootDir'] = '/elsewhere'
             self.assertEqual(self.call('run', 'v1.0.0/demo')[0], 1)  # another source is never replaced
-            self.assertEqual(len(commands), count)
+            self.assertEqual(len(commands), count + 3)
+
+    def test_validate_requires_dependency_declarations_for_later_integration_steps(self):
+        requirements = [{'id': 'addon', 'version': '1.4.0'}]
+        self.repo.release('v1.0.0', [step('first', component='integration', requiresPlugins=requirements)])
+        self.repo.release('v1.0.1', [step('second', component='integration')])
+        self.assertIn('declare requiresPlugins', self.call('validate', 'v1.0.1', root=self.repo.author)[1])
 
     def test_dependency_versions_are_checked_at_run_finish_and_after_external_updates(self):
         requirement = {'id': 'catalog-addon', 'min': '1.4.0', 'before': '2.0.0'}

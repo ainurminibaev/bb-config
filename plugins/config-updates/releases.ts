@@ -3,7 +3,7 @@
 export interface Release { tag: string; title: string; notes: string; url: string; publishedAt: string }
 export interface Remaining { step: string; machine: string }
 export interface LocalStatus {
-  installed: { release: string; commit: string; at?: string; how?: string } | null;
+  installed: { release: string; commit: string | null; appliedFrom?: string; at?: string; how?: string } | null;
   partial: { release: string; remaining: Remaining[] } | null;
   run: { release: string; owner: string; startedAt: string } | null;
   dependencyIssues?: string[];

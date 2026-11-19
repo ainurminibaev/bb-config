@@ -8,6 +8,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from plugin_scope import externally_managed
+from updates import prepared_plugin_source
 
 import platform_compat as compat
 
@@ -120,7 +121,10 @@ def write_snapshot(values, root=ROOT):
 
 
 def copy_sources(plugins):
-    sources = [p for p in plugins if p['source'].startswith('path:')]
+    sources = [p for p in plugins if p['source'].startswith('path:')
+               and not prepared_plugin_source(ROOT, p['id'], p)]
+    if not sources:
+        return
     missing = [p['id'] for p in sources if not Path(p['rootDir']).is_dir()]
     if missing:
         raise RuntimeError('Plugin sources are on another machine: ' + ', '.join(missing) +

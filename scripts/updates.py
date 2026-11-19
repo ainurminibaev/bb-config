@@ -230,8 +230,19 @@ def validate(root, only=None):
     if only and only not in manifests:
         raise UpdateError(f'docs/releases/{only}.json is missing')
     problems = []
+    required_components = set()
     tags = sorted(manifests, key=version_key)
     for index, tag in enumerate(tags):
+        for step in manifests[tag]['steps']:
+            component = step['component']
+            if 'requiresPlugins' in step:
+                if step['requiresPlugins']:
+                    required_components.add(component)
+                else:
+                    required_components.discard(component)
+            elif (component in required_components and step['where'] == SERVER
+                    and step['kind'] in {'command', 'local-plugin'} and (not only or tag == only)):
+                problems.append(f'{tag}/{step["id"]}: declare requiresPlugins for {component}; use [] if removed')
         if only and tag != only:
             continue
         prose = root / f'docs/releases/{tag}.md'
@@ -571,7 +582,7 @@ def run_step(root, step, install=False, commit=None):
         if present:
             plugin = plugins[step['plugin']]
             if not (same_plugin_source(installation_root(root), step['plugin'], plugin)
-                    or commit and prepared_plugin_source(root, step['plugin'], plugin)):
+                    or prepared_plugin_source(root, step['plugin'], plugin)):
                 return 'failed', 'apply', f'{detail}; the installed plugin comes from another source'
             wanted = json.loads((directory / 'package.json').read_text(encoding='utf-8'))['version']
             if commit and version_tuple(plugin.get('version')) > version_tuple(wanted):
@@ -782,7 +793,8 @@ def command_finish(args, root):
                 break
             done = tag
         if done:
-            data['installed'] = {'release': done, 'commit': run['commit'], 'how': 'release', 'at': now()}
+            data['installed'] = {'release': done, 'commit': run['commit'] if done == run['release'] else None,
+                                 'appliedFrom': run['commit'], 'how': 'release', 'at': now()}
         remaining = pending(manifests, data, run['release'], run['machines'], run['commit'])
         data['partial'] = {'release': run['release'], 'commit': run['commit'], 'remaining': remaining,
                            'at': now()} if remaining else None

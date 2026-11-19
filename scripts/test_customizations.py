@@ -65,6 +65,22 @@ class SnapshotTests(unittest.TestCase):
             write.assert_not_called()
             copy_sources.assert_not_called()
 
+    def test_full_snapshot_keeps_development_sources_when_a_release_is_running(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkout = root / '.local/updates/releases' / ('a' * 40)
+            (checkout / '.git').mkdir(parents=True)
+            (checkout / '.git/bb-config-installation.json').write_text(json.dumps({'root': str(root)}))
+            installed = checkout / 'plugins/demo'
+            installed.mkdir(parents=True)
+            (installed / 'index.ts').write_text('stable release')
+            working = root / 'plugins/demo'
+            working.mkdir(parents=True)
+            (working / 'index.ts').write_text('committed development')
+            with patch.object(snapshot, 'ROOT', root):
+                snapshot.copy_sources([{'id': 'demo', 'source': 'path:' + str(installed), 'rootDir': str(installed)}])
+            self.assertEqual((working / 'index.ts').read_text(), 'committed development')
+
 
 class RestoreTests(unittest.TestCase):
     def test_voice_patch_settings_wait_until_the_patch_is_installed(self):
