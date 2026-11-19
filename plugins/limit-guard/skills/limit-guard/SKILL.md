@@ -62,6 +62,14 @@ anything itself.
   - a handoff of a stuck thread (a thread from the `handoff` plugin whose
     first message names it) removes the source's queued retry row.
 
+## Low-priority threads
+
+`bb limit priority normal|low|background [--thread <id>]`; the composer chip and
+the '+' menu row «Приоритет треда…» do the same. New turns of a low-priority
+thread (and its subthreads) wait while a watched window is above a threshold
+that rises from right-after-reset to near-reset; a fully used window holds until
+its reset. Change a thread's mode only when the user asks.
+
 ## Switches
 
 - `.bb/hands-off` in a folder: no snapshots and no pulls there.

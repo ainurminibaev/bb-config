@@ -309,8 +309,13 @@ export default function plugin(bb: BbPluginApi) {
   async function priorityView(threadId: string): Promise<PriorityView> {
     const p = await priorityFor(threadId);
     const d = p.decision;
+    // "Paused" only when a message really waits; a running turn above the threshold is not paused.
+    const waiting = d.hold && held.has(threadId);
+    const text = d.hold && !waiting
+      ? `Режим «${MODE_LABEL[p.mode]}»${p.from ? ` (от родителя ${p.from})` : ''}: «${d.label}» ${d.used}% выше порога ${d.threshold}% — новые задания этого треда будут ждать.`
+      : priorityStatus(p.mode, d, p.from);
     return {
-      mode: p.mode, from: p.from, holding: d.hold, unknown: !d.hold && d.unknown, text: priorityStatus(p.mode, d, p.from),
+      mode: p.mode, from: p.from, holding: waiting, unknown: !d.hold && d.unknown, text,
       window: d.hold ? d.label : d.closest?.label ?? null, used: d.hold ? d.used : d.closest?.used ?? null,
       threshold: d.hold ? d.threshold : d.closest?.threshold ?? null, rules: rulesText(p.mode),
     };
