@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "version": "v1.2.6",
+  "title": "Обновления из закреплённых релизов GitHub",
+  "steps": [
+    {
+      "id": "plugin-config-updates-isolated-release",
+      "title": "Config Updates 0.1.6 — применение закреплённых релизов",
+      "component": "config-updates",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "config-updates",
+      "rerun": "Проверяет запущенную версию и исходники закреплённого релиза. Уже применённый шаг не пересобирается.",
+      "rollback": "Повторно зарегистрировать прежний локальный путь Config Updates через bb plugin install path:<прежний путь>. BB сохраняет данные плагина. Если другой компонент успел обновиться, его проверяют и восстанавливают по собственному шагу."
+    }
+  ]
+}

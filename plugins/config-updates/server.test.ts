@@ -14,6 +14,7 @@ function setup(options: { releases?: unknown; installed?: string | null; offline
     archivedIds: [] as string[], acceptCalls: [] as string[], acceptable: false, how: undefined as string | undefined,
     hidden: [] as string[], revision: 0, local: options.local ?? {} as Partial<LocalStatus>, installed: options.installed ?? null };
   io.root = () => "/srv/config";
+  io.projectRoot = (root) => root;
   io.origin = async () => "https://github.com/acme/config.git\n";
   io.local = async () => ({ installed: state.installed ? { release: state.installed, commit: SHA, how: state.how } : null, partial: null, run: null, ...state.local });
   io.releases = async () => { state.network += 1; if (state.offline) throw new Error("GitHub недоступен: timeout"); return state.releases; };
@@ -141,6 +142,26 @@ test("an open run of another thread is joined, and a missing project is explaine
   const current = setup({ installed: "v1.1.0" }); await plugin(current.bb);
   await assert.rejects(current.rpc("compose"), /релизов нет/);
   for (const each of [s, none, current]) await each.harness.lifecycle.dispose();
+});
+
+test("a release-installed updater keeps the original project and reports changed dependencies", async () => {
+  const issue = "integration: addon: installed 2.0.0; requires <2.0.0";
+  const s = setup({ installed: "v1.0.0", local: { dependencyIssues: [issue] } });
+  const runner = `/srv/config/.local/updates/releases/${SHA}`;
+  io.root = () => runner;
+  io.projectRoot = (root) => { assert.equal(root, runner); return "/srv/config"; };
+  await plugin(s.bb);
+  try {
+    const checked = await s.rpc("check");
+    assert.deepEqual(checked.dependencyIssues, [issue]);
+    await cliStart(s);
+    const spawn = s.state.spawned[0]!;
+    assert.equal(spawn.environment.workspace.path, "/srv/config");
+    assert.ok(spawn.prompt.includes(runner));
+    assert.match(spawn.prompt, /--repository acme\/config/);
+  } finally {
+    await s.harness.lifecycle.dispose();
+  }
 });
 
 test("the schedule checks, and the prompt carries missed releases and a partial run", async () => {

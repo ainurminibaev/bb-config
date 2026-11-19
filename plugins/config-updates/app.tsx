@@ -59,7 +59,7 @@ const day = (value: string | number) => new Date(value).toLocaleDateString();
 /** What is installed, what is published, when it was checked: the same three lines everywhere. */
 function Summary({ status }: { status: UpdateStatus }) {
   const target = status.pending.at(-1);
-  return <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-xs">
+  return <><dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-xs">
     <dt className="text-muted-foreground">Установлено</dt>
     <dd>{status.installed ? <><b>{status.installed}</b>{status.installedAt && ` с ${day(status.installedAt)}`}{status.installedAuto && " — принято автоматически, устанавливать было нечего"}</> : "версия не записана"}</dd>
     <dt className="text-muted-foreground">Доступно</dt>
@@ -67,7 +67,10 @@ function Summary({ status }: { status: UpdateStatus }) {
     <dt className="text-muted-foreground">Проверено</dt>
     <dd>{status.checkedAt ? new Date(status.checkedAt).toLocaleString() : "ещё нет"}{status.error && " — с ошибкой"}</dd>
     {status.runRelease && <><dt className="text-muted-foreground">Сейчас</dt><dd>идёт обновление до {status.runRelease}</dd></>}
-  </dl>;
+  </dl>{status.dependencyIssues.length > 0 && <div role="status" className="space-y-1 text-xs text-destructive">
+    <p>Изменились зависимости доработок</p>
+    <ul className="list-disc space-y-1 pl-4">{status.dependencyIssues.map((issue) => <li key={issue}>{issue}</li>)}</ul>
+  </div>}</>;
 }
 
 /** The card above the sidebar footer row, next to bb's own update notices. */

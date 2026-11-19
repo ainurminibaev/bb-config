@@ -21,12 +21,14 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 import platform_compat as compat
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = re.compile(r'^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$')
 STEP_ID = re.compile(r'^[a-z0-9][a-z0-9-]*$')
+PLUGIN_VERSION = re.compile(r'^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$')
 KINDS = {'local-plugin', 'command', 'manual'}
 WHERE = {'server', 'executors'}
 DONE = {'verified', 'not-applicable'}
@@ -34,6 +36,7 @@ SERVER = 'server'
 # Steps written during development wait in docs/releases/next/<id>.json (+ .md),
 # one pair per step, until `release` assembles them into a version.
 NEXT = 'next'
+LOCAL_STATE = ('config', 'plugin-patches')
 
 
 class UpdateError(Exception):
@@ -122,10 +125,35 @@ def manifest_errors(manifest, tag):
             errors.append(f'{name}: command steps need both apply and verify')
         if kind == 'manual' and step.get('apply'):
             errors.append(f'{name}: manual steps have no apply; describe them in the .md')
-        for dependency in step.get('after', []):
-            if not isinstance(dependency, str):
-                errors.append(f'{name}: after entries are step ids')
+        after = step.get('after', [])
+        if not isinstance(after, list) or not all(isinstance(dependency, str) for dependency in after):
+            errors.append(f'{name}: after entries are step ids')
+        requirements = step.get('requiresPlugins', [])
+        if not isinstance(requirements, list):
+            errors.append(f'{name}: requiresPlugins must be a list')
+        elif requirements:
+            if step.get('where') != SERVER or kind not in {'local-plugin', 'command'}:
+                errors.append(f'{name}: requiresPlugins is supported for automatic server steps')
+            ids = set()
+            for requirement in requirements:
+                if not valid_requirement(requirement):
+                    errors.append(f'{name}: requiresPlugins needs id and version, min, or before (X.Y.Z)')
+                    continue
+                if requirement['id'] in ids or requirement['id'] == step.get('plugin'):
+                    errors.append(f'{name}: invalid repeated or self dependency {requirement["id"]}')
+                ids.add(requirement['id'])
     return errors
+
+
+def valid_requirement(requirement):
+    if not isinstance(requirement, dict) or not STEP_ID.fullmatch(str(requirement.get('id', ''))):
+        return False
+    bounds = set(requirement) - {'id'}
+    if bounds not in ({'version'}, {'min'}, {'before'}, {'min', 'before'}):
+        return False
+    if not all(isinstance(requirement[field], str) and PLUGIN_VERSION.fullmatch(requirement[field]) for field in bounds):
+        return False
+    return 'min' not in bounds or 'before' not in bounds or version_tuple(requirement['min']) < version_tuple(requirement['before'])
 
 
 def load_manifests(root, commit=None):
@@ -150,12 +178,24 @@ def load_manifests(root, commit=None):
             raise UpdateError(f'{name}: ' + '; '.join(errors))
         manifests[tag] = manifest
     ordered = dict(sorted(manifests.items(), key=lambda item: version_key(item[0])))
-    known = {f'{tag}/{step["id"]}' for tag, m in ordered.items() for step in m['steps']}
+    known = set()
     for tag, manifest in ordered.items():
-        for step in manifest['steps']:
+        remaining = list(manifest['steps'])
+        unresolved_ids = {f'{tag}/{step["id"]}' for step in remaining}
+        for step in remaining:
             for dependency in step.get('after', []):
-                if full_id(tag, dependency) not in known:
-                    raise UpdateError(f'{tag}/{step["id"]}: unknown dependency {dependency}')
+                if full_id(tag, dependency) not in known | unresolved_ids:
+                    raise UpdateError(f'{tag}/{step["id"]}: dependency {dependency} must be in this or an earlier release')
+        ordered_steps = []
+        while remaining:
+            index = next((i for i, step in enumerate(remaining)
+                          if all(full_id(tag, dependency) in known for dependency in step.get('after', []))), None)
+            if index is None:
+                raise UpdateError(f'{tag}: cyclic step dependencies ({", ".join(step["id"] for step in remaining)})')
+            step = remaining.pop(index)
+            ordered_steps.append(step)
+            known.add(f'{tag}/{step["id"]}')
+        manifest['steps'] = ordered_steps
     return ordered
 
 
@@ -190,8 +230,19 @@ def validate(root, only=None):
     if only and only not in manifests:
         raise UpdateError(f'docs/releases/{only}.json is missing')
     problems = []
+    required_components = set()
     tags = sorted(manifests, key=version_key)
     for index, tag in enumerate(tags):
+        for step in manifests[tag]['steps']:
+            component = step['component']
+            if 'requiresPlugins' in step:
+                if step['requiresPlugins']:
+                    required_components.add(component)
+                else:
+                    required_components.discard(component)
+            elif (component in required_components and step['where'] == SERVER
+                    and step['kind'] in {'command', 'local-plugin'} and (not only or tag == only)):
+                problems.append(f'{tag}/{step["id"]}: declare requiresPlugins for {component}; use [] if removed')
         if only and tag != only:
             continue
         prose = root / f'docs/releases/{tag}.md'
@@ -228,8 +279,45 @@ def validate(root, only=None):
 
 # --- journal -----------------------------------------------------------------
 
+def release_location(root):
+    """A prepared release inherits the installation and journal that created it."""
+    marker = root / '.git/bb-config-installation.json'
+    if root.parent.name == 'releases' and re.fullmatch(r'[0-9a-f]{40}', root.name) and marker.is_file():
+        return json.loads(marker.read_text(encoding='utf-8'))
+    return None
+
+
+def installation_root(root):
+    location = release_location(root)
+    return Path(location['root']) if location else root
+
+
 def state_dir(root):
-    return Path(os.environ.get('BB_CONFIG_UPDATES_DIR') or root / '.local/updates')
+    return Path(os.environ.get('BB_CONFIG_UPDATES_DIR') or
+                (root.parent.parent if release_location(root) else root / '.local/updates')).resolve()
+
+
+def release_tree(root, commit):
+    directory = state_dir(root) / 'releases' / commit
+    location = release_location(directory)
+    if not location or git(directory, 'rev-parse', 'HEAD') != commit:
+        raise UpdateError('The pinned release is not prepared. Run `fetch` first.')
+    if git(directory, 'status', '--porcelain'):
+        raise UpdateError('The prepared release contains local changes. Use a clean release checkout.')
+    if any((directory / '.local' / name).resolve() != (Path(location['root']) / '.local' / name).resolve()
+           for name in LOCAL_STATE):
+        raise UpdateError('The prepared release no longer points to the installation state.')
+    return directory
+
+
+def connect_local_state(checkout, root):
+    """Historical release helpers keep reading and writing the installation's state."""
+    local = checkout / '.local'
+    local.mkdir()
+    for name in LOCAL_STATE:
+        target = (root / '.local' / name).resolve()
+        target.mkdir(parents=True, exist_ok=True)
+        compat.link_directory(local / name, target)
 
 
 @contextlib.contextmanager
@@ -255,16 +343,19 @@ def journal(root, write=False):
             os.replace(temporary, path)
 
 
-def latest(data, step, machine, mode='release'):
+def latest(data, step, machine, mode='release', commit=None):
     for entry in reversed(data['entries']):
-        if entry['step'] == step and entry['machine'] == machine and entry['mode'] == mode:
+        if (entry['step'] == step and entry['machine'] == machine and entry['mode'] == mode
+                and (commit is None or entry.get('commit') == commit)):
             return entry
     return None
 
 
-def add_entry(data, step, machine, status, how, detail, mode, commit):
+def add_entry(data, step, machine, status, how, detail, mode, commit, checks=None):
     entry = {'step': step, 'machine': machine, 'status': status, 'how': how,
              'detail': (detail or '')[-600:], 'mode': mode, 'commit': commit, 'at': now()}
+    if checks:
+        entry.update(checks)
     data['entries'].append(entry)
     return entry
 
@@ -277,7 +368,7 @@ def targets(step, machines):
     return [SERVER] if step['where'] == 'server' else list(machines)
 
 
-def pending(manifests, data, target, machines):
+def pending(manifests, data, target, machines, commit):
     """Steps of releases in (installed, target] that are not done, oldest first."""
     base = version_key(installed_version(data)) if installed_version(data) else (-1, -1, -1)
     rows = []
@@ -286,7 +377,7 @@ def pending(manifests, data, target, machines):
             continue
         for step in manifest['steps']:
             for machine in targets(step, machines):
-                entry = latest(data, f'{tag}/{step["id"]}', machine)
+                entry = latest(data, f'{tag}/{step["id"]}', machine, commit=commit)
                 if not entry or entry['status'] not in DONE:
                     rows.append({'step': f'{tag}/{step["id"]}', 'machine': machine,
                                  'status': entry['status'] if entry else 'pending',
@@ -326,6 +417,93 @@ def execute(argv, root):
     return result.returncode, (result.stdout + result.stderr).strip()[-600:]
 
 
+def requirement_issue(requirement, plugin):
+    plugin_id = requirement['id']
+    if not plugin:
+        return f'{plugin_id}: required plugin is missing'
+    if not plugin.get('enabled') or plugin.get('status') != 'running':
+        return f'{plugin_id}: required plugin is {plugin.get("status") or "disabled"}'
+    actual = plugin.get('version') or ''
+    version = version_tuple(actual)
+    if (not PLUGIN_VERSION.fullmatch(actual)
+            or 'version' in requirement and actual != requirement['version']
+            or 'min' in requirement and version < version_tuple(requirement['min'])
+            or 'before' in requirement and version >= version_tuple(requirement['before'])):
+        wanted = ', '.join(f'{operator}{requirement[key]}' for key, operator in
+                           (('version', '='), ('min', '>='), ('before', '<')) if key in requirement)
+        return f'{plugin_id}: installed {actual or "unknown"}; requires {wanted}'
+    return None
+
+
+def require_dependencies(step, plugins=None):
+    requirements = step.get('requiresPlugins', [])
+    if requirements:
+        if plugins is None:
+            plugins = installed_plugins()
+        issues = [issue for requirement in requirements
+                  if (issue := requirement_issue(requirement, plugins.get(requirement['id']))) is not None]
+        if issues:
+            raise UpdateError('Plugin dependencies: ' + '; '.join(issues))
+
+
+def observed_checks(step, plugins=None):
+    requirements = step.get('requiresPlugins', [])
+    ids = [requirement['id'] for requirement in requirements]
+    if step.get('plugin'):
+        ids.insert(0, step['plugin'])
+    if not ids and 'requiresPlugins' not in step:
+        return None
+    if plugins is None:
+        plugins = installed_plugins() if ids else {}
+    require_dependencies(step, plugins)
+    observed = {}
+    for plugin_id in ids:
+        plugin = plugins.get(plugin_id, {})
+        source = re.sub(r'(://)[^/@\s]+@', r'\1', plugin.get('source') or '').split('?', 1)[0]
+        observed[plugin_id] = {'version': plugin.get('version'), 'source': source,
+                               'enabled': plugin.get('enabled'), 'status': plugin.get('status')}
+    checks = {'pluginChecks': observed, 'component': step['component'], 'plugin': step.get('plugin')}
+    if 'requiresPlugins' in step:
+        checks['requiresPlugins'] = requirements
+    return checks
+
+
+def dependency_issues(data):
+    installed = installed_version(data)
+    if not installed:
+        return []
+    current = {}
+    for entry in data['entries']:
+        if entry['mode'] != 'release' or entry['status'] != 'verified' or 'requiresPlugins' not in entry:
+            continue
+        tag = version_key(entry['step'].split('/', 1)[0])
+        component = entry['component']
+        if tag <= version_key(installed) and (component not in current or tag >= current[component][0]):
+            current[component] = (tag, entry)
+    if not any(entry['requiresPlugins'] for _, entry in current.values()):
+        return []
+    plugins = installed_plugins()
+    return [f'{component}: {issue}' for component, (_, entry) in current.items()
+            if not entry.get('plugin') or plugins.get(entry['plugin'], {}).get('enabled')
+            for requirement in entry['requiresPlugins']
+            if (issue := requirement_issue(requirement, plugins.get(requirement['id']))) is not None]
+
+
+def same_plugin_source(root, plugin_id, plugin):
+    path = Path(plugin.get('rootDir') or '').resolve()
+    return path == (root / 'plugins' / plugin_id).resolve()
+
+
+def prepared_plugin_source(root, plugin_id, plugin):
+    path = Path(plugin.get('rootDir') or '').resolve()
+    if path.name != plugin_id or path.parent.name != 'plugins':
+        return None
+    directory = path.parent.parent
+    if directory.parent != state_dir(root) / 'releases' or not release_location(directory):
+        return None
+    return directory
+
+
 def plugin_state(step, root, plugins, commit=None):
     """(ok, detail) — the running plugin is this checkout's build of the release version.
 
@@ -339,31 +517,45 @@ def plugin_state(step, root, plugins, commit=None):
     plugin = plugins.get(step['plugin'])
     if not plugin:
         return False, 'not installed'
-    if Path(plugin.get('rootDir') or '').resolve() != directory.resolve():
-        return False, f'installed from another source ({plugin.get("source")}), not from this checkout'
     newer = commit and version_tuple(plugin.get('version')) > version_tuple(wanted)
+    prepared = prepared_plugin_source(root, step['plugin'], plugin) if commit else None
+    legacy = same_plugin_source(installation_root(root), step['plugin'], plugin)
+    if commit and prepared and not newer:
+        relative = f'plugins/{step["plugin"]}'
+        wanted_tree = git(root, 'rev-parse', f'{commit}:{relative}')
+        state = git(prepared, 'rev-parse', f'{prepared.name}:{relative}', check=False)
+        if (state.returncode or state.stdout.strip() != wanted_tree
+                or git(prepared, 'status', '--porcelain', '--', relative)
+                or git(prepared, 'rev-parse', 'HEAD') != prepared.name):
+            return False, 'installed plugin source differs from the pinned release'
+    elif not (legacy and (not commit or newer) or prepared and newer):
+        return False, 'the pinned release build is not installed'
     if plugin.get('version') != wanted and not newer:
         return False, f'installed {plugin.get("version")}, release has {wanted}'
     if plugin.get('enabled') and plugin.get('status') != 'running':
         return False, f'status {plugin.get("status")}: {plugin.get("statusDetail")}'
     which = f'{plugin.get("version")} (newer than release {wanted}; a later build is installed)' if newer else wanted
-    return True, f'{step["plugin"]} {which} from this checkout' + ('' if plugin.get('enabled') else ' (disabled by the user, kept)')
+    source = f'release {prepared.name}' if prepared else 'the existing installation'
+    return True, f'{step["plugin"]} {which} from {source}' + ('' if plugin.get('enabled') else ' (disabled by the user, kept)')
 
 
 def settled(root, step, commit=None):
     """(status, how, detail) when the step needs no action here, else None. Changes nothing."""
     if step['kind'] == 'local-plugin':
         plugins = installed_plugins()
+        if step['plugin'] not in plugins and not step.get('introduces'):
+            return 'not-applicable', 'not-selected', 'plugin is not installed here; the user did not choose it'
+        if step['plugin'] in plugins:
+            require_dependencies(step, plugins)
         ok, detail = plugin_state(step, root, plugins, commit)
         if ok:
             return 'verified', 'existing', detail
-        if step['plugin'] not in plugins and not step.get('introduces'):
-            return 'not-applicable', 'not-selected', 'plugin is not installed here; the user did not choose it'
         return None
     if step.get('applies'):
         code, output = execute(step['applies'], root)
         if code != 0:
             return 'not-applicable', 'applies-check', output
+    require_dependencies(step)
     if not step.get('verify'):
         return None
     code, output = execute(step['verify'], root)
@@ -385,15 +577,19 @@ def run_step(root, step, install=False, commit=None):
         if not present and not install:
             raise UpdateError(f'{step["plugin"]} is a new component. Ask the user; if they want it, rerun with --install. '
                               'Otherwise record not-applicable.', 3)
-        if present and Path(plugins[step['plugin']].get('rootDir') or '').resolve() != directory.resolve():
-            return 'failed', 'apply', detail
-        relative = f'plugins/{step["plugin"]}'
-        if commit and (git(root, 'diff', '--quiet', commit, '--', relative, check=False).returncode != 0
-                       or git(root, 'status', '--porcelain', '--', relative)):
-            return 'failed', 'apply', (f'{relative} in this checkout differs from the release; building it would install '
-                                       'those other changes. Decide with the user (commit, stash); nothing was built.')
+        if not present:
+            require_dependencies(step, plugins)
+        if present:
+            plugin = plugins[step['plugin']]
+            if not (same_plugin_source(installation_root(root), step['plugin'], plugin)
+                    or prepared_plugin_source(root, step['plugin'], plugin)):
+                return 'failed', 'apply', f'{detail}; the installed plugin comes from another source'
+            wanted = json.loads((directory / 'package.json').read_text(encoding='utf-8'))['version']
+            if commit and version_tuple(plugin.get('version')) > version_tuple(wanted):
+                return 'failed', 'apply', f'{detail}; the installed newer plugin was kept'
+        reload = present and same_plugin_source(root, step['plugin'], plugins[step['plugin']])
         for command in (['npm', '--prefix', str(directory), 'ci', '--include=dev'], ['bb', 'plugin', 'build', str(directory)],
-                        ['bb', 'plugin', 'reload', step['plugin']] if present
+                        ['bb', 'plugin', 'reload', step['plugin']] if reload
                         else ['bb', 'plugin', 'install', f'path:{directory}', '--yes']):
             if command[0] == 'bb':
                 command[0] = os.environ.get('BB_CLI') or 'bb'
@@ -415,32 +611,53 @@ def run_step(root, step, install=False, commit=None):
 
 # --- commands ----------------------------------------------------------------
 
-def contains(root, commit):
-    return git(root, 'merge-base', '--is-ancestor', commit, 'HEAD', check=False).returncode == 0
-
-
 def command_fetch(args, root):
-    """Bring the pinned release commit into the checkout without touching local work."""
+    """Download the pinned release to the installation's private release directory."""
     version_key(args.release)
-    git(root, 'fetch', '--no-tags', 'origin', f'+refs/tags/{args.release}:refs/tags/{args.release}')
-    actual = git(root, 'rev-parse', f'{args.release}^{{commit}}')
-    if actual != args.commit:
-        raise UpdateError(f'Tag {args.release} points at {actual}, expected {args.commit}. The tag was moved; stop.')
-    if contains(root, args.commit):
-        return {'result': 'already-contained', 'head': git(root, 'rev-parse', 'HEAD')}
-    if git(root, 'status', '--porcelain', '--untracked-files=no'):
-        raise UpdateError('The checkout has uncommitted changes. Keep them (commit or stash with the user), '
-                          'never reset; then rerun.', 3)
-    if git(root, 'merge-base', '--is-ancestor', 'HEAD', args.commit, check=False).returncode != 0:
-        raise UpdateError('Local commits diverge from the release. Decide with the user how to merge; never reset.', 3)
-    git(root, 'merge', '--ff-only', args.commit)
-    return {'result': 'fast-forwarded', 'head': git(root, 'rev-parse', 'HEAD')}
+    repository = getattr(args, 'repository', None)
+    origin = f'https://github.com/{repository}.git' if repository else git(root, 'remote', 'get-url', 'origin')
+    tag = f'refs/tags/{args.release}'
+    releases = state_dir(root) / 'releases'
+    checkout = releases / args.commit
+    if checkout.exists():
+        refs = {name: sha for sha, name in (line.split('\t', 1) for line in
+                git(root, 'ls-remote', '--', origin, tag, f'{tag}^{{}}').splitlines())}
+        actual = refs.get(f'{tag}^{{}}', refs.get(tag))
+        if actual != args.commit:
+            raise UpdateError(f'Tag {args.release} points at {actual}, expected {args.commit}. The tag was moved or removed.')
+        release_tree(root, args.commit)
+        return {'result': 'already-prepared', 'checkout': str(checkout), 'commit': args.commit}
+    releases.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.fetch-', dir=releases) as work:
+        staged = Path(work) / 'release'
+        staged.mkdir()
+        git(staged, 'init', '--quiet')
+        git(staged, 'remote', 'add', 'origin', origin)
+        git(staged, 'fetch', '--depth=1', '--no-tags', 'origin', f'{tag}:{tag}')
+        actual = git(staged, 'rev-parse', f'{tag}^{{commit}}')
+        if actual != args.commit:
+            raise UpdateError(f'Tag {args.release} points at {actual}, expected {args.commit}. The tag was moved; stop.')
+        git(staged, 'checkout', '--detach', '--quiet', args.commit)
+        original = installation_root(root).resolve()
+        connect_local_state(staged, original)
+        (staged / '.git/bb-config-installation.json').write_text(
+            json.dumps({'root': str(original)}), encoding='utf-8')
+        try:
+            staged.rename(checkout)
+        except OSError:
+            if not checkout.is_dir():
+                raise
+            release_tree(root, args.commit)
+    return {'result': 'prepared', 'checkout': str(checkout), 'commit': args.commit}
 
 
 def command_status(args, root):
     with journal(root) as data:
-        return {'installed': data['installed'], 'partial': data['partial'], 'run': data['run'],
-                'lastRun': data['lastRun'], 'journal': str(state_dir(root) / 'journal.json')}
+        result = {'installed': data['installed'], 'partial': data['partial'], 'run': data['run'],
+                  'lastRun': data['lastRun'], 'journal': str(state_dir(root) / 'journal.json')}
+    if args.dependencies:
+        result['dependencyIssues'] = dependency_issues(data)
+    return result
 
 
 def command_baseline(args, root):
@@ -459,9 +676,8 @@ def command_baseline(args, root):
 
 def command_begin(args, root):
     version_key(args.release)
-    if not contains(root, args.commit):
-        raise UpdateError('The checkout does not contain the pinned commit. Run `fetch` first.')
-    manifests = load_manifests(root, args.commit)
+    checkout = release_tree(root, args.commit)
+    manifests = load_manifests(checkout, args.commit)
     if args.release not in manifests:
         raise UpdateError(f'{args.release} has no docs/releases manifest in {args.commit[:12]}.')
     machines = [m for m in (args.machines or '').split(',') if m]
@@ -470,6 +686,8 @@ def command_begin(args, root):
         if run and run['owner'] != args.owner and not args.takeover:
             raise UpdateError(f'Another update run is open (owner {run["owner"]}, since {run["startedAt"]}). '
                               'Check that thread first; --takeover only when it is certainly stopped.', 3)
+        if run and (run['release'], run['commit']) != (args.release, args.commit):
+            raise UpdateError(f'Finish the open run for {run["release"]} before changing the pinned release.', 3)
         # A machine that still owes steps stays in scope until it is done or
         # explicitly recorded as not-applicable; omitting it must not hide it.
         for row in (data['partial'] or {}).get('remaining', []):
@@ -478,20 +696,22 @@ def command_begin(args, root):
         resumed = bool(run and run['owner'] == args.owner and run['commit'] == args.commit)
         data['run'] = {'release': args.release, 'commit': args.commit, 'owner': args.owner,
                        'machines': machines, 'startedAt': run['startedAt'] if resumed else now()}
+        remaining = pending(manifests, data, args.release, machines, args.commit)
+        active = {row['step'] for row in remaining}
         return {'run': data['run'], 'resumed': resumed, 'installed': data['installed'],
-                'pending': pending(manifests, data, args.release, machines),
+                'pending': remaining,
                 'steps': {f'{tag}/{s["id"]}': s for tag, m in manifests.items() for s in m['steps']
-                          if any(row['step'] == f'{tag}/{s["id"]}' for row in pending(manifests, data, args.release, machines))}}
+                          if f'{tag}/{s["id"]}' in active}}
 
 
-def dependencies_done(manifests, data, tag, step, machine, mode):
+def dependencies_done(manifests, data, tag, step, machine, mode, commit):
     base = version_key(installed_version(data)) if installed_version(data) else (-1, -1, -1)
     for dependency in step.get('after', []):
         name = full_id(tag, dependency)
         other_tag, other = find_step(manifests, name)
         if mode == 'release' and version_key(other_tag) <= base:
             continue
-        entry = latest(data, name, SERVER if other['where'] == 'server' else machine, mode)
+        entry = latest(data, name, SERVER if other['where'] == 'server' else machine, mode, commit)
         if not entry or entry['status'] not in DONE:
             raise UpdateError(f'{name} must be done first.', 2)
 
@@ -501,9 +721,8 @@ def command_run(args, root):
     with journal(root) as data:
         run = require_run(data, args.owner, args.development)
     commit = run['commit'] if run else None
-    if commit and not contains(root, commit):
-        raise UpdateError('The checkout no longer contains the pinned commit. Run `fetch` again.')
-    manifests = load_manifests(root, commit)
+    checkout = release_tree(root, commit) if commit else root
+    manifests = load_manifests(checkout, commit)
     if args.development:
         manifests[NEXT] = {'steps': list(next_steps(root).values())}
     tag, step = find_step(manifests, args.step)
@@ -511,9 +730,10 @@ def command_run(args, root):
     if (step['where'] == 'server') != (machine == SERVER):
         raise UpdateError(f'{args.step} runs on {step["where"]}; pass a matching --machine.')
     with journal(root) as data:
-        dependencies_done(manifests, data, tag, step, machine, mode)
+        dependencies_done(manifests, data, tag, step, machine, mode, commit)
     try:
-        status, how, detail = run_step(root, step, args.install, commit)
+        status, how, detail = run_step(checkout, step, args.install, commit)
+        checks = observed_checks(step) if status == 'verified' else None
     except UpdateError as error:
         if error.code != 3:
             with journal(root, write=True) as data:
@@ -521,7 +741,7 @@ def command_run(args, root):
         raise
     with journal(root, write=True) as data:
         require_run(data, args.owner, args.development)
-        entry = add_entry(data, args.step, machine, status, how, detail, mode, commit)
+        entry = add_entry(data, args.step, machine, status, how, detail, mode, commit, checks)
     if status == 'failed':
         raise UpdateError(json.dumps(entry, ensure_ascii=False))
     return entry
@@ -534,7 +754,7 @@ def command_record(args, root):
     with journal(root, write=True) as data:
         run = require_run(data, args.owner, args.development)
         commit = run['commit'] if run else None
-        manifests = load_manifests(root, commit)
+        manifests = load_manifests(release_tree(root, commit) if commit else root, commit)
         if args.development:
             manifests[NEXT] = {'steps': list(next_steps(root).values())}
         tag, step = find_step(manifests, args.step)
@@ -544,25 +764,38 @@ def command_record(args, root):
         if args.status == 'verified' and args.machine == SERVER and automatic:
             raise UpdateError('This step has an automatic check on the server; use `run`, not `record`.')
         if args.status == 'verified':
-            dependencies_done(manifests, data, tag, step, args.machine, mode)
+            dependencies_done(manifests, data, tag, step, args.machine, mode, commit)
         return add_entry(data, args.step, args.machine, args.status, 'evidence', args.evidence, mode, commit)
 
 
 def command_finish(args, root):
     with journal(root, write=True) as data:
         run = require_run(data, args.owner, False)
-        manifests = load_manifests(root, run['commit'])
+        manifests = load_manifests(release_tree(root, run['commit']), run['commit'])
         base = version_key(installed_version(data)) if installed_version(data) else (-1, -1, -1)
+        for tag, manifest in manifests.items():
+            if not base < version_key(tag) <= version_key(run['release']):
+                continue
+            for step in manifest['steps']:
+                name = f'{tag}/{step["id"]}'
+                entry = latest(data, name, SERVER, commit=run['commit'])
+                if not step.get('requiresPlugins') or not entry or entry['status'] != 'verified':
+                    continue
+                try:
+                    require_dependencies(step)
+                except UpdateError as error:
+                    add_entry(data, name, SERVER, 'failed', 'verify', str(error), 'release', run['commit'])
         done = None
         for tag in manifests:
             if not base < version_key(tag) <= version_key(run['release']):
                 continue
-            if pending(manifests, data, tag, run['machines']):
+            if pending(manifests, data, tag, run['machines'], run['commit']):
                 break
             done = tag
         if done:
-            data['installed'] = {'release': done, 'commit': run['commit'], 'how': 'release', 'at': now()}
-        remaining = pending(manifests, data, run['release'], run['machines'])
+            data['installed'] = {'release': done, 'commit': run['commit'] if done == run['release'] else None,
+                                 'appliedFrom': run['commit'], 'how': 'release', 'at': now()}
+        remaining = pending(manifests, data, run['release'], run['machines'], run['commit'])
         data['partial'] = {'release': run['release'], 'commit': run['commit'], 'remaining': remaining,
                            'at': now()} if remaining else None
         # The thread that ran the update, for the plugin (archiving, reuse).
@@ -624,8 +857,8 @@ def command_release(args, root):
 def command_accept(args, root):
     """Mark a release installed without an agent when none of its steps needs any action.
 
-    Nothing is built, installed or configured: the pinned commit is fetched
-    (fast-forward only) and every pending step must already be settled by the
+    Nothing is built, installed or configured: the pinned commit is prepared
+    separately and every pending step must already be settled by the
     actual state. Otherwise nothing is recorded and the answer says why.
     """
     version_key(args.release)
@@ -638,32 +871,37 @@ def command_accept(args, root):
             return refuse(f'an update run is open (owner {data["run"]["owner"]})')
     try:
         command_fetch(args, root)
-        manifests = load_manifests(root, args.commit)
+        checkout = release_tree(root, args.commit)
+        manifests = load_manifests(checkout, args.commit)
     except UpdateError as error:
         return refuse(str(error))
     if args.release not in manifests:
         return refuse(f'{args.release} has no manifest in the pinned commit')
     with journal(root) as data:
         base = version_key(installed_version(data)) if installed_version(data) else (-1, -1, -1)
-        rows = pending(manifests, data, args.release, [])
+        rows = pending(manifests, data, args.release, [], args.commit)
     for tag, manifest in manifests.items():
         if base < version_key(tag) <= version_key(args.release) and \
                 any(step['where'] != 'server' for step in manifest['steps']):
             return refuse(f'{tag} has steps for executor machines')
     results = []
     for row in rows:
+        step = find_step(manifests, row['step'])[1]
         try:
-            done = settled(root, find_step(manifests, row['step'])[1], args.commit)
+            done = settled(checkout, step, args.commit)
+            checks = observed_checks(step) if done and done[0] == 'verified' else None
         except UpdateError as error:
             return refuse(f'{row["step"]}: {error}')
         if not done:
             return refuse(f'{row["step"]} has to be applied')
-        results.append((row['step'], *done))
+        results.append((row['step'], *done, checks))
     with journal(root, write=True) as data:
         if data['run']:
             return refuse('an update run was opened meanwhile')
-        for name, status, how, detail in results:
-            add_entry(data, name, SERVER, status, how, detail, 'release', args.commit)
+        if data['installed'] and version_key(data['installed']['release']) >= version_key(args.release):
+            return refuse('this release is already recorded or superseded')
+        for name, status, how, detail, checks in results:
+            add_entry(data, name, SERVER, status, how, detail, 'release', args.commit, checks)
         data['installed'] = {'release': args.release, 'commit': args.commit, 'how': 'auto-accept', 'at': now()}
         data['partial'] = None
         return {'accepted': True, 'installed': data['installed'], 'steps': [name for name, *_ in results]}
@@ -688,6 +926,7 @@ def command_require_plugin(args, root):
 
 def main(argv=None, root=ROOT):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--installation', type=Path, help='existing bb-config checkout when bootstrapping a new runner')
     sub = parser.add_subparsers(dest='command', required=True)
     owner = os.environ.get('BB_THREAD_ID') or f'pid-{os.getppid()}'
 
@@ -702,8 +941,8 @@ def main(argv=None, root=ROOT):
             command.add_argument('--owner', default=owner, help='run owner (default: $BB_THREAD_ID)')
         return command
 
-    add('status', command_status)
-    add('fetch', command_fetch, release=True, commit=True)
+    add('status', command_status).add_argument('--dependencies', action='store_true', help='check dependencies of recorded releases')
+    add('fetch', command_fetch, release=True, commit=True).add_argument('--repository', help='GitHub owner/repository (default: origin)')
     command = add('baseline', command_baseline, release=True, commit=True)
     command.add_argument('--note', default='')
     command.add_argument('--force', action='store_true')
@@ -722,7 +961,7 @@ def main(argv=None, root=ROOT):
     command.add_argument('--evidence', required=True)
     command.add_argument('--development', action='store_true')
     add('finish', command_finish, run=True)
-    add('accept', command_accept, release=True, commit=True)
+    add('accept', command_accept, release=True, commit=True).add_argument('--repository', help='GitHub owner/repository (default: origin)')
     command = add('release', command_release, release=True)
     command.add_argument('--title', required=True)
     command.add_argument('--steps', help='comma-separated ids from docs/releases/next/ (default: all)')
@@ -734,6 +973,12 @@ def main(argv=None, root=ROOT):
     args = parser.parse_args(argv)
     if getattr(args, 'commit', None) and not re.fullmatch(r'[0-9a-f]{40}', args.commit):
         parser.error('--commit must be a full 40-character SHA')
+    if getattr(args, 'repository', None) and not re.fullmatch(r'[\w-]+/[\w.-]+', args.repository, re.ASCII):
+        parser.error('--repository must be a GitHub owner/repository')
+    if args.installation:
+        root = args.installation.resolve()
+        if not (root / '.git').exists() or not (root / 'scripts/updates.py').is_file():
+            parser.error('--installation must point to the existing bb-config checkout')
     try:
         print(json.dumps(args.function(args, root), ensure_ascii=False, indent=1))
         return 0
