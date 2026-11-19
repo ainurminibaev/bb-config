@@ -1,45 +1,68 @@
 ---
 name: limit-guard
-description: Check a thread's subscription limit and work mode (normal, economy, finish), list threads stuck on a limit with handoff suggestions, or diagnose the Limit Guard plugin, its thresholds, notifications and the rules it gives agents.
+description: Check a thread's subscription limit and work mode, understand [limit-guard] messages, list or restore snapshots of unfinished work (refs/wip/bb/*, shadow repositories), list threads stuck on a limit, or diagnose the Limit Guard plugin and its settings.
 ---
 
 # Limit Guard
 
-The plugin tells Claude Code and Codex agents how much of the subscription
-limit their thread's account has used, and what to do about it. Other providers
-get nothing (they do not report limits).
+The plugin keeps unfinished work from being lost when a subscription limit
+cuts a turn. **The plugin saves, not the model**: a cut turn cannot save
+anything itself.
 
-- Agent tool `limit_status` (optional `refresh`). Command for people and
-  scripts: `bb limit status [--thread <id>] [--refresh] [--json]`.
-- Data comes from BB's `sdk.system.usageLimits` for the machine the thread runs
-  on and the thread's provider, cached in memory for one minute. Model-specific
-  windows (for example "Fable") count only when the thread runs that model.
-- The mode follows the fullest relevant window. Normal is below `economyPercent`
-  (default 70), economy goes up to `finishPercent` (default 90), and finish is
-  everything above. If nothing is known, the mode is unknown and the agent works
-  in small saved steps.
-- `bb plugin config limit-guard set economyPercent 60` changes a threshold.
-  Rules reach a provider session when it is next started.
+## For an agent
 
-Every supported session gets short standing rules. Check the limit before large
-work and after each finished step. In economy and finish modes, commit and push
-the agent's own changes to the current branch after each step; this is a
-standing permission from the user. Never force-push, never commit other threads'
-files or secrets. In finish mode, start nothing new, save, and write "что
-сделано / что дальше / как проверить". When a five-hour window is about to
-reset, the tool says provider-retry will resume the thread.
+- A `[limit-guard] …` message during your turn means the mode changed.
+  - Economy: work in short finished steps.
+  - Finish: start nothing new, bring the current step to a working state,
+    and write «что сделано / что дальше / как проверить».
+- Do not commit because of the limit. Commit only finished steps and only
+  your own files by name (not `git add -A`). Push as the project's rules say.
+  In a shared folder do not switch branches or run stash, reset, pull or
+  rebase.
+- `limit_status` (or `bb limit status`) shows the windows, the pace («до
+  упора ~N мин») and the mode.
+- Continuing someone's unfinished work: `bb limit snapshots`, then
+  `bb limit restore --from <environmentId>`. It works only on a clean folder
+  at the snapshot's base and never moves branches.
 
-When a turn fails on a subscription limit, the plugin waits up to a minute
-for provider-retry's decision and checks the other provider's room on the same
-machine. It sends one push notification per thread when the wait exceeds
-`notifyAfterMinutes` (default 60) or no retry is queued. `bb limit stuck` lists
-waiting threads with ready `bb handoff <id> --to <provider> --briefing` and
-`bb provider-retry cancel <id>` commands. A thread leaves the list when it runs
-again or is archived. Settings: `onLimit` (`suggest`/`off`),
-`notifyAfterMinutes`, `timeZone` (empty means the server's zone). Never hand a
-thread off on the user's behalf unless they ask.
+## How it works
 
-Limits: an account pool or a per-thread auth override can make the numbers
-belong to the machine's account rather than the thread's; the output says so
-when a pool is enabled. The plugin never stops a turn and never switches the
-provider itself.
+- Snapshots: a commit of the folder state under `refs/wip/bb/<environmentId>`,
+  built through a temporary index. Files, branch and index are untouched.
+  - Contents: changed and untracked files; ignored files, files over 20 MB and
+    dependency folders are left out. The previous snapshot is the first
+    parent. A folder matching its branch drops the local ref.
+  - Folders without git get a shadow bare repository in the plugin data
+    directory on that machine, with ref `refs/heads/snapshots`.
+  - Triggers: any failed turn, entering finish, an idle thread with changes
+    (at most every 10 minutes per folder), and archiving a worktree thread.
+  - Push only to a remote GitHub confirms as private (`gh api`) and only when
+    no changed file looks like a secret. Otherwise the snapshot stays local.
+- Thresholds:
+  - five-hour window: economy 75%, finish 90%, or by pace when the window
+    would be full within 40 / 10 minutes;
+  - weekly and model windows: 90% / 97%.
+
+  A poll every 2 minutes sends one note into a running turn when its mode gets
+  worse; it never starts a new turn.
+- Stuck threads:
+  - after a rate-limit failure, the plugin waits up to a minute for
+    provider-retry's decision;
+  - it notifies once when the wait is longer than `notifyAfterMinutes` or no
+    retry is queued; an unknown decision with a short wait stays quiet;
+  - it suggests another model when only a model window is full, or another
+    provider with room;
+  - `bb limit stuck` lists these threads;
+  - a handoff of a stuck thread (a thread from the `handoff` plugin whose
+    first message names it) removes the source's queued retry row.
+
+## Switches
+
+- `.bb/hands-off` in a folder: no snapshots and no pulls there.
+- `bb plugin config limit-guard set snapshots push-private|local|off`.
+- Also `steer`, `onLimit`, the six threshold settings, `notifyAfterMinutes`
+  and `timeZone`.
+- `bb plugin disable limit-guard` turns everything off.
+
+Never hand a thread off, delete snapshot refs or change these settings on the
+user's behalf unless they ask.

@@ -58,15 +58,20 @@ folder) can be marked in the card or with `bb catalog set <project>
 that are meant to differ on every machine are listed in the card or with
 `--local-paths "a,b"`; unsaved git work inside them is still reported.
 
-- **Safe pull before work (0.4.0).** Every project thread gets the agent tool
-  `project_sync` and a rule to call it once before its first edit. On the
-  thread's own machine it runs `git fetch` and then only a fast-forward of a
-  clean branch that has an upstream. Uncommitted edits, diverged branches, a
-  task branch without upstream, no remote or no network change nothing; the
+- **Safe pull before work (0.4.0, by code since 0.6.0).** At a project thread's
+  first message the `message.dispatch` hook runs `git fetch` on the thread's
+  own machine and folder, then fast-forwards only a clean branch that has an
+  upstream. It waits at most 20 seconds and puts the result into the session
+  instructions. It never pulls while another thread is active in the same
+  folder or when `.bb/hands-off` exists. Uncommitted edits, diverged branches,
+  a task branch without upstream, no remote or no network change nothing; the
   agent is told why. It lists the incoming commits and the other machines'
-  copies from the last scan. A folder without git has its nested repositories
-  (two levels deep) handled one by one. `bb catalog pull [--check] [--thread <id>]`
-  does the same from a shell.
+  copies from the last scan, including repositories nested in a plain folder.
+  The tool `project_sync` and `bb catalog pull [--check] [--thread <id>]` repeat
+  it by hand. Fetch never writes `FETCH_HEAD`.
+- **Background (0.6.0).** Every 30 minutes: fetch the projects touched in the
+  last week (remote refs only) and rescan them; remove BB records of worktrees
+  whose folder is gone and that no live thread uses.
 - **Sync history.** The last 40 pulls and checks per project (machine, thread,
   result) are kept in plugin storage, shown in the card as «Синхронизация» and
   printed by `bb catalog history [project]`.

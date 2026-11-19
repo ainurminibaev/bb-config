@@ -1,6 +1,6 @@
 {
   "id": "plugin-project-catalog-sync",
-  "title": "Project Catalog 0.5.0: безопасная синхронизация папки перед работой, история и worktree-копии",
+  "title": "Project Catalog 0.6.0: подтягивание при старте треда, фоновый fetch, история и worktree-копии",
   "component": "project-catalog",
   "where": "server",
   "kind": "local-plugin",

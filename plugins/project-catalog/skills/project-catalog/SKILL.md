@@ -106,8 +106,12 @@ bb catalog pull --check         # fetch and report only
 bb catalog history [project]    # who pulled or checked, where, with what result
 ```
 
-Agents get the same as the tool `project_sync` (`check_only` optional) and a
-standing rule: call it once before the first edit in a project folder. It works
+The plugin runs this itself at a project thread's first message (waiting at most
+20 seconds) and puts the result into the session instructions. It does not pull
+while another thread is active in the same folder or when `.bb/hands-off`
+exists. Agents can repeat it with the tool `project_sync` (`check_only`
+optional), for example after long work. Every 30 minutes the plugin also
+fetches projects touched in the last week (remote refs only). It works
 on the thread's own machine and folder (a worktree too). It fast-forwards only a
 clean branch that has an upstream. It never merges, rebases, stashes, resets or
 pushes. The answer lists incoming commits and the other machines' copies from
