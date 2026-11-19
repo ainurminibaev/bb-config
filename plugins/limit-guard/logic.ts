@@ -121,3 +121,70 @@ export function agentRules(t: Thresholds): string {
     '- В режиме финиша: новое не начинай, доведи шаг до рабочего состояния, сохрани и коротко напиши «что сделано / что дальше / как проверить», чтобы другой агент продолжил.',
   ].join('\n');
 }
+
+// ---------- A turn already hit the limit ----------
+
+export interface StuckThread {
+  threadId: string;
+  title: string;
+  providerId: string;
+  failedAt: number;
+  /** When the blocking window resets, if known. */
+  resetAt: number | null;
+  /** provider-retry queued an automatic continuation. */
+  retryAt: number | null;
+  alternative: { providerId: string; mode: Mode; percent: number | null } | null;
+  notified: boolean;
+}
+
+export const PROVIDER_NAME: Record<string, string> = { 'claude-code': 'Claude', codex: 'Codex' };
+const providerName = (id: string) => PROVIDER_NAME[id] ?? id;
+
+/** The window that blocks: the full one that resets last; otherwise the latest known reset. */
+export function blockingReset(windows: { usedPercent?: number | null; resetsAtMs?: number | null }[]): number | null {
+  const resets = (full: boolean) => windows.filter(w => typeof w.resetsAtMs === 'number' && (!full || (w.usedPercent ?? 0) >= 100)).map(w => w.resetsAtMs as number);
+  const full = resets(true);
+  if (full.length) return Math.max(...full);
+  const any = resets(false);
+  return any.length ? Math.max(...any) : null;
+}
+
+/** Notify when the wait is long, or when nothing will continue the thread on its own. */
+export function shouldNotify(s: Pick<StuckThread, 'resetAt' | 'retryAt' | 'notified'>, now: number, notifyAfterMinutes: number): boolean {
+  if (s.notified) return false;
+  const until = s.retryAt ?? s.resetAt;
+  if (until === null) return true;
+  if (s.retryAt === null) return true;
+  return until - now >= notifyAfterMinutes * 60_000;
+}
+
+let zone: string | undefined;
+/** Time zone for clock times in messages; empty means the server's own. */
+export function setTimeZone(value: string | null | undefined) {
+  try { zone = value ? (new Intl.DateTimeFormat('ru-RU', { timeZone: value }), value) : undefined; } catch { zone = undefined; }
+}
+export function clock(ms: number): string {
+  return new Date(ms).toLocaleString('ru-RU', { timeZone: zone, day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+export function notification(s: StuckThread, now: number): { title: string; body: string } {
+  const until = s.retryAt ?? s.resetAt;
+  const wait = until === null ? 'время сброса неизвестно' : `до ${clock(until)} (через ${formatDuration(until - now)})`;
+  const title = `Лимит ${providerName(s.providerId)}: «${s.title}» ждёт`.slice(0, 80);
+  const alt = s.alternative && s.alternative.mode !== 'finish' && s.alternative.mode !== 'unknown'
+    ? ` Можно передать в ${providerName(s.alternative.providerId)} (занято ${Math.round(s.alternative.percent ?? 0)}%).` : '';
+  const retry = s.retryAt !== null ? ' BB продолжит сам после сброса.' : ' Автоповтора нет.';
+  return { title, body: `Пауза ${wait}.${retry}${alt}`.slice(0, 180) };
+}
+
+export function stuckText(s: StuckThread, now: number): string {
+  const until = s.retryAt ?? s.resetAt;
+  const lines = [`${s.threadId}  «${s.title}» — ${providerName(s.providerId)}, ${until === null ? 'время сброса неизвестно' : `до ${clock(until)} (через ${formatDuration(until - now)})`}${s.retryAt !== null ? ', BB продолжит сам' : ', автоповтора нет'}`];
+  if (s.alternative && s.alternative.mode !== 'finish' && s.alternative.mode !== 'unknown') {
+    lines.push(`  передать: bb handoff ${s.threadId} --to ${s.alternative.providerId} --briefing   (у ${providerName(s.alternative.providerId)} занято ${Math.round(s.alternative.percent ?? 0)}%)`);
+    if (s.retryAt !== null) lines.push(`  после передачи отмените автоповтор: bb provider-retry cancel ${s.threadId}`);
+  } else if (s.alternative) {
+    lines.push(`  у ${providerName(s.alternative.providerId)} лимит тоже на исходе или неизвестен`);
+  }
+  return lines.join('\n');
+}

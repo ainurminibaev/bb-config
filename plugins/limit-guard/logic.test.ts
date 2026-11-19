@@ -69,3 +69,37 @@ test('agent rules state thresholds and safety', () => {
   assert.match(rules, /force-push/);
   assert.ok(rules.length < 4096);
 });
+
+import { blockingReset, notification, shouldNotify, stuckText, type StuckThread } from './logic.ts';
+
+const stuck = (extra: Partial<StuckThread> = {}): StuckThread => ({
+  threadId: 'thr_1', title: 'Задача', providerId: 'claude-code', failedAt: 0, resetAt: null, retryAt: null,
+  alternative: null, notified: false, ...extra,
+});
+
+test('blocking reset is the full window that frees last', () => {
+  assert.equal(blockingReset([{ usedPercent: 100, resetsAtMs: 10 }, { usedPercent: 40, resetsAtMs: 99 }, { usedPercent: 100, resetsAtMs: 50 }]), 50);
+  assert.equal(blockingReset([{ usedPercent: 80, resetsAtMs: 10 }, { usedPercent: 90, resetsAtMs: 30 }]), 30);
+  assert.equal(blockingReset([]), null);
+});
+
+test('notify only when waiting is long or nothing will resume', () => {
+  const now = 1_000_000;
+  assert.equal(shouldNotify({ resetAt: now + 10 * 60_000, retryAt: now + 10 * 60_000, notified: false }, now, 60), false);
+  assert.equal(shouldNotify({ resetAt: now + 3 * 3_600_000, retryAt: now + 3 * 3_600_000, notified: false }, now, 60), true);
+  assert.equal(shouldNotify({ resetAt: now + 5 * 60_000, retryAt: null, notified: false }, now, 60), true);
+  assert.equal(shouldNotify({ resetAt: null, retryAt: null, notified: true }, now, 60), false);
+});
+
+test('suggests a handoff only to a provider with room', () => {
+  const now = Date.parse('2026-11-19T09:00:00Z');
+  const s = stuck({ retryAt: now + 2 * 3_600_000, alternative: { providerId: 'codex', mode: 'normal', percent: 20 } });
+  const text = stuckText(s, now);
+  assert.match(text, /bb handoff thr_1 --to codex --briefing/);
+  assert.match(text, /bb provider-retry cancel thr_1/);
+  assert.match(notification(s, now).body, /Можно передать в Codex \(занято 20%\)/);
+  const full = stuck({ alternative: { providerId: 'codex', mode: 'finish', percent: 97 } });
+  assert.doesNotMatch(stuckText(full, now), /bb handoff/);
+  assert.match(notification(full, now).body, /Автоповтора нет/);
+  assert.ok(notification(stuck({ title: 'x'.repeat(200) }), now).title.length <= 80);
+});

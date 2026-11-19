@@ -1,6 +1,6 @@
 ---
 name: limit-guard
-description: Check a thread's subscription limit and work mode (normal, economy, finish), or diagnose the Limit Guard plugin, its thresholds and the rules it gives agents.
+description: Check a thread's subscription limit and work mode (normal, economy, finish), list threads stuck on a limit with handoff suggestions, or diagnose the Limit Guard plugin, its thresholds, notifications and the rules it gives agents.
 ---
 
 # Limit Guard
@@ -28,6 +28,16 @@ standing permission from the user. Never force-push, never commit other threads'
 files or secrets. In finish mode, start nothing new, save, and write "что
 сделано / что дальше / как проверить". When a five-hour window is about to
 reset, the tool says provider-retry will resume the thread.
+
+When a turn fails on a subscription limit, the plugin waits up to a minute
+for provider-retry's decision and checks the other provider's room on the same
+machine. It sends one push notification per thread when the wait exceeds
+`notifyAfterMinutes` (default 60) or no retry is queued. `bb limit stuck` lists
+waiting threads with ready `bb handoff <id> --to <provider> --briefing` and
+`bb provider-retry cancel <id>` commands. A thread leaves the list when it runs
+again or is archived. Settings: `onLimit` (`suggest`/`off`),
+`notifyAfterMinutes`, `timeZone` (empty means the server's zone). Never hand a
+thread off on the user's behalf unless they ask.
 
 Limits: an account pool or a per-thread auth override can make the numbers
 belong to the machine's account rather than the thread's; the output says so
