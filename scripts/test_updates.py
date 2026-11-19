@@ -110,6 +110,16 @@ class UpdatesTests(unittest.TestCase):
         self.assertEqual(self.call('run', 'v1.0.0/one')[0], 3)
         self.assertEqual(self.call('run', 'v1.0.0/nope', '--development')[0], 1)
 
+    def test_plan_orders_dependencies_and_keeps_the_active_pin(self):
+        first = self.repo.release('v1.0.0', [step('addon', after=['base']), step('base'), step('last')])
+        second = self.repo.release('v1.0.1', [step('next')])
+        self.call('fetch', 'v1.0.0', '--commit', first)
+        self.call('fetch', 'v1.0.1', '--commit', second)
+        run = self.call('begin', 'v1.0.0', '--commit', first)[1]
+        self.assertEqual([item['step'] for item in run['pending']], ['v1.0.0/base', 'v1.0.0/addon', 'v1.0.0/last'])
+        self.assertIn('before changing the pinned release', self.call('begin', 'v1.0.1', '--commit', second)[1])
+        self.assertEqual(self.call('status')[1]['run']['commit'], first)
+
     def test_prepares_a_release_without_touching_dirty_or_diverged_checkout(self):
         sha = self.repo.release('v1.0.0', [step('one')])
         self.assertIn('moved', self.call('fetch', 'v1.0.0', '--commit', '0' * 40)[1])

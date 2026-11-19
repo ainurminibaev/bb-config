@@ -177,12 +177,24 @@ def load_manifests(root, commit=None):
             raise UpdateError(f'{name}: ' + '; '.join(errors))
         manifests[tag] = manifest
     ordered = dict(sorted(manifests.items(), key=lambda item: version_key(item[0])))
-    known = {f'{tag}/{step["id"]}' for tag, m in ordered.items() for step in m['steps']}
+    known = set()
     for tag, manifest in ordered.items():
-        for step in manifest['steps']:
+        remaining = list(manifest['steps'])
+        unresolved_ids = {f'{tag}/{step["id"]}' for step in remaining}
+        for step in remaining:
             for dependency in step.get('after', []):
-                if full_id(tag, dependency) not in known:
-                    raise UpdateError(f'{tag}/{step["id"]}: unknown dependency {dependency}')
+                if full_id(tag, dependency) not in known | unresolved_ids:
+                    raise UpdateError(f'{tag}/{step["id"]}: dependency {dependency} must be in this or an earlier release')
+        ordered_steps = []
+        while remaining:
+            index = next((i for i, step in enumerate(remaining)
+                          if all(full_id(tag, dependency) in known for dependency in step.get('after', []))), None)
+            if index is None:
+                raise UpdateError(f'{tag}: cyclic step dependencies ({", ".join(step["id"] for step in remaining)})')
+            step = remaining.pop(index)
+            ordered_steps.append(step)
+            known.add(f'{tag}/{step["id"]}')
+        manifest['steps'] = ordered_steps
     return ordered
 
 
@@ -646,6 +658,8 @@ def command_begin(args, root):
         if run and run['owner'] != args.owner and not args.takeover:
             raise UpdateError(f'Another update run is open (owner {run["owner"]}, since {run["startedAt"]}). '
                               'Check that thread first; --takeover only when it is certainly stopped.', 3)
+        if run and (run['release'], run['commit']) != (args.release, args.commit):
+            raise UpdateError(f'Finish the open run for {run["release"]} before changing the pinned release.', 3)
         # A machine that still owes steps stays in scope until it is done or
         # explicitly recorded as not-applicable; omitting it must not hide it.
         for row in (data['partial'] or {}).get('remaining', []):
