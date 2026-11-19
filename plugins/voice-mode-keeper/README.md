@@ -46,3 +46,9 @@ On a different server, configure the path to its official CLI once:
 The current server's path is stored only in the private settings snapshot.
 This is needed because a BB service's PATH need not include the CLI. It is
 unrelated to the voice provider's authorization; no credentials are accessed.
+
+Keeper can retire a rule once the exact catalog release contains the complete
+fix. Its status becomes `retired`. Set `forceRules` to the plugin ID (or a
+comma-separated list) to re-enable it. If `retirementNoticeThread` is set
+in BB, Keeper queues one notice per retired rule. Ambiguous delivery is
+recorded in the status to avoid duplicate messages.

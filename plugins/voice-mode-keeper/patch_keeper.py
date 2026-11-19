@@ -13,7 +13,8 @@ For each kept plugin (Needs You, Tokenomics, KodaForge), on every run:
 
 Nothing is applied when the patch does not fit: the plugin keeps running as
 its author released it and the status asks for attention. Catalog sources,
-settings and data are never touched; no network access, no npm install.
+settings and data are never touched. To retire rules we read the exact
+public catalog revision. No npm install is performed.
 Prints one JSON status line per plugin.
 """
 import hashlib
@@ -29,6 +30,7 @@ STATE_DIR = REPO / '.local/plugin-patches/kept'
 sys.path.insert(0, str(REPO / 'scripts'))
 import platform_compat as compat  # noqa: E402
 import tokenomics_compat
+from upstream_retirement import retirement
 
 KEPT = {
     'inbox': {
@@ -45,6 +47,7 @@ KEPT = {
         'source': 'git:https://github.com/danielbachhuber/bb-plugins.git@',
         'files': ['server.ts'],
         'rewrite': tokenomics_compat.rewrite,
+        'notice': 'Tokenomics ?? null',
     },
     'kodaforge': {
         'name': 'KodaForge',
@@ -135,6 +138,39 @@ def pending_patches(root, spec, text):
         return missing_base(base, spec, original) + list(reversed(missing))
 
 
+def upstream_contains_fix(spec, files, version):
+    """Evaluate the pristine release, independent of this machine's source edits."""
+    rewrite = spec.get('rewrite')
+    if rewrite:
+        try:
+            return rewrite(files['server.ts'], version) == files['server.ts']
+        except tokenomics_compat.AnchorMismatch:
+            return False
+    if not spec.get('overlays') and spec['shipped']({name: data.decode() for name, data in files.items()}):
+        return True
+    with tempfile.TemporaryDirectory(prefix='kept-upstream-') as directory:
+        source = Path(directory)
+        for name, data in files.items():
+            file = source / name
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_bytes(unix_lines(data))
+        for name in reversed(spec['patches'] + spec.get('overlays', [])):
+            result = subprocess.run(
+                ['git', 'apply', '--reverse', '-p1', '-'], cwd=source,
+                input=(REPO / name).read_bytes(), capture_output=True,
+            )
+            if result.returncode != 0:
+                return False
+    return True
+
+
+def send_retirement(thread, message):
+    try:
+        run(['bb', 'thread', 'tell', thread, '--mode', 'queue', '--json', message])
+    except subprocess.SubprocessError as error:
+        raise RuntimeError('Delivery not confirmed') from error
+
+
 def keep(plugin_id, spec, installed):
     plugin = installed.get(plugin_id)
     status = {'plugin': plugin_id, 'name': spec['name'], 'version': (plugin or {}).get('version', '')}
@@ -142,6 +178,9 @@ def keep(plugin_id, spec, installed):
         return {**status, 'state': 'idle', 'message': f"{spec['name']} выключен или не установлен."}
     if not plugin['source'].startswith(spec['source']):
         return {**status, 'state': 'idle', 'message': f"{spec['name']} установлен не из каталога: исправление не нужно."}
+    retired = retirement(plugin_id, spec, plugin, status, STATE_DIR, upstream_contains_fix, send_retirement)
+    if retired:
+        return retired
     root = Path(plugin['rootDir'])
     before = {name: (root / name).read_bytes() for name in spec['files']}
     rewrite = spec.get('rewrite')

@@ -48,3 +48,9 @@ KodaForge workspace tab actions are staged after the base catalog fixes.
 Verify the live source with `python3 scripts/kodaforge_workspace_tabs.py --check`.
 Right-click a workspace tab to keep only that tab or close all workspaces.
 Close all appears only in the tab context menu.
+
+Keeper can retire a rule once the exact catalog release contains the complete
+fix. Its status becomes `retired`. Set `forceRules` to the plugin ID (or a
+comma-separated list) to re-enable it. If `retirementNoticeThread` is set
+in BB, Keeper queues one notice per retired rule. Ambiguous delivery is
+recorded in the status to avoid duplicate messages.

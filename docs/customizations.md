@@ -346,6 +346,17 @@ python3 plugins/voice-mode-keeper/patch_keeper.py tokenomics
 bb plugin rpc call tokenomics usage_limits --json
 ```
 
+Keeper сверяет исходники точного каталожного коммита с правилом. Когда
+исправление приходит от автора, правило получает статус `retired` и
+автоматически отключается. Для Needs You действует та же проверка, для
+KodaForge один выпуск должен содержать весь набор правок. При настроенном
+`retirementNoticeThread` Keeper один раз ставит сообщение в очередь этого
+треда. Адрес хранится только в настройках BB.
+
+Принудительное включение правила — `bb plugin config voice-mode-keeper set
+forceRules tokenomics`. Для нескольких правил укажите идентификаторы через
+запятую. Пустое значение возвращает автоматический режим.
+
 Исправление принято в [Tokenomics PR #100](https://github.com/danielbachhuber/bb-plugins/pull/100).
 
 ## Установка

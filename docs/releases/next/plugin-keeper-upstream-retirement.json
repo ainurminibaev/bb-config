@@ -1,0 +1,10 @@
+{
+  "id": "plugin-keeper-upstream-retirement",
+  "title": "Автоотключение исправлений Plugin Keeper",
+  "component": "voice-mode-keeper",
+  "where": "server",
+  "kind": "local-plugin",
+  "plugin": "voice-mode-keeper",
+  "rerun": "Keeper выводит статус уже отключённого правила без повторной отправки уведомления.",
+  "rollback": "Добавить идентификатор правила в forceRules, чтобы вернуть его проверку."
+}

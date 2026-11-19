@@ -479,7 +479,7 @@
   },
   {
     "id": "voice-mode-keeper",
-    "version": "0.2.8",
+    "version": "0.2.9",
     "enabled": true,
     "name": "Plugin Keeper",
     "source": "path:plugins/voice-mode-keeper"
