@@ -26,6 +26,8 @@ class RetirementTests(unittest.TestCase):
         }).start()
         self.fetch = mock.patch.object(upstream, 'upstream_files').start()
         self.tell = mock.patch.object(keeper, 'send_retirement').start()
+        self.save = mock.patch.object(keeper, 'save_retirement').start()
+        self.save.return_value = ' bb-config обновлён. Коммит ждёт отправки.'
         self.build = mock.patch.object(keeper, 'run').start()
 
     def plugin(self, plugin_id, revision, version, files):
@@ -53,6 +55,7 @@ class RetirementTests(unittest.TestCase):
             'danielbachhuber/bb-plugins', 'a' * 40, ('bb-plugin-tokenomics',), ['server.ts'],
         )
         self.tell.assert_not_called()
+        self.save.assert_not_called()
 
         new = self.plugin('tokenomics', 'b' * 40, '0.2.3', {'server.ts': FIXED})
         self.fetch.return_value = {'server.ts': FIXED}
@@ -60,7 +63,11 @@ class RetirementTests(unittest.TestCase):
         self.assertEqual(self.check_rule('tokenomics', new)['state'], 'retired')
         self.tell.assert_called_once_with(
             'thr_fixture',
-            'Сторож: правка Tokenomics ?? null вошла в версию 0.2.3 от автора — правило отключено автоматически.',
+            'Сторож: правка Tokenomics ?? null вошла в версию 0.2.3 от автора — правило отключено автоматически.'
+            ' bb-config обновлён. Коммит ждёт отправки.',
+        )
+        self.save.assert_called_once_with(
+            keeper.REPO, self.state, 'tokenomics', 'Tokenomics', '0.2.3', 'b' * 40,
         )
         self.assertEqual(json.loads((self.state / 'tokenomics-upstream.json').read_text())['notice'], 'sent')
 
@@ -97,6 +104,15 @@ class RetirementTests(unittest.TestCase):
         self.assertEqual(self.check_rule('tokenomics', plugin)['state'], 'ready')
         self.assertFalse((self.state / 'tokenomics-upstream.json').exists())
         self.tell.assert_not_called()
+        self.save.assert_not_called()
+
+    def test_notification_reports_pending_patch_instead_of_a_commit(self):
+        plugin = self.plugin('tokenomics', 'f' * 40, '0.2.3', {'server.ts': FIXED})
+        self.fetch.return_value = {'server.ts': FIXED}
+        self.save.return_value = ' Автокоммит отложен. Патч подготовлен.'
+        self.assertEqual(self.check_rule('tokenomics', plugin)['state'], 'retired')
+        self.assertIn('Автокоммит отложен. Патч подготовлен.', self.tell.call_args.args[1])
+        self.assertNotIn('ждёт отправки', self.tell.call_args.args[1])
 
     def test_ambiguous_delivery_does_not_repeat_the_notification(self):
         plugin = self.plugin('tokenomics', 'e' * 40, '0.2.3', {'server.ts': FIXED})

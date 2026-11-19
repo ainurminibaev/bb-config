@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import tempfile
 from urllib.parse import quote
 from urllib.request import urlopen
@@ -45,7 +46,7 @@ def write_state(path, value):
             temp.unlink(missing_ok=True)
 
 
-def retirement(plugin_id, spec, plugin, status, state_dir, contains_fix, tell):
+def retirement(plugin_id, spec, plugin, status, state_dir, contains_fix, tell, save, repo):
     if plugin_id in os.environ.get('BB_KEEPER_FORCE_RULES', '').replace(',', ' ').split():
         return None
     path = state_dir / f'{plugin_id}-upstream.json'
@@ -72,6 +73,13 @@ def retirement(plugin_id, spec, plugin, status, state_dir, contains_fix, tell):
         return None
     change = spec.get('notice', spec['name'])
     message = f'Сторож: правка {change} вошла в версию {version} от автора — правило отключено автоматически.'
+    if 'bbConfig' not in state:
+        try:
+            state['bbConfig'] = save(repo, state_dir, plugin_id, spec['name'], version, state['checkedRevision'])
+        except (OSError, ValueError, subprocess.SubprocessError):
+            state['bbConfig'] = ' Не удалось подготовить изменения bb-config.'
+        write_state(path, state)
+    message += state['bbConfig']
     thread = os.environ.get('BB_KEEPER_NOTICE_THREAD', '').strip()
     if thread and 'notice' not in state:
         # The CLI has no idempotency key. Reserve before calling it so a lost

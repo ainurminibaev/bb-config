@@ -54,3 +54,9 @@ fix. Its status becomes `retired`. Set `forceRules` to the plugin ID (or a
 comma-separated list) to re-enable it. If `retirementNoticeThread` is set
 in BB, Keeper queues one notice per retired rule. Ambiguous delivery is
 recorded in the status to avoid duplicate messages.
+
+Before notifying, Keeper runs the private settings snapshot and its drift
+check. It records the upstream version in the rule registry and
+`docs/customizations.md`, with a local-only commit. If either file has local
+edits, Keeper leaves a patch in `.local/plugin-patches/kept/` and reports it
+in the notice.
