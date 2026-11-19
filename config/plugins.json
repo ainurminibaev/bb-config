@@ -273,7 +273,7 @@
   },
   {
     "id": "mac-computer-use",
-    "version": "0.4.0",
+    "version": "0.4.1",
     "enabled": true,
     "name": "Mac Computer Use",
     "source": "git:https://github.com/ainurminibaev/bb-plugin-mac-computer-use.git@semver:>=0.4.0 <1.0.0"
