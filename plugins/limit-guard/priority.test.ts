@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyWindow, type QuotaWindow } from './logic.ts';
-import { decideHold, DEFAULT_POLICIES as P, floatingThreshold, normalizePolicy, parseMode, policiesFor, priorityStatus } from './priority-logic.ts';
+import { decideHold, DEFAULT_POLICIES as P, floatingThreshold, holdReason, nextCheckAt, normalizePolicy, parseMode, policiesFor, priorityStatus } from './priority-logic.ts';
 
 const H = 3_600_000;
 const now = Date.parse('2026-11-19T12:00:00Z');
@@ -51,4 +51,15 @@ test('policies and modes are parsed safely', () => {
   assert.equal(parseMode('фоновый'), 'background');
   assert.equal(parseMode('off'), 'normal');
   assert.equal(parseMode('x'), null);
+});
+
+test('an exhausted window waits for its reset like a scheduled retry', () => {
+  const d = decideHold('low', P, [w('Current session', 100, 2 * H)], null, now);
+  assert.equal(d.hold, true);
+  if (!d.hold) return;
+  assert.equal(d.exhausted, true);
+  assert.equal(nextCheckAt(d, now), now + 2 * H + 30_000);
+  assert.match(holdReason('low', d), /исчерпан до .* — отправится само после сброса/);
+  const partial = decideHold('low', P, [w('Current session', 70, 2 * H)], null, now);
+  if (partial.hold) { assert.equal(partial.exhausted, false); assert.equal(nextCheckAt(partial, now), now + 2 * 60_000); }
 });

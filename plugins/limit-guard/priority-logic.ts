@@ -1,6 +1,6 @@
 // Low-priority threads: new turns wait while a watched window is above a threshold
 // that floats with the time left until that window resets. Pure logic, no I/O.
-import { appliesToModel, type QuotaWindow, type WindowKind } from './logic.ts';
+import { appliesToModel, clock, type QuotaWindow, type WindowKind } from './logic.ts';
 
 export type PriorityMode = 'normal' | 'low' | 'background';
 export const PRIORITY_MODES: PriorityMode[] = ['normal', 'low', 'background'];
@@ -54,7 +54,7 @@ export function floatingThreshold(policy: WindowPolicy, key: PolicyKey, resetsAt
 
 export type HoldDecision =
   | { hold: false; unknown: boolean; closest: { label: string; used: number; threshold: number } | null }
-  | { hold: true; label: string; key: PolicyKey; used: number; threshold: number; resetsAt: number | null };
+  | { hold: true; label: string; key: PolicyKey; used: number; threshold: number; resetsAt: number | null; exhausted: boolean };
 
 export function decideHold(mode: PriorityMode, base: Policies, windows: QuotaWindow[] | null, model: string | null, now: number): HoldDecision {
   if (mode === 'normal') return { hold: false, unknown: false, closest: null };
@@ -72,11 +72,13 @@ export function decideHold(mode: PriorityMode, base: Policies, windows: QuotaWin
     if (!worst || margin > worst.margin) worst = { label: w.label, key, used: Math.round(w.usedPercent), threshold, resetsAt: Number.isFinite(resetsAt) ? resetsAt : null, margin };
   }
   if (!worst) return { hold: false, unknown: false, closest: null };
-  if (worst.margin >= 0) return { hold: true, label: worst.label, key: worst.key, used: worst.used, threshold: worst.threshold, resetsAt: worst.resetsAt };
+  if (worst.margin >= 0) return { hold: true, label: worst.label, key: worst.key, used: worst.used, threshold: worst.threshold, resetsAt: worst.resetsAt, exhausted: worst.used >= 100 };
   return { hold: false, unknown: false, closest: { label: worst.label, used: worst.used, threshold: worst.threshold } };
 }
 
 export function holdReason(mode: PriorityMode, d: Extract<HoldDecision, { hold: true }>): string {
+  // An exhausted window waits for its reset anyway: say so plainly, like a scheduled retry.
+  if (d.exhausted) return `Лимит «${d.label}» исчерпан${d.resetsAt ? ` до ${clock(d.resetsAt)}` : ''} — отправится само после сброса.`;
   return `${MODE_LABEL[mode][0]!.toUpperCase()}${MODE_LABEL[mode].slice(1)} тред: «${d.label}» ${d.used}% при пороге ${d.threshold}% (порог растёт к сбросу окна). Отправится само, когда лимит станет ниже порога.`;
 }
 
@@ -90,6 +92,7 @@ export function priorityStatus(mode: PriorityMode, d: HoldDecision, inheritedFro
 
 /** Ask again soon, and right after the blocking window resets. */
 export function nextCheckAt(d: Extract<HoldDecision, { hold: true }>, now: number, stepMs = 2 * 60_000): number {
+  if (d.exhausted && d.resetsAt !== null && d.resetsAt > now) return d.resetsAt + 30_000;
   return d.resetsAt !== null && d.resetsAt > now ? Math.min(now + stepMs, d.resetsAt + 30_000) : now + stepMs;
 }
 
