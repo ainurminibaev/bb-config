@@ -1,0 +1,10 @@
+{
+  "id": "plugin-machine-tabs-project-alias-paging",
+  "title": "Machine Tabs 0.2.3 — сортировка и счётчик строк проекта",
+  "component": "machine-tabs",
+  "where": "server",
+  "kind": "local-plugin",
+  "plugin": "machine-tabs",
+  "rerun": "При совпадении версии и источника шаг проверяет состояние плагина.",
+  "rollback": "Восстановить каталог plugins/machine-tabs из предыдущей установленной версии, выполнить npm ci --include=dev, затем bb plugin build и bb plugin reload machine-tabs."
+}
