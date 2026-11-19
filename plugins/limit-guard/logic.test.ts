@@ -1,10 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { agentRules, appliesToModel, assess, classifyWindow, formatDuration, normalizeThresholds, render, type QuotaWindow } from './logic.ts';
+import {
+  agentRules, appliesToModel, assess, blockingReset, classifyWindow, DEFAULT_THRESHOLDS as T, etaMinutes, formatDuration,
+  normalizeThresholds, notification, render, shouldNotify, stuckText, thresholdMessage, windowMode,
+  type QuotaWindow, type StuckThread,
+} from './logic.ts';
 
-const T = { economy: 70, finish: 90 };
 const w = (label: string, usedPercent: number, extra: Partial<QuotaWindow> = {}): QuotaWindow => ({
-  label, kind: classifyWindow(label, extra.kind, extra.model), model: extra.model ?? null, usedPercent, resetsAt: null, ...extra,
+  label, kind: classifyWindow(label, extra.kind, extra.model), model: extra.model ?? null, usedPercent, resetsAt: null, etaMinutes: null, ...extra,
 });
 
 test('classifies provider windows', () => {
@@ -16,65 +19,81 @@ test('classifies provider windows', () => {
 });
 
 test('model window counts only for that model', () => {
-  const fable = w('Fable', 95, { model: 'fable' });
+  const fable = w('Fable', 98, { model: 'fable' });
   assert.equal(appliesToModel(fable, 'claude-fable-5-2'), true);
   assert.equal(appliesToModel(fable, 'claude-opus-5-5'), false);
-  assert.equal(appliesToModel(fable, null), false);
   assert.equal(assess([w('Current session', 10), fable], 'claude-opus-5-5', T).mode, 'normal');
   assert.equal(assess([w('Current session', 10), fable], 'claude-fable-5-2', T).mode, 'finish');
 });
 
-test('mode follows the fullest relevant window', () => {
-  assert.equal(assess([w('Current session', 69), w('Weekly limit', 20)], null, T).mode, 'normal');
-  const a = assess([w('Current session', 40), w('Weekly limit', 70)], null, T);
-  assert.equal(a.mode, 'economy');
-  assert.equal(a.driver?.label, 'Weekly limit');
-  assert.equal(assess([w('Current session', 90)], null, T).mode, 'finish');
-  assert.equal(assess([w('Current session', 100)], null, T).mode, 'finish');
+test('five-hour and weekly windows have their own thresholds', () => {
+  assert.equal(windowMode(w('Current session', 74), T), 'normal');
+  assert.equal(windowMode(w('Current session', 75), T), 'economy');
+  assert.equal(windowMode(w('Current session', 90), T), 'finish');
+  assert.equal(windowMode(w('Weekly limit', 89), T), 'normal', 'a week at 70-89% must not slow work for days');
+  assert.equal(windowMode(w('Weekly limit', 90), T), 'economy');
+  assert.equal(windowMode(w('Weekly limit', 97), T), 'finish');
 });
 
-test('no data means unknown, never normal', () => {
+test('pace makes a short window stricter, never a weekly one', () => {
+  assert.equal(windowMode(w('Current session', 50, { etaMinutes: 35 }), T), 'economy');
+  assert.equal(windowMode(w('Current session', 60, { etaMinutes: 8 }), T), 'finish');
+  assert.equal(windowMode(w('Weekly limit', 60, { etaMinutes: 5 }), T), 'normal');
+});
+
+test('the worst window decides', () => {
+  const a = assess([w('Current session', 40), w('Weekly limit', 92)], null, T);
+  assert.equal(a.mode, 'economy');
+  assert.equal(a.driver?.label, 'Weekly limit');
+});
+
+test('pace is estimated from recent growth only', () => {
+  assert.equal(etaMinutes([{ at: 0, used: 50 }]), null);
+  assert.equal(etaMinutes([{ at: 0, used: 50 }, { at: 60_000, used: 60 }]), null, 'less than two minutes of data');
+  assert.equal(etaMinutes([{ at: 0, used: 50 }, { at: 10 * 60_000, used: 50 }]), null, 'not growing');
+  assert.equal(Math.round(etaMinutes([{ at: 0, used: 20 }, { at: 8 * 60_000, used: 33 }])!), 41);
+});
+
+test('no data is unknown and reads as normal work', () => {
   const a = assess([], null, T, 'машина не ответила');
   assert.equal(a.mode, 'unknown');
-  assert.match(render(a, 0, { provider: 'codex', model: null, host: null, fetchedAt: null }), /НЕИЗВЕСТНО[\s\S]*маленькими шагами/);
+  assert.match(render(a, 0, { provider: 'codex', model: null, host: null, fetchedAt: null }), /НЕИЗВЕСТНО[\s\S]*работай как обычно/);
 });
 
 test('thresholds are clamped and ordered', () => {
-  assert.deepEqual(normalizeThresholds({}), { economy: 70, finish: 90 });
-  assert.deepEqual(normalizeThresholds({ economy: 95, finish: 80 }), { economy: 95, finish: 95 });
-  assert.deepEqual(normalizeThresholds({ economy: -5, finish: 500 }), { economy: 1, finish: 100 });
-  assert.deepEqual(normalizeThresholds({ economy: Number.NaN, finish: 85.6 }), { economy: 70, finish: 86 });
+  assert.deepEqual(normalizeThresholds({}), T);
+  const odd = normalizeThresholds({ shortEconomy: 95, shortFinish: 80, longEconomy: -5, longFinish: 500, etaEconomy: 5, etaFinish: 20 });
+  assert.deepEqual(odd.short, { economy: 95, finish: 95 });
+  assert.deepEqual(odd.long, { economy: 1, finish: 100 });
+  assert.equal(odd.etaEconomyMinutes, 20);
 });
 
 test('durations read naturally', () => {
   assert.equal(formatDuration(-1), 'скоро');
-  assert.equal(formatDuration(20_000), '1 мин');
   assert.equal(formatDuration(33 * 60_000), '33 мин');
   assert.equal(formatDuration(125 * 60_000), '2 ч 5 мин');
   assert.equal(formatDuration((3 * 24 + 4) * 3_600_000), '3 д 4 ч');
 });
 
-test('finish near a five-hour reset suggests waiting', () => {
+test('finish near a reset says save and wait; a model window suggests another model', () => {
   const now = Date.parse('2026-11-19T09:00:00Z');
-  const a = assess([w('Current session', 96, { resetsAt: '2026-11-19T09:20:00Z' })], null, T);
-  const out = render(a, now, { provider: 'claude-code', model: 'claude-opus-5-5', host: 'Tru', fetchedAt: '2026-11-19T08:59:00Z' });
-  assert.match(out, /ФИНИШ \(Current session: 96%, сброс через 20 мин\)/);
-  assert.match(out, /provider-retry/);
-  assert.match(out, /данные на 08:59 UTC/);
+  const soon = assess([w('Current session', 96, { resetsAt: '2026-11-19T09:20:00Z' })], null, T);
+  assert.match(render(soon, now, { provider: 'claude-code', model: null, host: 'Tru', fetchedAt: null }), /сохранись и жди/);
+  const model = assess([w('Fable', 99, { model: 'fable', resetsAt: '2026-11-24T09:00:00Z' })], 'claude-fable-5-2', T);
+  assert.match(thresholdMessage(model, now, 'claude-code'), /^\[limit-guard\] Лимит Claude «Fable»: 99%.*ФИНИШ.*другой модели этого же сервиса/);
 });
 
-test('agent rules state thresholds and safety', () => {
-  const rules = agentRules({ economy: 60, finish: 85 });
-  assert.match(rules, /обычный < 60%, экономный 60–84%, финиш ≥ 85%/);
-  assert.match(rules, /force-push/);
+test('agent rules no longer allow commits or pushes for the sake of the limit', () => {
+  const rules = agentRules();
+  assert.match(rules, /Ради лимита коммитить не нужно/);
+  assert.match(rules, /не `git add -A`/);
+  assert.doesNotMatch(rules, /разрешает .*push/);
   assert.ok(rules.length < 4096);
 });
 
-import { blockingReset, notification, shouldNotify, stuckText, type StuckThread } from './logic.ts';
-
 const stuck = (extra: Partial<StuckThread> = {}): StuckThread => ({
-  threadId: 'thr_1', title: 'Задача', providerId: 'claude-code', failedAt: 0, resetAt: null, retryAt: null,
-  alternative: null, notified: false, ...extra,
+  threadId: 'thr_1', title: 'Задача', providerId: 'claude-code', failedAt: 0, resetAt: null, retry: 'unknown', retryAt: null,
+  modelLimited: null, alternative: null, notified: false, ...extra,
 });
 
 test('blocking reset is the full window that frees last', () => {
@@ -83,23 +102,24 @@ test('blocking reset is the full window that frees last', () => {
   assert.equal(blockingReset([]), null);
 });
 
-test('notify only when waiting is long or nothing will resume', () => {
+test('notify: long waits and no-retry; short or unknown-retry waits stay quiet', () => {
   const now = 1_000_000;
-  assert.equal(shouldNotify({ resetAt: now + 10 * 60_000, retryAt: now + 10 * 60_000, notified: false }, now, 60), false);
-  assert.equal(shouldNotify({ resetAt: now + 3 * 3_600_000, retryAt: now + 3 * 3_600_000, notified: false }, now, 60), true);
-  assert.equal(shouldNotify({ resetAt: now + 5 * 60_000, retryAt: null, notified: false }, now, 60), true);
-  assert.equal(shouldNotify({ resetAt: null, retryAt: null, notified: true }, now, 60), false);
+  assert.equal(shouldNotify({ resetAt: now + 10 * 60_000, retry: 'queued', retryAt: now + 10 * 60_000, notified: false }, now, 60), false);
+  assert.equal(shouldNotify({ resetAt: now + 3 * 3_600_000, retry: 'queued', retryAt: now + 3 * 3_600_000, notified: false }, now, 60), true);
+  assert.equal(shouldNotify({ resetAt: now + 5 * 60_000, retry: 'unknown', retryAt: null, notified: false }, now, 60), false, 'decision not seen: no false alarm');
+  assert.equal(shouldNotify({ resetAt: now + 5 * 60_000, retry: 'none', retryAt: null, notified: false }, now, 60), true, 'nothing will resume it');
+  assert.equal(shouldNotify({ resetAt: null, retry: 'none', retryAt: null, notified: true }, now, 60), false);
 });
 
-test('suggests a handoff only to a provider with room', () => {
+test('suggestions: another provider with room, another model, or wait', () => {
   const now = Date.parse('2026-11-19T09:00:00Z');
-  const s = stuck({ retryAt: now + 2 * 3_600_000, alternative: { providerId: 'codex', mode: 'normal', percent: 20 } });
+  const s = stuck({ retry: 'queued', retryAt: now + 2 * 3_600_000, alternative: { providerId: 'codex', mode: 'normal', percent: 20 } });
   const text = stuckText(s, now);
-  assert.match(text, /bb handoff thr_1 --to codex --briefing/);
-  assert.match(text, /bb provider-retry cancel thr_1/);
+  assert.match(text, /bb handoff thr_1 --to codex\s/);
+  assert.doesNotMatch(text, /--briefing/, 'the stuck source agent cannot write a briefing');
   assert.match(notification(s, now).body, /Можно передать в Codex \(занято 20%\)/);
-  const full = stuck({ alternative: { providerId: 'codex', mode: 'finish', percent: 97 } });
-  assert.doesNotMatch(stuckText(full, now), /bb handoff/);
-  assert.match(notification(full, now).body, /Автоповтора нет/);
+  assert.match(stuckText(stuck({ modelLimited: 'Fable' }), now), /смените модель/);
+  assert.match(notification(stuck({ retry: 'none' }), now).body, /Автоповтора нет/);
+  assert.match(stuckText(stuck({ alternative: { providerId: 'codex', mode: 'finish', percent: 97 } }), now), /лучше подождать/);
   assert.ok(notification(stuck({ title: 'x'.repeat(200) }), now).title.length <= 80);
 });
