@@ -2,8 +2,8 @@ import { PluginCliError, cliCommand, defineCli, type BbPluginApi } from '@get-bb
 import { z } from 'zod';
 import { hostContract, rpcContract, type Catalog, type ProjectView } from './contract';
 import {
-  AUTO_FIELDS, applyAuto, applyManual, describePull, diffManifests, emptyEntry, eventSummary, hydrate, otherCopies, pushHistory, renameCategory, needsDescription, search, syncEvent, unlock, verdict, worktreeLine, worktreeState, formatBytes, neighbourNote,
-  type AutoField, type CopyDiff, type Entry, type Link, type Manifest, type Patch, type PullResult, type Scan, type SourceView, type Status, type SyncEvent, type WorktreeView,
+  AUTO_FIELDS, applyAuto, applyManual, describePull, diffManifests, emptyEntry, eventSummary, hydrate, otherCopies, pushHistory, renameCategory, needsDescription, search, syncEvent, unlock, verdict, worktreeLine, worktreeState, formatBytes, neighbourNote, isolationRule, landText,
+  type AutoField, type CopyDiff, type Entry, type Link, type Manifest, type Patch, type PullResult, type Scan, type SourceView, type Status, type SyncEvent, type WorktreeView, type Isolation, type LandResult,
 } from './core';
 
 const SYNC_RULE = 'Project Catalog — синхронизация папки. При первом сообщении треда плагин сам делает git fetch и подтягивает свежее, только если папка чистая, ветка просто отстала и в папке не работает другой тред; итог — ниже, если он успел. Инструмент project_sync (или `bb catalog pull`) повторяет это вручную, например после долгой работы. Если сказано о незакоммиченных правках, расхождении веток или неотправленных коммитах — не исправляй это сам без просьбы пользователя: учти в работе и коротко скажи пользователю.';
@@ -32,6 +32,22 @@ export default function projectCatalog(bb: BbPluginApi) {
   const db = bb.storage.database();
   bb.storage.migrate(db, [`CREATE TABLE IF NOT EXISTS manifests (source_id TEXT PRIMARY KEY, scanned_at INTEGER NOT NULL, json TEXT NOT NULL)`]);
   const host = bb.hosts.experimental_client({ contract: hostContract });
+  const settings = bb.settings.define({
+    autoPull: {
+      type: 'select', label: 'Синхронизация папки при старте треда', options: ['auto', 'check', 'off'], default: 'auto',
+      experimental_optionLabels: { auto: 'Подтягивать свежее, если папка чистая и свободна', check: 'Только проверять и сообщать', off: 'Выключено' },
+      description: 'Подтягивание — только fast-forward чистой ветки; в папке с файлом .bb/hands-off ничего не делается.',
+    },
+    cleanupMissingWorktrees: {
+      type: 'boolean', label: 'Удалять записи BB о worktree, папки которых нет', default: false,
+      description: 'Выключено: такие записи только показываются в «Worktree». Отключённый диск тоже выглядит как «папки нет».',
+    },
+  });
+  let autoPull = 'auto';
+  let cleanupMissing = false;
+  const applySettings = (v: { autoPull: string; cleanupMissingWorktrees: boolean }) => { autoPull = v.autoPull; cleanupMissing = v.cleanupMissingWorktrees; };
+  void settings.get().then(applySettings).catch(() => undefined);
+  settings.onChange(next => applySettings(next));
 
   const ready = (async () => {
     for (const key of await bb.storage.kv.list('p:')) {
@@ -288,20 +304,29 @@ export default function projectCatalog(bb: BbPluginApi) {
     return historyWrite;
   }
 
-  type ThreadRowLite = { id: string; status: string; title?: string | null; titleFallback?: string | null; environmentPath?: string | null; environmentHostId?: string | null };
+  type ThreadRowLite = { id: string; status: string; updatedAt: number; title?: string | null; titleFallback?: string | null; environmentPath?: string | null; environmentHostId?: string | null };
+  const overlaps = (a: string, b: string) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+  /**
+   * Other threads (hidden ones too) in the same folder, a folder inside it or around it,
+   * running now or in the last 15 minutes. Throws when the list cannot be read: callers then do not pull.
+   */
   async function neighbours(threadId: string, hostId: string, path: string) {
-    const all = await bb.sdk.threads.list({ archived: false, limit: 500 }) as unknown;
+    const all = await bb.sdk.threads.list({ archived: false, limit: 500, includeHidden: true, hostId }) as unknown;
     const rows = (Array.isArray(all) ? all : ((all as { threads?: unknown[] }).threads ?? [])) as ThreadRowLite[];
-    return rows.filter(row => row.id !== threadId && row.status === 'active' && row.environmentHostId === hostId && row.environmentPath === path)
-      .map(row => ({ id: row.id, title: row.title || row.titleFallback || 'без названия' }));
+    return rows.filter(row => row.id !== threadId && row.environmentHostId === hostId && row.environmentPath && overlaps(row.environmentPath.replace(/\/+$/, ''), path.replace(/\/+$/, ''))
+      && (row.status === 'active' || Date.now() - row.updatedAt < 15 * 60_000))
+      .map(row => ({ id: row.id, title: row.title || row.titleFallback || 'без названия', active: row.status === 'active' }));
   }
-  async function syncFolder(input: { threadId: string; projectId: string | null; hostId: string; path: string; apply: boolean }): Promise<{ text: string; result: PullResult; event: SyncEvent | null }> {
+  async function syncFolder(input: { threadId: string; projectId: string | null; hostId: string; path: string; apply: boolean }): Promise<{ text: string; result: PullResult; event: SyncEvent | null; busy: { id: string; title: string }[] }> {
     const hostRow = await bb.sdk.hosts.get({ hostId: input.hostId });
-    const busy = input.apply ? await neighbours(input.threadId, input.hostId, input.path).catch(() => []) : [];
-    const apply = input.apply && busy.length === 0;
+    let busy: { id: string; title: string; active: boolean }[] = [];
+    let unknownNeighbours = false;
+    try { busy = await neighbours(input.threadId, input.hostId, input.path); } catch { unknownNeighbours = true; }
+    // Pull only when it is certain that nobody else works here.
+    const apply = input.apply && busy.length === 0 && !unknownNeighbours;
     const result = await host.call('pull', { path: input.path, apply }, { hostId: input.hostId, timeoutMs: 180_000 });
     const lines = [describePull(result, `${hostRow.name}: ${input.path}`)];
-    const note = neighbourNote(busy);
+    const note = input.apply ? (unknownNeighbours ? 'не удалось проверить, работают ли здесь другие треды — свежее не подтягиваю' : neighbourNote(busy)) : null;
     if (note) lines.push(note);
     let event: SyncEvent | null = null;
     if (input.projectId) {
@@ -314,7 +339,7 @@ export default function projectCatalog(bb: BbPluginApi) {
       } catch { /* the project may be personal or deleted */ }
       if (result.repos.some(repo => repo.action === 'pulled' || repo.fetched)) scanInBackground(input.projectId);
     }
-    return { text: lines.join('\n'), result, event };
+    return { text: lines.join('\n'), result, event, busy };
   }
   async function syncThread(threadId: string, apply: boolean) {
     const thread = await bb.sdk.threads.get({ threadId });
@@ -325,28 +350,47 @@ export default function projectCatalog(bb: BbPluginApi) {
   }
 
   // ---------- Pull by code at a thread's first message ----------
-  // The result is offered to the agent through the session instructions when it is ready in time.
-  const startSync = new Map<string, { at: number; text: string }>();
+  // BB gives a dispatch hook 10 seconds, so the hook only starts the sync and queues the first
+  // message ("wait"); the sync's end re-asks the hook, which then lets the message go. Files never
+  // change under a running turn, and the result reaches the session instructions.
+  const startSync = new Map<string, { at: number; text: string; done: boolean; startedAt: number }>();
+  const decided = new Set<string>();
   bb.experimental_hooks.on('message.dispatch', async ctx => {
     try {
-      if (ctx.attempt !== 'start-turn' || ctx.project.kind !== 'standard' || !ctx.environment || ctx.environment.status !== 'ready' || !ctx.environment.path) return { action: 'proceed' };
-      if (startSync.has(ctx.thread.id)) return { action: 'proceed' };
+      if (ctx.attempt !== 'start-turn' || decided.has(ctx.thread.id)) return { action: 'proceed' };
+      const running = startSync.get(ctx.thread.id);
+      if (running) {
+        if (running.done || Date.now() - running.startedAt > 5 * 60_000) { decided.add(ctx.thread.id); return { action: 'proceed' }; }
+        return { action: 'wait', reason: 'Синхронизирую папку проекта перед стартом', sendAt: Date.now() + 60_000 };
+      }
+      if (autoPull === 'off' || ctx.project.kind !== 'standard' || !ctx.environment || ctx.environment.status !== 'ready' || !ctx.environment.path) { decided.add(ctx.thread.id); return { action: 'proceed' }; }
       const earlier = await bb.sdk.threads.events.list({ threadId: ctx.thread.id, types: ['client/turn/requested'], limit: '1' });
-      if (earlier.length) return { action: 'proceed' };
-      startSync.set(ctx.thread.id, { at: Date.now(), text: '' });
-      const job = syncFolder({ threadId: ctx.thread.id, projectId: ctx.project.id, hostId: ctx.environment.hostId, path: ctx.environment.path, apply: true })
-        .then(done => { startSync.set(ctx.thread.id, { at: Date.now(), text: done.text }); })
-        .catch(error => bb.log.warn(`Project Catalog: start sync failed: ${String(error)}`));
-      // Never hold the user's first message for long: 20 seconds at most.
-      await Promise.race([job, new Promise(resolve => setTimeout(resolve, 20_000))]);
-    } catch (error) { bb.log.warn(`Project Catalog: dispatch hook: ${String(error)}`); }
-    return { action: 'proceed' };
+      if (earlier.length) { decided.add(ctx.thread.id); return { action: 'proceed' }; }
+      const threadId = ctx.thread.id;
+      startSync.set(threadId, { at: Date.now(), text: '', done: false, startedAt: Date.now() });
+      void syncFolder({ threadId, projectId: ctx.project.id, hostId: ctx.environment.hostId, path: ctx.environment.path, apply: autoPull === 'auto' })
+        .then(done => {
+          // A busy git folder: this thread is told to work in its own copy before editing.
+          const rule = done.busy.length && done.result.kind === 'git' ? `\n\n${isolationRule(done.busy)}` : '';
+          startSync.set(threadId, { at: Date.now(), text: `${done.text}${rule}`, done: true, startedAt: Date.now() });
+        })
+        .catch(error => {
+          bb.log.warn(`Project Catalog: start sync failed: ${String(error)}`);
+          startSync.set(threadId, { at: Date.now(), text: '', done: true, startedAt: Date.now() });
+        })
+        .finally(() => { void bb.experimental_hooks.recheck('message.dispatch').catch(() => undefined); });
+      return { action: 'wait', reason: 'Синхронизирую папку проекта перед стартом', sendAt: Date.now() + 60_000 };
+    } catch (error) {
+      bb.log.warn(`Project Catalog: dispatch hook: ${String(error)}`);
+      decided.add(ctx.thread.id);
+      return { action: 'proceed' };
+    }
   });
-  setInterval(() => { for (const [id, value] of startSync) if (Date.now() - value.at > 6 * 60 * 60_000) startSync.delete(id); }, 60 * 60_000).unref?.();
+  setInterval(() => { for (const [id, value] of startSync) if (Date.now() - value.at > 6 * 60 * 60_000) startSync.delete(id); if (decided.size > 5000) decided.clear(); }, 60 * 60_000).unref?.();
 
   // ---------- Worktrees: extra copies BB made for threads ----------
   const sizeCache = new Map<string, { at: number; bytes: number | null; exists: boolean }>();
-  async function worktrees(projectId: string | null, withSizes: boolean): Promise<WorktreeView[]> {
+  async function worktrees(projectId: string | null, withSizes: boolean | 'exists'): Promise<WorktreeView[]> {
     const [environments, hostList] = await Promise.all([
       bb.sdk.environments.list({ ...(projectId ? { projectId } : {}), status: 'ready', limit: 500 }),
       bb.sdk.hosts.list(),
@@ -379,20 +423,20 @@ export default function projectCatalog(bb: BbPluginApi) {
       const byHost = new Map<string, WorktreeView[]>();
       for (const view of views) {
         const cached = sizeCache.get(view.environmentId);
-        if (cached && now - cached.at < 60 * 60_000) continue;
+        if (withSizes === true && cached && now - cached.at < 60 * 60_000) continue;
         if (!online.has(view.hostId)) continue;
         byHost.set(view.hostId, [...(byHost.get(view.hostId) ?? []), view]);
       }
       await Promise.all([...byHost].map(async ([hostId, items]) => {
         try {
-          const { sizes } = await host.call('sizes', { paths: items.slice(0, 50).map(item => item.path) }, { hostId, timeoutMs: 120_000 });
+          const { sizes } = await host.call('sizes', { paths: items.slice(0, 50).map(item => item.path), measure: withSizes === true }, { hostId, timeoutMs: 120_000 });
           for (const item of items) {
             const found = sizes.find(size => size.path === item.path);
-            item.bytes = found?.bytes ?? null;
+            if (withSizes === true) item.bytes = found?.bytes ?? null;
             item.exists = found ? found.exists : null;
             item.state = worktreeState(item, now);
             // A failed measurement is retried next time instead of being cached.
-            if (found && (found.bytes !== null || !found.exists)) sizeCache.set(item.environmentId, { at: Date.now(), bytes: found.bytes, exists: found.exists });
+            if (withSizes === true && found && (found.bytes !== null || !found.exists)) sizeCache.set(item.environmentId, { at: Date.now(), bytes: found.bytes, exists: found.exists });
           }
         } catch (error) { bb.log.warn(`Project Catalog: worktree sizes failed on ${hostNames.get(hostId) ?? hostId}: ${String(error)}`); }
       }));
@@ -400,6 +444,86 @@ export default function projectCatalog(bb: BbPluginApi) {
     const order: Record<WorktreeView['state'], number> = { missing: 0, orphan: 1, idle: 2, active: 3, retiring: 4 };
     return views.sort((a, b) => order[a.state] - order[b.state] || (b.bytes ?? 0) - (a.bytes ?? 0));
   }
+
+  // ---------- Isolation: a second thread works in its own copy, landed back by code ----------
+  async function isolationOf(threadId: string) { return (await bb.storage.kv.get<Isolation>(`iso:${threadId}`)) ?? null; }
+  async function isolateThread(threadId: string): Promise<string> {
+    const existing = await isolationOf(threadId);
+    if (existing) return `Копия уже есть: ${existing.copy} (ветка ${existing.branch}). Если тред ещё не там — вызови update_environment_directory с этим путём и закончи ход.`;
+    const thread = await bb.sdk.threads.get({ threadId });
+    if (!thread.environmentId || !thread.projectId) throw new Error('у треда нет папки проекта');
+    const environment = await bb.sdk.environments.get({ environmentId: thread.environmentId }) as { hostId: string; path?: string | null };
+    if (!environment.path) throw new Error('у окружения треда нет пути');
+    const result = await host.call('isolate', { path: environment.path, threadId }, { hostId: environment.hostId, timeoutMs: 20 * 60_000 });
+    if (!result.ok || !result.path || !result.branch || !result.base) return `Копию сделать не удалось: ${result.message}. Работай в общей папке осторожно: только свои файлы, без переключения ветки.`;
+    const record: Isolation = { threadId, projectId: thread.projectId, hostId: environment.hostId, main: environment.path, copy: result.path, branch: result.branch, base: result.base, createdAt: Date.now(), lastLand: null, lastLandAt: null };
+    await bb.storage.kv.set(`iso:${threadId}`, record);
+    return [`Создана отдельная копия: ${result.path}`, `Ветка ${result.branch} от ${result.base.slice(0, 8)}${result.copied ? `; скопировано файлов по .worktreeinclude: ${result.copied}` : ''}${result.setup ? `; ${result.setup}` : ''}.`,
+      `Сейчас вызови update_environment_directory с путём ${result.path} и закончи ход — следующий ход начнётся в копии.`,
+      'В конце работы закоммить законченное и вызови project_land.'].join('\n');
+  }
+  const landing = new Set<string>();
+  async function tryLand(record: Isolation, reason: string): Promise<LandResult> {
+    if (landing.has(record.threadId)) return { state: 'waiting', message: 'вливание уже идёт', commits: 0 };
+    landing.add(record.threadId);
+    try {
+      const busy = (await neighbours(record.threadId, record.hostId, record.main).catch(() => [])).filter(n => n.active);
+      const result: LandResult = busy.length
+        ? { state: 'waiting', message: `в основной папке сейчас работает ${busy.map(n => `«${n.title}»`).join(', ')} — волью, когда она освободится`, commits: 0 }
+        : await host.call('land', { path: record.main, copy: record.copy, branch: record.branch }, { hostId: record.hostId, timeoutMs: 300_000 });
+      if (result.state === 'landed' || result.state === 'gone') {
+        await bb.storage.kv.delete(`iso:${record.threadId}`);
+        if (result.state === 'landed') {
+          await remember(record.projectId, { at: Date.now(), hostId: record.hostId, hostName: (await bb.sdk.hosts.get({ hostId: record.hostId }).catch(() => ({ name: record.hostId }))).name,
+            path: record.main, threadId: record.threadId, apply: true, kind: 'git',
+            repos: [{ path: '', branch: record.branch, action: 'pulled', reason: null, commits: result.commits, behind: 0, ahead: 0, dirty: 0 }] });
+        }
+      } else {
+        await bb.storage.kv.set(`iso:${record.threadId}`, { ...record, lastLand: result, lastLandAt: Date.now() });
+      }
+      bb.log.info(`Project Catalog: land ${record.branch} (${reason}): ${result.state} — ${result.message}`);
+      return result;
+    } finally { landing.delete(record.threadId); }
+  }
+  /** Land every copy whose thread is not running; called when threads go idle and every 30 minutes. */
+  async function landPending(reason: string) {
+    for (const key of await bb.storage.kv.list('iso:')) {
+      const record = await bb.storage.kv.get<Isolation>(key);
+      if (!record) continue;
+      const thread = await bb.sdk.threads.get({ threadId: record.threadId }).catch(() => null);
+      if (thread && thread.status === 'active') continue;
+      if (record.lastLand?.state === 'conflict' && record.lastLandAt && Date.now() - record.lastLandAt < 6 * 60 * 60_000) continue;
+      await tryLand(record, reason).catch(error => bb.log.warn(`Project Catalog: land failed: ${String(error)}`));
+    }
+  }
+  bb.events.on('thread.idle', () => { void landPending('тред затих'); });
+  bb.events.on('thread.archived', () => { void landPending('тред в архиве'); });
+
+  bb.agents.registerTool({
+    name: 'project_isolate',
+    description: 'Создать отдельную копию проекта (git worktree на своей ветке) для этого треда, когда в общей папке работает другой тред. Вызывать до первых правок. Затем вызвать update_environment_directory с путём из ответа.',
+    presentation: { label: { pending: 'Делаю отдельную копию проекта', completed: 'Сделал отдельную копию проекта' } },
+    parameters: z.object({}),
+    async execute(_params, ctx) {
+      try { return await isolateThread(ctx.threadId); }
+      catch (error) { return { content: [{ type: 'text', text: `Копия не создана: ${error instanceof Error ? error.message : String(error)}` }], isError: true }; }
+    },
+  });
+  bb.agents.registerTool({
+    name: 'project_land',
+    description: 'Влить закоммиченную работу из отдельной копии этого треда в основную папку проекта и убрать копию. Если основная папка занята или в ней правки — плагин вольёт позже сам.',
+    presentation: { label: { pending: 'Вливаю работу в основную папку', completed: 'Влил работу в основную папку' } },
+    parameters: z.object({}),
+    async execute(_params, ctx) {
+      try {
+        const record = await isolationOf(ctx.threadId);
+        if (!record) return 'У этого треда нет отдельной копии — вливать нечего.';
+        const result = await tryLand(record, 'агент попросил');
+        return result.state === 'landed' ? `${landText(result)}. Тред остаётся в папке копии, которой больше нет: для дальнейшей работы вызови update_environment_directory с путём ${record.main}.`
+          : result.state === 'waiting' ? `${landText(result)}. Плагин вольёт сам, когда станет можно.` : landText(result);
+      } catch (error) { return { content: [{ type: 'text', text: `Вливание не выполнено: ${error instanceof Error ? error.message : String(error)}` }], isError: true }; }
+    },
+  });
 
   bb.agents.registerTool({
     name: 'project_sync',
@@ -420,10 +544,10 @@ export default function projectCatalog(bb: BbPluginApi) {
     const started = startSync.get(ctx.thread.id)?.text;
     const syncRule = started ? `${SYNC_RULE}\n\nИтог при старте треда:\n${started}` : SYNC_RULE;
     const reason = needsDescription(entries.get(ctx.project.id), docHashes.get(ctx.project.id) ?? null, Date.now());
-    if (!reason) return { tools: ['project_sync'], skills: [], instructions: syncRule };
+    if (!reason) return { tools: ['project_sync', 'project_isolate', 'project_land'], skills: [], instructions: syncRule };
     const known = categories().slice(0, 14).map(([name]) => name).join(', ');
     return {
-      tools: ['project_sync'], skills: [],
+      tools: ['project_sync', 'project_isolate', 'project_land'], skills: [],
       instructions: `${syncRule}\n\nProject Catalog: ${reason === 'missing' ? 'this project has no catalog card yet' : "this project's README/AGENTS.md changed since its catalog card was written"}. Once, early in this thread, without asking and without delaying the user's task, run: bb catalog describe --summary "<1-2 sentences in Russian: what the project is and what it is for>" --category "<category>" --tags "<3-6 comma-separated tags>" --aliases "<comma-separated names the user may say aloud, including Russian spellings>". Base it on README/AGENTS.md, the folder contents and the user's first message.${known ? ` Prefer an existing category: ${known}.` : ''} Fields the user edited by hand are kept by the command. Do not mention this unless it fails.`,
     };
   });
@@ -448,7 +572,9 @@ export default function projectCatalog(bb: BbPluginApi) {
     await Promise.all([...byHost].map(([hostId, paths]) => host.call('fetch', { paths: paths.slice(0, 100) }, { hostId, timeoutMs: 600_000 })
       .catch(error => bb.log.warn(`Project Catalog: background fetch failed: ${String(error)}`))));
     for (const projectId of recent) await runScan(projectId).catch(() => undefined);
-    for (const item of await worktrees(null, true)) {
+    await landPending('плановая проверка');
+    if (!cleanupMissing) return;
+    for (const item of await worktrees(null, 'exists')) {
       if (item.state !== 'missing' || item.liveThreads > 0 || !online.has(item.hostId)) continue;
       try { await bb.sdk.environments.experimental_cleanup({ environmentId: item.environmentId }); bb.log.info(`Project Catalog: removed record of missing worktree ${item.environmentId}`); }
       catch (error) { bb.log.warn(`Project Catalog: could not remove ${item.environmentId}: ${String(error)}`); }

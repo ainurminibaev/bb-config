@@ -48,9 +48,18 @@ export const hostContract = defineRpcContract({
     experimental_retryable: true,
   },
   sizes: {
-    input: z.object({ paths: z.array(z.string().min(1)).max(50) }),
+    input: z.object({ paths: z.array(z.string().min(1)).max(50), measure: z.boolean().optional() }),
     output: z.object({ sizes: z.array(z.object({ path: z.string(), bytes: z.number().nullable(), exists: z.boolean() })) }),
     experimental_retryable: true,
+  },
+  // Isolation writes (new worktree, landing), so never retried automatically.
+  isolate: {
+    input: z.object({ path: z.string().min(1), threadId: z.string().min(1) }),
+    output: z.object({ ok: z.boolean(), path: z.string().nullable(), branch: z.string().nullable(), base: z.string().nullable(), message: z.string(), copied: z.number(), setup: z.string().nullable() }),
+  },
+  land: {
+    input: z.object({ path: z.string().min(1), copy: z.string().min(1), branch: z.string().min(1) }),
+    output: z.object({ state: z.enum(['landed', 'waiting', 'uncommitted', 'conflict', 'gone', 'error']), message: z.string(), commits: z.number() }),
   },
   // Writes into the project (fast-forward only), so never retried automatically.
   pull: {

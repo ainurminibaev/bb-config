@@ -506,3 +506,30 @@ export function neighbourNote(neighbours: { id: string; title: string }[]): stri
   if (!neighbours.length) return null;
   return `в этой папке сейчас работает ${neighbours.length === 1 ? 'тред' : 'треды'} ${neighbours.slice(0, 3).map(n => `«${n.title}» (${n.id})`).join(', ')} — свежее не подтягиваю, только проверяю`;
 }
+
+// ---------- Isolation of a second thread in a busy folder ----------
+
+export type IsolateResult = { ok: boolean; path: string | null; branch: string | null; base: string | null; message: string; copied: number; setup: string | null };
+export type LandResult = { state: 'landed' | 'waiting' | 'uncommitted' | 'conflict' | 'gone' | 'error'; message: string; commits: number };
+export type Isolation = {
+  threadId: string; projectId: string; hostId: string; main: string; copy: string; branch: string; base: string;
+  createdAt: number; lastLand: LandResult | null; lastLandAt: number | null;
+};
+
+/** Branch and folder names for a thread's own copy: stable, filesystem-safe, short. */
+export function isolationNames(threadId: string, main: string, dataDir: string) {
+  const short = threadId.replace(/^thr_/, '').replace(/[^A-Za-z0-9]/g, '').slice(0, 12);
+  const base = main.replace(/\/+$/, '').split('/').pop() || 'project';
+  return { branch: `bb/iso-${short}`, target: `${dataDir.replace(/\/+$/, '')}/copies/${short}/${base}` };
+}
+
+/** The rule an agent gets when its folder is busy at its first message. */
+export function isolationRule(busy: { id: string; title: string }[]): string {
+  const who = busy.slice(0, 3).map(n => `«${n.title}» (${n.id})`).join(', ');
+  return `ПАПКА ЗАНЯТА: здесь сейчас работает ${busy.length === 1 ? 'тред' : 'треды'} ${who}. Если по задаче ты будешь менять файлы — первым действием, до любых правок, вызови инструмент project_isolate: он создаст твою отдельную копию проекта на своей ветке. Затем сразу вызови update_environment_directory с путём из его ответа и закончи ход — следующий ход начнётся в копии. В конце работы закоммить законченное и вызови project_land: плагин вольёт коммиты в основную папку, когда она освободится, и уберёт копию. Если задача только на чтение или вопрос — копия не нужна.`;
+}
+
+export function landText(result: LandResult): string {
+  const head: Record<LandResult['state'], string> = { landed: 'Влито', waiting: 'Ждёт', uncommitted: 'Не готово', conflict: 'Конфликт', gone: 'Копии нет', error: 'Ошибка' };
+  return `${head[result.state]}: ${result.message}`;
+}

@@ -8,7 +8,8 @@ import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { experimental_defineHostEntry } from '@get-bb/plugin-sdk/host';
 import { hostContract } from './contract';
-import type { GitState, Manifest, PlainState, PullResult, RepoSync, Scan } from './core';
+import { isolationNames } from './core';
+import type { GitState, IsolateResult, LandResult, Manifest, PlainState, PullResult, RepoSync, Scan } from './core';
 
 const SKIP = new Set(['.git', 'node_modules', '.venv', 'venv', 'env', '__pycache__', '.mypy_cache', '.pytest_cache', '.ruff_cache', 'dist', 'build', '.next', '.nuxt', '.cache', '.turbo', 'target', '.gradle', '.idea', '.vscode', '.playwright-cli', '.playwright-mcp', 'Pods', 'DerivedData', '.DS_Store', '.Trash', 'tmp', 'logs']);
 const MAX_FILES = 4000;
@@ -190,8 +191,13 @@ export async function pullRepo(root: string, rel: string, apply: boolean, signal
     result.commits = (incoming ?? '').split('\n').filter(Boolean);
     return result;
   }
-  const merge = await run(path, ['merge', '--ff-only', '--quiet', '@{u}'], 60_000, signal);
-  if (!merge.ok) { result.reason = 'merge-failed'; result.fetchError = merge.err; return result; }
+  const merge = await run(path, ['merge', '--ff-only', '--quiet', '@{u}'], 10 * 60_000, signal);
+  if (!merge.ok) {
+    // A hook (post-merge, LFS) may fail after the branch already moved: report what really happened.
+    const now = (await git(path, ['rev-parse', 'HEAD'], signal))?.trim() ?? null;
+    if (!now || now === state.head) { result.reason = 'merge-failed'; result.fetchError = merge.err; return result; }
+    result.fetchError = `git сообщил об ошибке после обновления: ${merge.err}`;
+  }
   const after = (await git(path, ['rev-parse', 'HEAD'], signal))?.trim() ?? null;
   result.after = after;
   result.action = 'pulled';
@@ -214,6 +220,79 @@ function diskUsage(path: string, signal: AbortSignal) {
   });
 }
 
+// ---------- Isolation: a second thread in a busy folder works in its own copy ----------
+
+/** Untracked files the project asks to copy into new copies (`.worktreeinclude`, gitignore syntax). */
+async function includedFiles(main: string, signal: AbortSignal): Promise<string[]> {
+  try { await stat(join(main, '.worktreeinclude')); } catch { return []; }
+  const listed = await run(main, ['ls-files', '--others', '--ignored', '--exclude-from=.worktreeinclude', '-z'], 60_000, signal);
+  return listed.out.split('\0').filter(Boolean).filter(f => !f.split('/').some(part => SKIP.has(part))).slice(0, 2000);
+}
+
+export async function isolate(main: string, target: string, branch: string, signal: AbortSignal, runSetup = true): Promise<IsolateResult> {
+  if ((await git(main, ['rev-parse', '--is-inside-work-tree'], signal))?.trim() !== 'true') return { ok: false, path: null, branch: null, base: null, message: 'папка без git — отдельную копию сделать нельзя', copied: 0, setup: null };
+  try { await stat(target); return { ok: false, path: null, branch: null, base: null, message: `копия ${target} уже существует`, copied: 0, setup: null }; } catch { /* free */ }
+  const base = (await git(main, ['rev-parse', 'HEAD'], signal))?.trim() ?? null;
+  if (!base) return { ok: false, path: null, branch: null, base: null, message: 'в репозитории нет коммитов', copied: 0, setup: null };
+  await mkdir(join(target, '..'), { recursive: true });
+  const added = await run(main, ['worktree', 'add', '--quiet', '-b', branch, target, base], 120_000, signal);
+  if (!added.ok) return { ok: false, path: null, branch: null, base, message: `git worktree add: ${added.err}`, copied: 0, setup: null };
+  let copied = 0;
+  for (const file of await includedFiles(main, signal)) {
+    try {
+      const to = join(target, file);
+      try { await stat(to); continue; } catch { /* do not replace */ }
+      await mkdir(join(to, '..'), { recursive: true });
+      await writeFile(to, await readFile(join(main, file)));
+      copied++;
+    } catch { /* unreadable: skip */ }
+  }
+  let setup: string | null = null;
+  if (runSetup) {
+    try {
+      await stat(join(target, '.bb-env-setup.sh'));
+      setup = await new Promise<string>(resolve => {
+        execFile('bash', ['.bb-env-setup.sh'], { cwd: target, timeout: 15 * 60_000, maxBuffer: 4 * 1024 * 1024, signal },
+          error => resolve(error ? `.bb-env-setup.sh не удался: ${String(error.message).slice(0, 200)}` : '.bb-env-setup.sh выполнен'));
+      });
+    } catch { /* no setup script */ }
+  }
+  return { ok: true, path: target, branch, base, message: 'копия создана', copied, setup };
+}
+
+/**
+ * Bring a copy's commits back into the main folder's branch, then remove the copy.
+ * Only when the copy has no uncommitted work and the main folder is clean; a fast-forward
+ * when possible, otherwise a rebase of the copy's own branch. Conflicts change nothing.
+ */
+export async function land(main: string, copy: string, branch: string, signal: AbortSignal): Promise<LandResult> {
+  const out = (state: LandResult['state'], message: string, commits = 0): LandResult => ({ state, message, commits });
+  try { await stat(copy); } catch { return out('gone', 'копии уже нет'); }
+  if ((await git(copy, ['status', '--porcelain'], signal))?.trim()) return out('uncommitted', 'в копии есть незакоммиченные правки — сначала закоммитьте законченное');
+  const mainBranch = (await git(main, ['branch', '--show-current'], signal))?.trim();
+  if (!mainBranch) return out('waiting', 'основная папка не на ветке (detached) — вливать некуда');
+  const mainHead = (await git(main, ['rev-parse', 'HEAD'], signal))?.trim() ?? '';
+  const ahead = Number((await git(copy, ['rev-list', '--count', `${mainHead}..${branch}`], signal))?.trim() ?? '0');
+  const remove = async () => {
+    await run(main, ['worktree', 'remove', copy], 60_000, signal);
+    await run(main, ['branch', '-D', branch], 30_000, signal);
+  };
+  if (ahead === 0) { await remove(); return out('landed', 'новых коммитов нет — копия убрана'); }
+  if ((await git(main, ['status', '--porcelain', '--untracked-files=no'], signal))?.trim()) return out('waiting', 'в основной папке есть незакоммиченные правки — волью, когда она станет чистой');
+  const isAncestor = (await run(main, ['merge-base', '--is-ancestor', mainHead, branch], 30_000, signal)).ok;
+  if (!isAncestor) {
+    const rebased = await run(copy, ['rebase', '--quiet', mainHead], 120_000, signal);
+    if (!rebased.ok) {
+      await run(copy, ['rebase', '--abort'], 30_000, signal);
+      return out('conflict', `конфликт при переносе коммитов на свежую версию основной папки — копия и ветка ${branch} оставлены как есть`);
+    }
+  }
+  const merged = await run(main, ['merge', '--ff-only', '--quiet', branch], 60_000, signal);
+  if (!merged.ok) return out('waiting', `основная папка не приняла коммиты: ${merged.err}`);
+  await remove();
+  return out('landed', `влито коммитов: ${ahead} в ${mainBranch}; копия убрана`, ahead);
+}
+
 export default experimental_defineHostEntry({
   contract: hostContract,
   handlers: {
@@ -234,14 +313,22 @@ export default experimental_defineHostEntry({
       }
       return { results };
     },
-    sizes: async ({ paths }, ctx) => {
+    sizes: async ({ paths, measure }, ctx) => {
       const sizes: { path: string; bytes: number | null; exists: boolean }[] = [];
       for (const path of paths) {
         let exists = true;
         try { await stat(path); } catch (error) { exists = (error as NodeJS.ErrnoException).code !== 'ENOENT'; }
-        sizes.push({ path, exists, bytes: exists ? await diskUsage(path, ctx.signal) : null });
+        sizes.push({ path, exists, bytes: exists && measure !== false ? await diskUsage(path, ctx.signal) : null });
       }
       return { sizes };
+    },
+    isolate: async ({ path, threadId }, ctx): Promise<IsolateResult> => {
+      try { const names = isolationNames(threadId, path, ctx.experimental_paths.dataDir); return await isolate(path, names.target, names.branch, ctx.signal); }
+      catch (error) { return { ok: false, path: null, branch: null, base: null, message: String((error as Error).message).slice(0, 300), copied: 0, setup: null }; }
+    },
+    land: async ({ path, copy, branch }, ctx): Promise<LandResult> => {
+      try { return await land(path, copy, branch, ctx.signal); }
+      catch (error) { return { state: 'error', message: String((error as Error).message).slice(0, 300), commits: 0 }; }
     },
     pull: async ({ path, apply }, ctx): Promise<PullResult> => {
       try {
