@@ -1,0 +1,15 @@
+.fth-banner{display:flex;align-items:center;gap:8px;padding:0 6px 0 12px;min-height:24px;color:var(--muted-foreground);font-size:12px;line-height:1.35}
+.fth-text{flex:1;min-width:0}
+.fth-error{color:var(--destructive-text,var(--destructive))}
+.fth-banner button{font:inherit;border:0;padding:0;cursor:pointer;background:transparent;color:inherit;flex-shrink:0}
+.fth-link{color:var(--foreground)!important;font-weight:500;white-space:nowrap}
+.fth-link:hover{text-decoration:underline}
+.fth-link:disabled{opacity:.5;cursor:wait}
+.fth-icon{width:18px;height:18px;border-radius:50%;font-size:12px;line-height:18px;text-align:center}
+.fth-icon:hover,.fth-icon[aria-expanded=true]{background:var(--accent);color:var(--foreground)}
+.fth-banner button:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.fth-tip{position:fixed;z-index:1200;width:min(300px,calc(100vw - 16px));box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--popover);color:var(--popover-foreground);box-shadow:var(--shadow-lg,0 8px 30px rgb(0 0 0/.25));font-size:12px;line-height:1.45;pointer-events:none}
+.fth-tip p{margin:0 0 6px}.fth-tip p:last-child{margin-bottom:0}
+.fth-tip strong{font-weight:600}
+.fth-note{color:var(--muted-foreground);font-size:11px}
+@media (max-width:640px){.fth-banner{flex-wrap:wrap;row-gap:2px;padding-right:12px}.fth-text{flex-basis:100%}}

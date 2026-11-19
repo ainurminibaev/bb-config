@@ -1,0 +1,2 @@
+.lp-badge{font-size:10px;line-height:1;color:var(--muted-foreground);opacity:.75;white-space:nowrap}
+.lp-badge[data-holding=true]{color:var(--warning-text,var(--warning));opacity:1}

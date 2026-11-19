@@ -1,0 +1,36 @@
+{
+  "name": "bb-plugin-fresh-thread-hint",
+  "version": "0.1.1",
+  "type": "module",
+  "description": "Suggests continuing in a new thread when a large Claude thread has gone cold",
+  "engines": {
+    "bb": ">=0.50",
+    "bbPluginSdk": ">=0.6.157"
+  },
+  "bb": {
+    "name": "Fresh Thread Hint",
+    "description": "A line above the composer of a large, long-idle Claude thread: stay for the same task, continue in a new thread for a new one.",
+    "branding": {
+      "icon": "ArrowTurnForward"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx",
+    "skills": [
+      "skills"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test logic.test.ts"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.6.157",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.7.0"
+  }
+}
