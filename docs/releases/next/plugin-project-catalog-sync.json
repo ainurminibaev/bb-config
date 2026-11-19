@@ -1,0 +1,10 @@
+{
+  "id": "plugin-project-catalog-sync",
+  "title": "Project Catalog 0.4.0: безопасная синхронизация папки перед работой и история",
+  "component": "project-catalog",
+  "where": "server",
+  "kind": "local-plugin",
+  "plugin": "project-catalog",
+  "rerun": "Проверяет установленную версию project-catalog; при совпадении ничего не делает. Карточки и история в хранилище BB сохраняются.",
+  "rollback": "Установить предыдущую версию плагина из прошлого релиза bb-config; карточки каталога не теряются. Агенты перестанут получать project_sync."
+}

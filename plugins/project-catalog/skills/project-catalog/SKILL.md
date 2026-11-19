@@ -1,6 +1,6 @@
 ---
 name: project-catalog
-description: Find a BB project by meaning (aliases, Russian names, tags, description), read or update its catalog card, and check whether its copies on different machines are in sync, with `bb catalog`.
+description: Find a BB project by meaning (aliases, Russian names, tags, description), read or update its catalog card, check whether its copies on different machines are in sync, and safely pull the thread folder before work (project_sync, `bb catalog pull`, history), with `bb catalog`.
 ---
 
 # Project Catalog
@@ -69,7 +69,7 @@ bb catalog sync                 # every project that needs attention
 bb catalog sync <project> --refresh
 ```
 
-The check is read-only: it never fetches, commits, copies or deletes.
+The periodic check is read-only: it never fetches, commits, copies or deletes.
 
 - git folder: branch, HEAD, uncommitted and untracked files, unpushed commits,
   commits behind the last fetched upstream, stash.
@@ -98,6 +98,34 @@ run `bb catalog set <project> --local-paths "folder-a,folder-b"` (relative to
 the project root; an empty string clears the list). Unsaved git work inside a
 local folder is still reported. Do either only on the user's word.
 
-The plugin does not synchronise copies. To reconcile a diverged project, read
-`bb catalog sync <project>`, agree the direction with the user, and copy files
-with the usual tools.
+## Pull before work
+
+```sh
+bb catalog pull                 # this thread's folder: git fetch + fast-forward if clean
+bb catalog pull --check         # fetch and report only
+bb catalog history [project]    # who pulled or checked, where, with what result
+```
+
+Agents get the same as the tool `project_sync` (`check_only` optional) and a
+standing rule: call it once before the first edit in a project folder. It works
+on the thread's own machine and folder (a worktree too). It fast-forwards only a
+clean branch that has an upstream. It never merges, rebases, stashes, resets or
+pushes. The answer lists incoming commits and the other machines' copies from
+the last scan.
+
+| Result | Meaning | What to do |
+| --- | --- | --- |
+| подтянуто N | fast-forwarded | read the listed commits |
+| актуально | nothing new | — |
+| не отправлены | local commits not on the server | push them when the work is saved |
+| незакоммиченные правки | behind, but edits are present | work on; tell the user the folder is behind |
+| разошлись | local and server both have new commits | do not resolve on your own; tell the user |
+| нет пары на сервере | a task branch (worktree) | normal; nothing to pull |
+| нет связи | fetch failed (network or auth) | tell the user; data may be stale |
+
+A folder without git has its nested repositories handled one by one. A plain
+folder itself is never synchronised. The last 40 events per project are kept
+and shown in the card section «Синхронизация».
+
+To reconcile a diverged project, read `bb catalog sync <project>`, agree the
+direction with the user, and act with the usual git tools.

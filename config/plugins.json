@@ -322,7 +322,7 @@
   },
   {
     "id": "project-catalog",
-    "version": "0.3.3",
+    "version": "0.4.0",
     "enabled": true,
     "name": "Project Catalog",
     "source": "path:plugins/project-catalog"
@@ -424,6 +424,13 @@
     "enabled": true,
     "name": "Side chat",
     "source": "builtin:side-chat"
+  },
+  {
+    "id": "limit-guard",
+    "version": "0.1.0",
+    "enabled": true,
+    "name": "Limit Guard",
+    "source": "path:plugins/limit-guard"
   },
   {
     "id": "thread-account-usage",

@@ -33,7 +33,7 @@ machine, agent and the tab read the same cards.
   the sidebar filters the sections themselves.
 - **Keyboard.** `/` search, `↑`/`↓` move through the list, `N` new thread in
   the open project, `Esc` closes the panel.
-- **CLI for agents.** `bb catalog find|list|show|describe|set|unlock|categories|group|sync`.
+- **CLI for agents.** `bb catalog find|list|show|describe|set|unlock|categories|group|sync|pull|history`.
   Output is a few compact lines; `--json` is available. Commands and limits are
   documented in `skills/project-catalog/SKILL.md`.
 - **Automatic description.** A thread working in a project with no card, or
@@ -43,10 +43,10 @@ machine, agent and the tab read the same cards.
 - **Manual edits are kept.** A field edited in the tab or with `bb catalog set`
   is locked: automatic description skips it. Notes are never written
   automatically. A lock is removed in the card or with `bb catalog unlock`.
-- **Copies on machines.** A read-only host module reports git state
+- **Copies on machines.** The host module's scan reports git state
   (uncommitted, unpushed, behind, stash) or, for folders without git, compares
-  the contents of copies on two machines by hash. It never fetches, commits,
-  copies or deletes. Scans run every three hours, when the tab opens with data
+  the contents of copies on two machines by hash. The scan never fetches,
+  commits, copies or deletes. Scans run every three hours, when the tab opens with data
   older than 30 minutes, and on demand.
 
 A git repository nested in a folder that is not a repository itself is judged
@@ -58,9 +58,25 @@ folder) can be marked in the card or with `bb catalog set <project>
 that are meant to differ on every machine are listed in the card or with
 `--local-paths "a,b"`; unsaved git work inside them is still reported.
 
+- **Safe pull before work (0.4.0).** Every project thread gets the agent tool
+  `project_sync` and a rule to call it once before its first edit. On the
+  thread's own machine it runs `git fetch` and then only a fast-forward of a
+  clean branch that has an upstream. Uncommitted edits, diverged branches, a
+  task branch without upstream, no remote or no network change nothing; the
+  agent is told why. It lists the incoming commits and the other machines'
+  copies from the last scan. A folder without git has its nested repositories
+  (two levels deep) handled one by one. `bb catalog pull [--check] [--thread <id>]`
+  does the same from a shell.
+- **Sync history.** The last 40 pulls and checks per project (machine, thread,
+  result) are kept in plugin storage, shown in the card as «Синхронизация» and
+  printed by `bb catalog history [project]`.
+
 ## Limits
 
-- The plugin shows divergence; it does not synchronise copies.
+- The plugin never merges, rebases, stashes, resets or pushes. Divergence is
+  shown, and a person or agent resolves it deliberately.
+- Plain folders are not synchronised; keep such a project on one machine or
+  make it a git repository.
 - An offline machine shows its last known state.
 - "Behind" relies on the refs from the last `git fetch`.
 - Folders are walked to depth 10 and 4000 files, skipping dependency and build
