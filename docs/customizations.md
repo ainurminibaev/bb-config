@@ -1680,6 +1680,25 @@ release range use BB's normal update/rollback path, not this migration script.
 The fork's v0.2.0 release is published. The pending bb-config steps cover the
 one-time migration and keeper change; no new bb-config stable release is implied.
 
+## ChatGPT Live в Voice Mode
+
+Voice Mode устанавливается из стабильного канала форка. Обновить установленный
+плагин можно командой `bb plugin update voice-mode`. Начиная с v0.2.3 рядом с
+кнопкой звонка есть выбор голоса Codex Live. Смена голоса во время разговора
+начинает новый звонок в том же треде. При кратком обрыве связи браузера звонок
+можно продолжить в течение восьми секунд.
+
+Для восстановления на Linux установите форк и Codex CLI с поддержкой realtime
+V3. Войдите в ChatGPT под пользователем службы BB и проверьте `codex login
+status`. Из каталога установленного Voice Mode под этим пользователем выполните
+`python3 codex_voice.py --install` с Python 3.12 и venv. После обновления моста
+повторите эту команду. Команда `bb plugin config voice-mode set connection
+codex-live-first` включает Live 1.1 по подписке. Голос восстанавливается из
+приватного снимка или через `bb plugin config voice-mode set codexLiveVoice
+<имя>`; имена указываются строчными буквами. Для резервного подключения нужен
+ChatGPT Realtime Connection с моделью `gpt-realtime-2.1`. Для Live через
+проектный API-ключ используется отдельный режим `live-first`.
+
 ## Независимо устанавливаемые продукты
 
 Компоненты из `config/externally-managed-plugins.json` не входят в комплект
