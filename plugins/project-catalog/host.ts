@@ -217,8 +217,12 @@ export default experimental_defineHostEntry({
   contract: hostContract,
   handlers: {
     sizes: async ({ paths }, ctx) => {
-      const sizes: { path: string; bytes: number | null }[] = [];
-      for (const path of paths) sizes.push({ path, bytes: await diskUsage(path, ctx.signal) });
+      const sizes: { path: string; bytes: number | null; exists: boolean }[] = [];
+      for (const path of paths) {
+        let exists = true;
+        try { await stat(path); } catch (error) { exists = (error as NodeJS.ErrnoException).code !== 'ENOENT'; }
+        sizes.push({ path, exists, bytes: exists ? await diskUsage(path, ctx.signal) : null });
+      }
       return { sizes };
     },
     pull: async ({ path, apply }, ctx): Promise<PullResult> => {

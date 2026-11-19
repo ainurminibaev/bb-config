@@ -150,12 +150,12 @@ function Worktrees({ projectId }: { projectId: string }) {
   if (!items?.length) return null;
   const copy = (value: string, what: string) => { void navigator.clipboard?.writeText(value).then(() => toast.success(`${what} скопирован`)); };
   const total = items.reduce((sum, item) => sum + (item.bytes ?? 0), 0);
-  const dot: Record<WorktreeView['state'], string> = { orphan: 'bg-red-500', idle: 'bg-amber-500', active: 'bg-emerald-500', retiring: 'bg-muted-foreground' };
+  const dot: Record<WorktreeView['state'], string> = { missing: 'bg-red-500', orphan: 'bg-red-500', idle: 'bg-amber-500', active: 'bg-emerald-500', retiring: 'bg-muted-foreground' };
   return <Section title={`Worktree · ${items.length}${total ? ` · ${formatBytes(total)}` : ''}`}>
     <ul className="space-y-2">{items.map(item => <li key={item.environmentId} className="flex items-start gap-2 text-xs">
       <span className={`mt-1.5 size-1.5 shrink-0 rounded-full ${dot[item.state]}`} aria-hidden="true"/>
       <div className="min-w-0 flex-1">
-        <p className="text-foreground/90">{item.branch ?? 'без ветки'} · {formatBytes(item.bytes)} · {shortHost(item.hostName)}</p>
+        <p className="text-foreground/90">{item.branch ?? 'без ветки'} · {item.state === 'missing' ? 'папки нет' : formatBytes(item.bytes)} · {shortHost(item.hostName)}</p>
         <p className="text-muted-foreground">тредов {item.liveThreads}{item.archivedThreads ? ` (+${item.archivedThreads} в архиве)` : ''} · {WORKTREE_STATE_TEXT[item.state]}</p>
         <button type="button" className="block max-w-full cursor-pointer truncate text-left font-mono text-[11px] text-muted-foreground/80 hover:text-foreground" title="Скопировать путь" onClick={() => copy(item.path, 'Путь')}>{item.path}</button>
       </div>

@@ -458,16 +458,17 @@ export function otherCopies(sources: SourceView[], currentHostId: string, now: n
 
 // ---------- Worktrees: extra copies BB made for threads ----------
 
-export type WorktreeState = 'active' | 'idle' | 'orphan' | 'retiring';
+export type WorktreeState = 'active' | 'idle' | 'orphan' | 'retiring' | 'missing';
 export type WorktreeView = {
   environmentId: string; projectId: string; hostId: string; hostName: string; path: string; branch: string | null;
   liveThreads: number; archivedThreads: number; lastActivity: number | null; retireAt: number | null;
-  bytes: number | null; state: WorktreeState;
+  bytes: number | null; exists: boolean | null; state: WorktreeState;
 };
 export const IDLE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Orphan: no live thread keeps it, yet BB is not removing it. Idle: live threads, but nothing for a week. */
-export function worktreeState(w: { liveThreads: number; lastActivity: number | null; retireAt: number | null }, now: number): WorktreeState {
+export function worktreeState(w: { liveThreads: number; lastActivity: number | null; retireAt: number | null; exists?: boolean | null }, now: number): WorktreeState {
+  if (w.exists === false) return 'missing';
   if (w.retireAt !== null) return 'retiring';
   if (w.liveThreads === 0) return 'orphan';
   if (w.lastActivity !== null && now - w.lastActivity > IDLE_AFTER_MS) return 'idle';
@@ -476,6 +477,7 @@ export function worktreeState(w: { liveThreads: number; lastActivity: number | n
 
 export function formatBytes(bytes: number | null): string {
   if (bytes === null) return 'размер неизвестен';
+  if (bytes === 0) return '0 КБ';
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} КБ`;
   if (bytes < 1024 ** 3) return `${Math.round(bytes / 1024 ** 2)} МБ`;
   return `${(bytes / 1024 ** 3).toFixed(1)} ГБ`;
@@ -486,9 +488,10 @@ export const WORKTREE_STATE_TEXT: Record<WorktreeState, string> = {
   idle: 'не трогали больше недели — если тред не нужен, архивируйте его, и BB удалит копию',
   orphan: 'живых тредов нет, но копия не удаляется — проверьте и удалите через bb environment cleanup',
   retiring: 'BB скоро удалит',
+  missing: 'папки уже нет, а запись в BB осталась — её можно убрать: bb environment cleanup <id>',
 };
 
 export function worktreeLine(w: WorktreeView, now: number): string {
   const ago = w.lastActivity === null ? 'активности нет' : `активность ${Math.max(0, Math.round((now - w.lastActivity) / 86_400_000))} дн назад`;
-  return `${w.hostName}: ${w.branch ?? 'без ветки'} — ${formatBytes(w.bytes)}, тредов ${w.liveThreads}${w.archivedThreads ? ` (+${w.archivedThreads} в архиве)` : ''}, ${ago}; ${WORKTREE_STATE_TEXT[w.state]}\n  ${w.path}  (${w.environmentId})`;
+  return `${w.hostName}: ${w.branch ?? 'без ветки'} — ${w.state === 'missing' ? 'папки нет' : formatBytes(w.bytes)}, тредов ${w.liveThreads}${w.archivedThreads ? ` (+${w.archivedThreads} в архиве)` : ''}, ${ago}; ${WORKTREE_STATE_TEXT[w.state]}\n  ${w.path}  (${w.environmentId})`;
 }

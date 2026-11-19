@@ -33,7 +33,7 @@ machine, agent and the tab read the same cards.
   the sidebar filters the sections themselves.
 - **Keyboard.** `/` search, `↑`/`↓` move through the list, `N` new thread in
   the open project, `Esc` closes the panel.
-- **CLI for agents.** `bb catalog find|list|show|describe|set|unlock|categories|group|sync|pull|history`.
+- **CLI for agents.** `bb catalog find|list|show|describe|set|unlock|categories|group|sync|pull|history|worktrees`.
   Output is a few compact lines; `--json` is available. Commands and limits are
   documented in `skills/project-catalog/SKILL.md`.
 - **Automatic description.** A thread working in a project with no card, or
@@ -70,6 +70,15 @@ that are meant to differ on every machine are listed in the card or with
 - **Sync history.** The last 40 pulls and checks per project (machine, thread,
   result) are kept in plugin storage, shown in the card as «Синхронизация» and
   printed by `bb catalog history [project]`.
+
+- **Worktrees (0.5.0).** `bb catalog worktrees [project] [--no-sizes]` and a
+  card section list the extra copies BB made for threads: machine, branch,
+  size (`du`, cached for an hour), live and archived threads, and a state.
+  States: in work, idle for a week, orphaned (no live thread but not removed),
+  missing (the folder is gone, the record stayed), being removed. Problems come
+  first. The plugin never deletes a worktree; BB removes one five minutes after
+  its last thread is archived, and `bb environment cleanup <id>` removes a stale
+  one by hand.
 
 ## Limits
 

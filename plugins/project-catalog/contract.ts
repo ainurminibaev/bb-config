@@ -28,7 +28,7 @@ const pullResultSchema = z.object({ kind: z.enum(['git', 'plain', 'missing', 'er
 export const worktreeSchema = z.object({
   environmentId: z.string(), projectId: z.string(), hostId: z.string(), hostName: z.string(), path: z.string(), branch: z.string().nullable(),
   liveThreads: z.number(), archivedThreads: z.number(), lastActivity: z.number().nullable(), retireAt: z.number().nullable(),
-  bytes: z.number().nullable(), state: z.enum(['active', 'idle', 'orphan', 'retiring']),
+  bytes: z.number().nullable(), exists: z.boolean().nullable(), state: z.enum(['active', 'idle', 'orphan', 'retiring', 'missing']),
 });
 export const syncEventSchema = z.object({
   at: z.number(), hostId: z.string(), hostName: z.string(), path: z.string(), threadId: z.string().nullable(),
@@ -44,7 +44,7 @@ export const hostContract = defineRpcContract({
   },
   sizes: {
     input: z.object({ paths: z.array(z.string().min(1)).max(50) }),
-    output: z.object({ sizes: z.array(z.object({ path: z.string(), bytes: z.number().nullable() })) }),
+    output: z.object({ sizes: z.array(z.object({ path: z.string(), bytes: z.number().nullable(), exists: z.boolean() })) }),
     experimental_retryable: true,
   },
   // Writes into the project (fast-forward only), so never retried automatically.

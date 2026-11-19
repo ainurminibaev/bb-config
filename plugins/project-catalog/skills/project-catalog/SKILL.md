@@ -129,3 +129,16 @@ and shown in the card section «Синхронизация».
 
 To reconcile a diverged project, read `bb catalog sync <project>`, agree the
 direction with the user, and act with the usual git tools.
+
+## Worktrees
+
+```sh
+bb catalog worktrees [project] [--no-sizes] [--json]
+```
+
+Lists worktree copies BB made for threads, problems first: `папки нет` (record
+without folder), `живых тредов нет` (orphaned), `не трогали больше недели`
+(idle), `в работе`, `BB скоро удалит`. Sizes come from `du` on each machine and
+are cached for an hour. Never delete a worktree or archive threads on your own:
+report and let the user decide. BB removes a worktree five minutes after its
+last thread is archived; `bb environment cleanup <id>` removes one by hand.

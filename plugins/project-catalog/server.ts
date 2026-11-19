@@ -312,7 +312,7 @@ export default function projectCatalog(bb: BbPluginApi) {
   }
 
   // ---------- Worktrees: extra copies BB made for threads ----------
-  const sizeCache = new Map<string, { at: number; bytes: number | null }>();
+  const sizeCache = new Map<string, { at: number; bytes: number | null; exists: boolean }>();
   async function worktrees(projectId: string | null, withSizes: boolean): Promise<WorktreeView[]> {
     const [environments, hostList] = await Promise.all([
       bb.sdk.environments.list({ ...(projectId ? { projectId } : {}), status: 'ready', limit: 500 }),
@@ -337,7 +337,7 @@ export default function projectCatalog(bb: BbPluginApi) {
       const view: WorktreeView = {
         environmentId, projectId: String(env.projectId), hostId, hostName: hostNames.get(hostId) ?? hostId, path: String(env.path),
         branch: typeof env.branchName === 'string' ? env.branchName : null, liveThreads: live.length, archivedThreads: archived.length,
-        lastActivity, retireAt, bytes: sizeCache.get(environmentId)?.bytes ?? null, state: 'active',
+        lastActivity, retireAt, bytes: sizeCache.get(environmentId)?.bytes ?? null, exists: sizeCache.get(environmentId)?.exists ?? null, state: 'active',
       };
       view.state = worktreeState(view, now);
       return view;
@@ -354,14 +354,17 @@ export default function projectCatalog(bb: BbPluginApi) {
         try {
           const { sizes } = await host.call('sizes', { paths: items.slice(0, 50).map(item => item.path) }, { hostId, timeoutMs: 120_000 });
           for (const item of items) {
-            const bytes = sizes.find(size => size.path === item.path)?.bytes ?? null;
-            sizeCache.set(item.environmentId, { at: Date.now(), bytes });
-            item.bytes = bytes;
+            const found = sizes.find(size => size.path === item.path);
+            item.bytes = found?.bytes ?? null;
+            item.exists = found ? found.exists : null;
+            item.state = worktreeState(item, now);
+            // A failed measurement is retried next time instead of being cached.
+            if (found && (found.bytes !== null || !found.exists)) sizeCache.set(item.environmentId, { at: Date.now(), bytes: found.bytes, exists: found.exists });
           }
         } catch (error) { bb.log.warn(`Project Catalog: worktree sizes failed on ${hostNames.get(hostId) ?? hostId}: ${String(error)}`); }
       }));
     }
-    const order: Record<WorktreeView['state'], number> = { orphan: 0, idle: 1, active: 2, retiring: 3 };
+    const order: Record<WorktreeView['state'], number> = { missing: 0, orphan: 1, idle: 2, active: 3, retiring: 4 };
     return views.sort((a, b) => order[a.state] - order[b.state] || (b.bytes ?? 0) - (a.bytes ?? 0));
   }
 
@@ -628,7 +631,7 @@ export default function projectCatalog(bb: BbPluginApi) {
           const names = new Map((await views()).list.map(item => [item.id, item.name]));
           const total = list.reduce((sum, item) => sum + (item.bytes ?? 0), 0);
           const now = Date.now();
-          return text([`Worktree: ${list.length}, всего ${formatBytes(total)}. BB удаляет копию через 5 минут после архивации последнего её треда.`,
+          return text([`Worktree: ${list.length}${total ? `, всего ${formatBytes(total)}` : ''}. BB удаляет копию через 5 минут после архивации последнего её треда.`,
             ...list.map(item => `${target ? '' : `[${names.get(item.projectId) ?? item.projectId}] `}${worktreeLine(item, now)}`)].join('\n'));
         },
       }),

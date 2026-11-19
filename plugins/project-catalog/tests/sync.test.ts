@@ -66,10 +66,12 @@ test('worktree states', () => {
   assert.equal(worktreeState({ liveThreads: 2, lastActivity: now - IDLE_AFTER_MS - 1, retireAt: null }, now), 'idle');
   assert.equal(worktreeState({ liveThreads: 0, lastActivity: now, retireAt: null }, now), 'orphan');
   assert.equal(worktreeState({ liveThreads: 0, lastActivity: null, retireAt: now + 5 }, now), 'retiring');
+  assert.equal(worktreeState({ liveThreads: 1, lastActivity: now, retireAt: null, exists: false }, now), 'missing');
 });
 
 test('sizes read naturally', () => {
   assert.equal(formatBytes(null), 'размер неизвестен');
+  assert.equal(formatBytes(0), '0 КБ');
   assert.equal(formatBytes(10), '1 КБ');
   assert.equal(formatBytes(5 * 1024 * 1024), '5 МБ');
   assert.equal(formatBytes(3.26 * 1024 ** 3), '3.3 ГБ');
