@@ -127,7 +127,8 @@ test('a plain folder: nested repositories get their own snapshots; secrets and h
   assert.ok(r.nested[0]!.commit);
   assert.equal(g(inner, 'show', `${nestedRef(REF, 'app')}:a.txt`), 'edited inside nested repo\n');
   assert.ok(unsafeShadowRoot('/root', '/root'));
-  assert.ok(unsafeShadowRoot('/Users/me', '/Users/me'));
+  const macHome = ['', 'Users', 'someone'].join('/');
+  assert.ok(unsafeShadowRoot(macHome, macHome));
   assert.ok(unsafeShadowRoot('/srv/projects', '/root'));
   assert.ok(unsafeShadowRoot('/root/.bb-machines/x/y', '/root'));
   assert.equal(unsafeShadowRoot('/srv/projects/notes', '/root'), null);
