@@ -74,11 +74,12 @@ class UpdatesTests(unittest.TestCase):
         return code, (json.loads(out.getvalue()) if code == 0 else err.getvalue())
 
     def test_missed_releases_apply_in_order_and_only_verified_steps_complete(self):
-        first = self.repo.release('v1.0.0', [step('one')])
+        original = self.repo.git(self.repo.root, 'rev-parse', 'HEAD')
+        self.repo.release('v1.0.0', [step('one')])
         second = self.repo.release('v1.1.0', [step('two', after=['v1.0.0/one']), step('broken', verify=HAS + ['/nonexistent'])])
         self.assertEqual(self.call('status')[1]['installed'], None)
-        self.assertEqual(self.call('fetch', 'v1.1.0', '--commit', second)[1]['result'], 'fast-forwarded')
-        self.assertEqual(self.call('fetch', 'v1.1.0', '--commit', second)[1]['result'], 'already-contained')
+        self.assertEqual(self.call('fetch', 'v1.1.0', '--commit', second)[1]['result'], 'prepared')
+        self.assertEqual(self.call('fetch', 'v1.1.0', '--commit', second)[1]['result'], 'already-prepared')
         code, begun = self.call('begin', 'v1.1.0', '--commit', second)
         self.assertEqual([row['step'] for row in begun['pending']], ['v1.0.0/one', 'v1.1.0/two', 'v1.1.0/broken'])
         self.assertEqual(self.call('run', 'v1.1.0/two')[0], 2)  # dependency from the skipped release
@@ -92,8 +93,9 @@ class UpdatesTests(unittest.TestCase):
         self.assertEqual(result['installed']['release'], 'v1.0.0')  # the partial release is not installed
         self.assertEqual([row['step'] for row in result['partial']['remaining']], ['v1.1.0/broken'])
         self.assertIsNone(self.call('status')[1]['run'])
-        self.repo.git(self.repo.root, 'merge-base', '--is-ancestor', first, 'HEAD')  # only the pinned tag is fetched
-        self.assertEqual(self.repo.git(self.repo.root, 'rev-parse', 'HEAD'), second)
+        self.assertEqual(self.repo.git(self.repo.root, 'rev-parse', 'HEAD'), original)
+        checkout = updates.release_tree(self.repo.root, second)
+        self.assertEqual(self.repo.git(checkout, 'tag'), 'v1.1.0')
 
     def test_parallel_run_is_refused_and_same_owner_resumes(self):
         sha = self.repo.release('v1.0.0', [step('one')])
@@ -108,16 +110,28 @@ class UpdatesTests(unittest.TestCase):
         self.assertEqual(self.call('run', 'v1.0.0/one')[0], 3)
         self.assertEqual(self.call('run', 'v1.0.0/nope', '--development')[0], 1)
 
-    def test_moved_tag_dirty_or_diverged_checkout_is_never_overwritten(self):
+    def test_prepares_a_release_without_touching_dirty_or_diverged_checkout(self):
         sha = self.repo.release('v1.0.0', [step('one')])
         self.assertIn('moved', self.call('fetch', 'v1.0.0', '--commit', '0' * 40)[1])
         tracked = self.repo.root / '.gitignore'
         tracked.write_text('local edit\n')
-        self.assertEqual(self.call('fetch', 'v1.0.0', '--commit', sha)[0], 3)
+        self.assertEqual(self.call('begin', 'v1.0.0', '--commit', sha)[0], 1)
+        self.assertEqual(self.call('fetch', 'v1.0.0', '--commit', sha)[0], 0)
         self.assertEqual(tracked.read_text(), 'local edit\n')
         self.repo.git(self.repo.root, '-c', 'user.email=a@example.org', '-c', 'user.name=a', 'commit', '-qam', 'local')
-        self.assertEqual(self.call('fetch', 'v1.0.0', '--commit', sha)[0], 3)
-        self.assertEqual(self.call('begin', 'v1.0.0', '--commit', sha)[0], 1)  # commit not contained
+        revision = self.repo.git(self.repo.root, 'rev-parse', 'HEAD')
+        prepared = self.call('fetch', 'v1.0.0', '--commit', sha)[1]
+        self.assertEqual(prepared['result'], 'already-prepared')
+        self.assertEqual(self.call('begin', 'v1.0.0', '--commit', sha)[0], 0)
+        self.assertEqual(self.repo.git(self.repo.root, 'rev-parse', 'HEAD'), revision)
+        release_root = Path(prepared['checkout'])
+        self.assertEqual(self.call('status', root=release_root)[1]['run']['commit'], sha)
+        (release_root / '.gitignore').write_text('changed release\n')
+        self.assertIn('contains local changes', self.call('run', 'v1.0.0/one')[1])
+        new_commit = self.repo.git(self.repo.author, 'rev-parse', 'HEAD^')
+        self.repo.git(self.repo.author, 'tag', '-f', 'v1.0.0', new_commit)
+        self.repo.git(self.repo.author, 'push', '-qf', 'origin', 'v1.0.0')
+        self.assertIn('moved', self.call('fetch', 'v1.0.0', '--commit', sha)[1])
 
     def test_executor_steps_are_tracked_per_machine_and_stay_pending_for_an_absent_one(self):
         sha = self.repo.release('v1.0.0', [step('cli', where='executors')])
@@ -137,7 +151,8 @@ class UpdatesTests(unittest.TestCase):
         self.repo.release('v1.0.0', [step('one')])
         sha = self.repo.release('v1.1.0', [step('two'), step('note', kind='manual', apply=None, verify=None)])
         self.call('fetch', 'v1.1.0', '--commit', sha)
-        self.assertEqual(self.call('run', 'v1.1.0/two', '--development')[1]['mode'], 'development')
+        release_root = updates.release_tree(self.repo.root, sha)
+        self.assertEqual(self.call('run', 'v1.1.0/two', '--development', root=release_root)[1]['mode'], 'development')
         self.assertEqual(self.call('baseline', 'v1.0.0', '--commit', sha)[0], 0)
         begun = self.call('begin', 'v1.1.0', '--commit', sha)[1]
         self.assertEqual([row['step'] for row in begun['pending']], ['v1.1.0/two', 'v1.1.0/note'])
@@ -160,30 +175,63 @@ class UpdatesTests(unittest.TestCase):
         installed = {}
         def execute(argv, root):
             commands.append(argv[:3])
-            if argv[1:3] == ['plugin', 'reload']:
-                installed['demo']['version'] = '1.2.0'
+            if argv[1:3] == ['plugin', 'install']:
+                installed['demo'].update(version='1.2.0', rootDir=argv[3].removeprefix('path:'), source=argv[3])
             return 0, ''
         with patch.object(updates, 'installed_plugins', lambda: installed), patch.object(updates, 'execute', execute):
             self.assertEqual(self.call('run', 'v1.0.0/demo')[1]['status'], 'not-applicable')  # not chosen by the user
             self.assertEqual(self.call('run', 'v1.0.0/fresh')[0], 3)  # new component: ask first
             self.assertEqual(commands, [])
             installed['demo'] = {'version': '1.1.0', 'rootDir': str(self.repo.root / 'plugins/demo'), 'enabled': True, 'status': 'running'}
-            self.assertEqual(self.call('run', 'v1.0.0/demo')[1]['how'], 'applied')
-            self.assertEqual([c[-1] for c in commands][-1], 'reload')
+            legacy = self.repo.root / 'plugins/demo'
+            legacy.mkdir(parents=True)
+            local_file = legacy / 'package.json'
+            local_file.write_text('{"version": "9.9.9"}')
+            result = self.call('run', 'v1.0.0/demo')[1]
+            self.assertEqual(result['how'], 'applied')
+            self.assertEqual(result['pluginChecks']['demo']['version'], '1.2.0')
+            self.assertTrue(result['pluginChecks']['demo']['source'].endswith(f'{sha}/plugins/demo'))
+            self.assertEqual(commands[-1][-1], 'install')
+            self.assertEqual(local_file.read_text(), '{"version": "9.9.9"}')
             count = len(commands)
             self.assertEqual(self.call('run', 'v1.0.0/demo')[1]['how'], 'existing')
             self.assertEqual(len(commands), count)
             installed['demo']['version'] = '1.3.0'  # the author's later build: nothing to apply from this release
             self.assertIn('newer than release 1.2.0', self.call('run', 'v1.0.0/demo')[1]['detail'])
-            installed['demo']['version'] = '1.1.0'
-            (self.repo.root / 'plugins/demo/package.json').write_text('{"version": "9.9.9"}')  # uncommitted local work
-            result = self.call('run', 'v1.0.0/demo')
-            self.assertEqual(result[0], 1)
-            self.assertIn('differs from the release', result[1])
-            self.assertEqual(len(commands), count)  # nothing was built from the modified checkout
-            self.repo.git(self.repo.root, 'checkout', '--', 'plugins/demo/package.json')
             installed['demo']['rootDir'] = '/elsewhere'
             self.assertEqual(self.call('run', 'v1.0.0/demo')[0], 1)  # another source is never replaced
+            self.assertEqual(len(commands), count)
+
+    def test_dependency_versions_are_checked_at_run_finish_and_after_external_updates(self):
+        requirement = {'id': 'catalog-addon', 'min': '1.4.0', 'before': '2.0.0'}
+        sha = self.repo.release('v1.0.0', [step('integration', requiresPlugins=[requirement])])
+        self.call('fetch', 'v1.0.0', '--commit', sha)
+        self.call('begin', 'v1.0.0', '--commit', sha)
+        installed = {}
+        with patch.object(updates, 'installed_plugins', lambda: installed):
+            self.assertIn('required plugin is missing', self.call('run', 'v1.0.0/integration')[1])
+            fake_userinfo = 'user:private'
+            addon = {'version': '1.3.0', 'enabled': True, 'status': 'running',
+                     'source': f'git:https://{fake_userinfo}@repo.example/addon'}
+            installed['catalog-addon'] = addon
+            self.assertIn('requires >=1.4.0, <2.0.0', self.call('run', 'v1.0.0/integration')[1])
+            addon['version'] = '1.4.0'
+            entry = self.call('run', 'v1.0.0/integration')[1]
+            self.assertEqual(entry['pluginChecks']['catalog-addon']['version'], '1.4.0')
+            self.assertEqual(entry['pluginChecks']['catalog-addon']['source'], 'git:https://repo.example/addon')
+            addon['version'] = '2.0.0'
+            code, output = self.call('finish')
+            self.assertEqual(code, 2)
+            self.assertIsNone(json.loads(output)['installed'])
+            addon['version'] = '1.5.0'
+            self.call('begin', 'v1.0.0', '--commit', sha)
+            self.assertEqual(self.call('run', 'v1.0.0/integration')[1]['how'], 'existing')
+            self.assertEqual(self.call('finish')[0], 0)
+            self.assertEqual(self.call('status', '--dependencies')[1]['dependencyIssues'], [])
+            addon['version'] = '2.0.0'
+            status = self.call('status', '--dependencies')[1]
+            self.assertEqual(status['installed']['release'], 'v1.0.0')
+            self.assertIn('installed 2.0.0', status['dependencyIssues'][0])
 
     def test_validate_requires_prose_for_every_step_and_a_version_bump(self):
         plugin = self.repo.author / 'plugins/demo'
@@ -246,7 +294,7 @@ class UpdatesTests(unittest.TestCase):
         self.assertEqual((refused['accepted'], 'has to be applied' in refused['reason']), (False, True))
         self.assertFalse((self.repo.root / 'one.done').exists())  # accept never applies
         self.assertIsNone(self.call('status')[1]['installed'])
-        (self.repo.root / 'one.done').write_text('x')  # already in place by other means
+        (updates.release_tree(self.repo.root, first) / 'one.done').write_text('x')  # already in place by other means
         accepted = self.call('accept', 'v1.0.0', '--commit', first)[1]
         self.assertEqual((accepted['accepted'], accepted['installed']['how'], accepted['steps']), (True, 'auto-accept', ['v1.0.0/one']))
         second = self.repo.release('v1.1.0', [step('cli', where='executors')])

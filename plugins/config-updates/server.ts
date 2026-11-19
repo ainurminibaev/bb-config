@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
@@ -24,6 +24,7 @@ const StatusSchema = z.object({
   installedAuto: z.boolean().default(false),
   /** Unfinished steps of a previous run; the update stays available. */
   remaining: z.number(),
+  dependencyIssues: z.array(z.string()).default([]),
   /** Thread owning an open update run, if any. */
   runOwner: z.string().nullable(),
   /** Release the open run is applying. */
@@ -49,7 +50,7 @@ export const rpcContract = defineRpcContract({
   compose: { input: z.null(), output: ComposeSchema },
 });
 
-const EMPTY: UpdateStatus = { checkedAt: 0, okAt: 0, error: null, repository: "", installed: null, installedAt: null, installedAuto: false, remaining: 0,
+const EMPTY: UpdateStatus = { checkedAt: 0, okAt: 0, error: null, repository: "", installed: null, installedAt: null, installedAuto: false, remaining: 0, dependencyIssues: [],
   runOwner: null, runRelease: null, pending: [], commit: null, threadId: null, threadAt: 0, lastRunOwner: null };
 const STALE_MS = 6 * 3_600_000;
 const SHA = /^[0-9a-f]{40}$/;
@@ -108,15 +109,22 @@ async function github(path: string, accept: string): Promise<Response> {
 /** Everything that touches the outside world; tests replace these. */
 export const io = {
   root: findRoot,
+  projectRoot(root: string): string {
+    const marker = resolve(root, ".git/bb-config-installation.json");
+    if (!SHA.test(basename(root)) || basename(dirname(root)) !== "releases" || !existsSync(marker)) return root;
+    const location = z.object({ root: z.string().refine(isAbsolute) }).parse(JSON.parse(readFileSync(marker, "utf8")));
+    return location.root;
+  },
   async origin(root: string): Promise<string> {
     return (await run("git", ["-C", root, "remote", "get-url", "origin"], { windowsHide: true })).stdout;
   },
-  async local(root: string): Promise<LocalStatus> {
-    const { stdout } = await updates(root, ["status"], { timeout: 30_000 });
+  async local(root: string, plugins?: string): Promise<LocalStatus> {
+    const { stdout } = await updates(root, plugins ? ["status", "--dependencies"] : ["status"],
+      { timeout: 30_000, env: plugins ? { ...process.env, BB_CONFIG_PLUGINS_JSON: plugins } : undefined });
     return JSON.parse(stdout) as LocalStatus;
   },
-  async accept(root: string, tag: string, commit: string, plugins: string): Promise<{ accepted: boolean; reason?: string }> {
-    const { stdout } = await updates(root, ["accept", tag, "--commit", commit],
+  async accept(root: string, tag: string, commit: string, plugins: string, repository: string): Promise<{ accepted: boolean; reason?: string }> {
+    const { stdout } = await updates(root, ["accept", tag, "--commit", commit, "--repository", repository],
       { timeout: 120_000, env: { ...process.env, BB_CONFIG_PLUGINS_JSON: plugins } });
     return JSON.parse(stdout) as { accepted: boolean; reason?: string };
   },
@@ -162,7 +170,7 @@ export default async function configUpdates(bb: BbPluginApi) {
   async function syncFooter() {
     try {
       if (!(await settings.get()).iconOnlyWhenNeeded) return;
-      const wanted = status.pending.length === 0 && status.remaining === 0 && !status.runOwner;
+      const wanted = status.pending.length === 0 && status.remaining === 0 && status.dependencyIssues.length === 0 && !status.runOwner;
       const { preferences } = await bb.sdk.system.uiPreferences.list();
       const current = preferences["sidebar.hiddenFooterItems"];
       if (current.value.includes(FOOTER_KEY) === wanted) return;
@@ -183,7 +191,11 @@ export default async function configUpdates(bb: BbPluginApi) {
       if (!repository || !/^[\w.-]+\/[\w.-]+$/.test(repository)) {
         throw new Error("Не удалось определить репозиторий GitHub: укажите owner/repo в настройках плагина.");
       }
-      local = await io.local(root);
+      const { plugins } = await bb.sdk.plugins.list();
+      const installedPlugins = JSON.stringify(plugins.map((plugin) => ({
+        id: plugin.id, version: plugin.version, rootDir: plugin.rootDir, source: plugin.source,
+        enabled: plugin.enabled, status: plugin.status, statusDetail: plugin.statusDetail })));
+      local = await io.local(root, installedPlugins);
       const all = stableReleases(await io.releases(repository));
       let pending = newerThan(all, local.installed?.release ?? null);
       let target = pending.at(-1);
@@ -192,12 +204,9 @@ export default async function configUpdates(bb: BbPluginApi) {
       // A release that needs no action here is accepted without an agent:
       // the script only fetches the pinned commit and records what it verified.
       if (target && commit && !local.run && (await settings.get()).autoAccept) {
-        const { plugins } = await bb.sdk.plugins.list();
-        const accepted = await io.accept(root, target.tag, commit, JSON.stringify(plugins.map((plugin) => ({
-          id: plugin.id, version: plugin.version, rootDir: plugin.rootDir, source: plugin.source,
-          enabled: plugin.enabled, status: plugin.status, statusDetail: plugin.statusDetail }))));
+        const accepted = await io.accept(root, target.tag, commit, installedPlugins, repository);
         if (accepted.accepted) {
-          local = await io.local(root);
+          local = await io.local(root, installedPlugins);
           pending = newerThan(all, local.installed?.release ?? null);
           target = pending.at(-1);
           commit = target ? await io.commit(repository, target.tag) : null;
@@ -209,7 +218,8 @@ export default async function configUpdates(bb: BbPluginApi) {
       pending = pending.map((release, index, list) => (index < list.length - NOTES_FOR ? { ...release, notes: "" } : release));
       const next = await publish({ checkedAt, okAt: checkedAt, error: null, repository, installed: local.installed?.release ?? null, pending, commit,
         installedAt: local.installed?.at ?? null, installedAuto: local.installed?.how === "auto-accept",
-        remaining: local.partial?.remaining.length ?? 0, runOwner: local.run?.owner ?? null, runRelease: local.run?.release ?? null,
+        remaining: local.partial?.remaining.length ?? 0, dependencyIssues: local.dependencyIssues ?? [],
+        runOwner: local.run?.owner ?? null, runRelease: local.run?.release ?? null,
         threadId: status.threadId, threadAt: status.threadAt, lastRunOwner: local.lastRun?.owner ?? null });
       await syncFooter();
       return next;
@@ -250,12 +260,13 @@ export default async function configUpdates(bb: BbPluginApi) {
     }
     const projects = await bb.sdk.projects.list();
     const { primaryHostId } = await bb.sdk.system.config();
+    const projectRoot = io.projectRoot(root);
     const sources = projects.flatMap((project) => project.sources.map((source) => ({ project, source })))
-      .filter(({ source }) => samePath(source.path, root))
+      .filter(({ source }) => samePath(source.path, projectRoot))
       .sort((a, b) => Number(b.source.hostId === primaryHostId) - Number(a.source.hostId === primaryHostId));
     const match = sources[0];
-    if (!match) throw new Error(`Добавьте каталог ${root} на машине сервера BB как проект BB, затем повторите.`);
-    return { target, existing: null, projectId: match.project.id, hostId: match.source.hostId,
+    if (!match) throw new Error(`Добавьте каталог ${projectRoot} на машине сервера BB как проект BB, затем повторите.`);
+    return { target, existing: null, projectId: match.project.id, hostId: match.source.hostId, projectRoot,
       prompt: buildPrompt({ repository: fresh.repository, root, target, commit: fresh.commit, pending: fresh.pending, local }) };
   }
 
@@ -275,7 +286,7 @@ export default async function configUpdates(bb: BbPluginApi) {
     if (plan.existing) return { threadId: plan.existing, existing: true, tag: plan.target.tag };
     const thread = await bb.sdk.threads.spawn({
       projectId: plan.projectId!,
-      environment: { type: "host", hostId: plan.hostId!, workspace: { type: "unmanaged", path: root } },
+      environment: { type: "host", hostId: plan.hostId!, workspace: { type: "unmanaged", path: plan.projectRoot! } },
       title: `Обновление доработок BB до ${plan.target.tag}`,
       prompt: plan.prompt!,
     });
@@ -341,6 +352,7 @@ export default async function configUpdates(bb: BbPluginApi) {
         result.checkedAt ? `Проверено: ${new Date(result.checkedAt).toISOString()}` : "Проверка ещё не выполнялась.",
         ...(result.error ? [`ОШИБКА ПРОВЕРКИ: ${result.error}`, "Это не означает отсутствие обновлений."] : []),
         ...(result.runRelease ? [`Сейчас идёт обновление до ${result.runRelease} (тред ${result.runOwner}).`] : []),
+        ...result.dependencyIssues.map((issue) => `Несовместимая зависимость — ${issue}`),
         target ? `Доступно: ${target.tag}${target.title === target.tag ? "" : ` — ${target.title}`}, опубликован ${target.publishedAt.slice(0, 10)} (${result.commit?.slice(0, 12)}); к применению: ${result.pending.map((r) => r.tag).join(", ")}`
           : result.okAt && !result.error ? "Новых стабильных релизов нет." : "",
       ].filter(Boolean);
