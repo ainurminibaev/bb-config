@@ -1,3 +1,5 @@
+**English** · [Русский](README.ru.md)
+
 # Push Button
 
 Adds a compact Пуш button beside the native Changed files banner. When no

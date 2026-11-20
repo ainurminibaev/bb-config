@@ -1,3 +1,5 @@
+**English** · [Русский](README.ru.md)
+
 # Project Open
 
 Two folder/terminal icons on thread rows and thread headers. Sidebar controls

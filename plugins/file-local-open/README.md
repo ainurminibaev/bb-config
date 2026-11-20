@@ -1,3 +1,5 @@
+**English** · [Русский](README.ru.md)
+
 # Open on Desktop (id `file-local-open`)
 
 A small companion plugin for BB: compact laptop and download icons beside

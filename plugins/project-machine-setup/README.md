@@ -1,3 +1,5 @@
+**English** · [Русский](README.ru.md)
+
 # Project Machine Setup
 
 Adds **Подключить проект** immediately before the disabled Enter/send button when a new-thread composer reports **Select an environment.** It opens BB's existing **Environment → Set up on <selected machine>…** flow. The native form offers cloning the project remote or choosing an existing checkout. The button does not submit the draft, change machines, copy uncommitted files, or clone anything by itself.

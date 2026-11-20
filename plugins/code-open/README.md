@@ -1,3 +1,5 @@
+**English** · [Русский](README.ru.md)
+
 # Code Open
 
 One-click code view for BB. Adds a `</>` button to project headers, thread rows
