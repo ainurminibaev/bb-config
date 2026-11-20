@@ -1852,6 +1852,25 @@ one-time migration and keeper change; no new bb-config stable release is implied
 `python3 scripts/snapshot.py --check`. Правило применяется в BB командой
 `python3 scripts/setup_tracking.py --apply`.
 
+## CLAUDE.md только как импорт AGENTS.md: хук Claude Code (20 ноября 2026)
+
+Правила проекта пишутся в `AGENTS.md` (их читают все агенты), а `CLAUDE.md`
+содержит только строку `@AGENTS.md`. Подстраховка для Claude Code на уровне
+пользователя: хук `PreToolUse` (Write/Edit/MultiEdit) в `~/.claude/settings.json`
+отклоняет запись, после которой в любом `CLAUDE.md` останется что-то кроме
+пустых строк и импортов `@путь`, и подсказывает писать в `AGENTS.md`.
+Правка, которая убирает старое содержимое, разрешена. Сбой самого хука
+запись не блокирует.
+
+- Источник: `scripts/claude_md_guard.py` (копируется в `~/.claude/hooks/`).
+- Установка/восстановление на машине с Claude Code:
+  `python3 scripts/claude_md_guard.py --apply`; проверка `--check`;
+  удаление `--remove` (другие хуки и настройки не трогаются).
+- Работает на Tru; на остальных машинах-исполнителях — после шага обновления
+  `claude-md-guard` или ручного `--apply`. Новые сессии Claude подхватывают хук
+  при запуске.
+- Тесты: `python3 -m unittest scripts/test_claude_md_guard.py`.
+
 ## Image Gen — генерация и правка картинок для всех агентов (17 ноября 2026)
 
 Собственный плагин `image-gen` в отдельном приватном репозитории `bb-plugin-image-gen`
