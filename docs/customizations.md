@@ -1998,3 +1998,22 @@ OpenCodex 12,780 с, direct 14,047 с. Прямой режим ускорени�
 В настройках Voice Mode видны последовательность подключения для следующего звонка, голос каждой ступени, доступные плагины Realtime и текущий вызов в этом клиенте. Кнопка Refresh обновляет сведения о провайдерах без открытия голосовой сессии. Для Codex Live 1.1 и Live 1 / Realtime предусмотрены отдельные настройки голоса.
 
 Для восстановления установить версию 0.2.8 из форка, указанного в plugins/voice-mode/fork.json, и проверить мост командой `python3 scripts/voice_mode_bridge.py --check`. При несовпадении копии использовать `--apply`.
+
+## Единая установка и обновление (v1.4.0)
+
+Набор bb-config объявлен в `config/bundle.json`; состав, источники, форки и
+зависимости — [docs/components.md](components.md). `scripts/bundle.py` сводит
+BB к набору (`check`, `apply`, `exclude`, `include`); каждый релиз начиная с
+v1.4.0 первым шагом `bundle` вызывает его, а `python3 scripts/updates.py apply`
+делает установку или обновление одним действием. Порядок — [docs/updates.md](updates.md).
+
+Изменение набора: добавить компонент в `config/bundle.json` (порядок —
+зависимости раньше), описать в `docs/components.md`; для своего плагина нужны
+`plugins/<id>/package.json` и `package-lock.json` (тест `scripts/test_bundle.py`
+проверяет, что каждый свой плагин объявлен). Восстановление установки автора
+со снимком по-прежнему — `scripts/restore.py`; на чужой установке применяется
+только `updates.py apply`.
+
+Проверка: `python3 -m unittest discover -s scripts -p 'test_*.py'`,
+`npm test` в `plugins/config-updates`, сценарии на изолированных экземплярах BB
+(см. `docs/releases/v1.4.0.md`).

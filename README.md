@@ -24,6 +24,26 @@
 [Needs You](plugins/inbox-compat) — `python3 scripts/apply_inbox_compat.py --host <ID машины сервера> --apply`,
 [Tokenomics](plugins/tokenomics-compat) — `python3 scripts/apply_tokenomics_compat.py --apply`.
 
+## Установка всего набора
+
+Одно действие на машине сервера BB ставит весь набор
+([состав и зависимости](docs/components.md)): собственные плагины, форки и нужные
+плагины из каталога. Нужны BB 0.49+, Node.js 22+, npm, Python 3.11+ и git.
+
+```sh
+git clone https://github.com/ainurminibaev/bb-config.git
+cd bb-config
+python3 scripts/updates.py apply
+```
+
+Команда берёт последний стабильный релиз, ставит все компоненты, создаёт
+проект BB для этого checkout и записывает журнал. В конце она перечисляет
+пункты `attention`: личные входы (Codex для Voice Mode), настройки плагинов
+(например, адрес для Web BB Button) и действия на других машинах (Menubar
+Status на Mac). Их нужно выполнить самостоятельно. Не нужный компонент
+исключите до запуска: `python3 scripts/bundle.py exclude <id>`.
+Повторный запуск безопасен: он доделывает остаток после сбоя.
+
 ## Установка одного плагина
 
 Нужны BB 0.49+, Node.js 22+ и npm на машине сервера BB. На Windows — Node.js 24.22.1+,
@@ -55,12 +75,18 @@ Web BB Button без адреса показывает **«Требуется н
 ## Обновление
 
 Стабильные версии публикуются как [GitHub Releases](../../releases) `vX.Y.Z`;
-ветка `main` — текущая разработка. Чтобы узнавать о релизах и применять их с
-помощью агента, установите из checkout плагин
-[Config Updates](plugins/config-updates): он показывает версию, описание и
-кнопку «Обновить с ИИ». Агент применяет только шаги релиза для установленных у
-вас плагинов и не трогает ваши настройки. Порядок описан в
-[docs/updates.md](docs/updates.md).
+ветка `main` — текущая разработка. [Config Updates](plugins/config-updates)
+(входит в набор) показывает новый релиз и кнопку «Обновить с ИИ». Агент выполняет
+одну команду:
+
+```sh
+python3 scripts/updates.py apply vX.Y.Z --commit <sha> --repository ainurminibaev/bb-config
+```
+
+Обновление ставит недостающие компоненты набора и обновляет устаревшие, в том
+числе форки и плагины из каталога. Ваши настройки, секреты, отключённые и
+исключённые компоненты сохраняются. Без тега `apply` берёт последний релиз.
+Порядок описан в [docs/updates.md](docs/updates.md).
 
 Вручную, без плагина, из чистого checkout получите изменения и пересоберите
 нужный плагин:
