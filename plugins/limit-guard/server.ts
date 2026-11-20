@@ -235,7 +235,9 @@ export default function plugin(bb: BbPluginApi) {
     const all = await bb.sdk.threads.list({ archived: false, limit: 500, includeHidden: true }) as unknown;
     const rows = ((Array.isArray(all) ? all : record(all).threads ?? []) as ThreadRow[])
       .filter(row => row.status === 'active' && SUPPORTED.has(row.providerId) && row.environmentHostId);
-    const hosts = [...new Set(rows.map(row => row.environmentHostId!))];
+    // Every connected machine, not only those running a turn: held threads may sit on a quiet one.
+    const connected = await bb.sdk.hosts.list().then(list => list.filter(h => h.status === 'connected').map(h => h.id)).catch(() => [] as string[]);
+    const hosts = [...new Set([...rows.map(row => row.environmentHostId!), ...connected])];
     const usage = new Map<string, HostUsage>();
     await Promise.all(hosts.map(async hostId => { try { usage.set(hostId, await hostUsage(hostId, true)); } catch { /* offline */ } }));
     for (const row of rows) await notePriority(row, usage).catch(error => bb.log.warn(`Limit Guard: priority note: ${message(error)}`));
@@ -268,6 +270,7 @@ export default function plugin(bb: BbPluginApi) {
     }
   })().catch(error => bb.log.warn(`Limit Guard: could not load priorities: ${message(error)}`));
   const held = new Set<string>();
+  const unknownTries = new Map<string, number>();
   /** The thread's own mode, or the nearest ancestor's: subthreads inherit. */
   async function effectiveMode(threadId: string, parentHint?: string | null): Promise<{ mode: PriorityMode; from: string | null }> {
     await modesReady;
@@ -388,6 +391,13 @@ export default function plugin(bb: BbPluginApi) {
     if (ctx.attempt !== 'start-turn') return { action: 'proceed' };
     try {
       const { mode, decision } = await priorityFor(ctx.thread.id, ctx.thread.parentThreadId ?? null, held.has(ctx.thread.id));
+      // No data yet (a cold start, a slow reading): a low-priority thread waits a little instead of slipping through.
+      if (mode !== 'normal' && !decision.hold && decision.unknown) {
+        const tries = (unknownTries.get(ctx.thread.id) ?? 0) + 1;
+        unknownTries.set(ctx.thread.id, tries);
+        bb.log.info(`Limit Guard: no limit data for ${ctx.thread.id} (try ${tries})`);
+        if (tries <= 2) return { action: 'wait', reason: 'Проверяю лимит перед запуском неприоритетного треда', sendAt: Date.now() + 60_000 };
+      } else unknownTries.delete(ctx.thread.id);
       if (!decision.hold) { if (held.delete(ctx.thread.id)) bb.realtime.publish('priority', { threadId: ctx.thread.id }); return { action: 'proceed' }; }
       if (!held.has(ctx.thread.id)) { held.add(ctx.thread.id); bb.realtime.publish('priority', { threadId: ctx.thread.id }); }
       return { action: 'wait', reason: holdReason(mode, decision), sendAt: nextCheckAt(decision, Date.now()) };
@@ -415,6 +425,8 @@ export default function plugin(bb: BbPluginApi) {
     } catch (error) { bb.log.warn(`Limit Guard: could not message ${row.id}: ${message(error)}`); }
   }
 
+  // Warm the usage cache right after a start or reload: dispatch decisions must not meet an empty cache.
+  setTimeout(() => { void poll().catch(error => bb.log.warn(`Limit Guard: first poll failed: ${message(error)}`)); }, 3_000);
   bb.background.schedule('poll', '*/2 * * * *', async () => {
     await poll();
     // Waiting messages are re-decided by the limit itself, not by a timer guess.
