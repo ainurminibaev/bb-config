@@ -18,6 +18,12 @@ Closing a BB window does not quit BB. The LaunchAgent remains enabled at login
 to observe launches, including when BB was not running at login. Workspace
 notifications update visibility immediately, with a two-second polling fallback.
 
+If both BB Desktop and the LaunchAgent are running and the feed is fresh,
+check menu bar space: macOS can hide a status item when it overlaps the
+active app menu. The widget caps its image at 180 points, leaving room for
+AppKit margins. It compacts usage labels first and preserves the agent counts
+if the usage bars still cannot fit. The hover panel has the usage details.
+
 On a Windows PC the counterpart is `bb Status.exe` (`windows/install.ps1`): a
 strip at the left end of the taskbar laid out like the menu bar title (bb, a
 symbol and count per agent state, per agent its mark and per account a thick

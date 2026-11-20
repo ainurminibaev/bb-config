@@ -8,6 +8,44 @@ export interface LinkedThread {
   isPinned?: boolean;
 }
 
+export type ProjectRoot =
+  | { kind: "thread"; node: { thread: LinkedThread } }
+  | { kind: "environment"; group: { nodes: { thread: LinkedThread }[] } }
+  | { kind: "section" };
+
+type ThreadComparator = {
+  (left: LinkedThread, right: LinkedThread): number;
+  compareItems?: (left: ProjectRoot, right: ProjectRoot) => number;
+};
+
+export function mergeProjectRoots(
+  roots: readonly ProjectRoot[],
+  aliases: readonly ProjectRoot[],
+  compareThreads: ThreadComparator,
+): ProjectRoot[] {
+  // Keep the native order of sections and existing rows, including during a
+  // drag. Insert each alias where the same comparator puts an ordinary row.
+  const headThread = (root: Exclude<ProjectRoot, { kind: "section" }>) =>
+    root.kind === "thread" ? root.node.thread : root.group.nodes[0].thread;
+  const compare = (left: ProjectRoot, right: ProjectRoot) => {
+    if (left.kind === "section") return right.kind === "section" ? 0 : -1;
+    if (right.kind === "section") return 1;
+    return compareThreads.compareItems
+      ? compareThreads.compareItems(left, right)
+      : compareThreads(headThread(left), headThread(right));
+  };
+  const remaining = [...aliases].sort(compare);
+  const merged: ProjectRoot[] = [];
+  let next = 0;
+  for (const root of roots) {
+    while (next < remaining.length && compare(remaining[next], root) < 0) {
+      merged.push(remaining[next++]);
+    }
+    merged.push(root);
+  }
+  return merged.concat(remaining.slice(next));
+}
+
 const isPinned = (thread: LinkedThread) =>
   Boolean(thread.isPinned) || thread.pinnedAt != null;
 

@@ -3,9 +3,10 @@
 export interface Release { tag: string; title: string; notes: string; url: string; publishedAt: string }
 export interface Remaining { step: string; machine: string }
 export interface LocalStatus {
-  installed: { release: string; commit: string; at?: string; how?: string } | null;
+  installed: { release: string; commit: string | null; appliedFrom?: string; at?: string; how?: string } | null;
   partial: { release: string; remaining: Remaining[] } | null;
   run: { release: string; owner: string; startedAt: string } | null;
+  dependencyIssues?: string[];
   lastRun?: { owner: string; release: string; complete: boolean; at: string } | null;
 }
 
@@ -62,26 +63,24 @@ export function buildPrompt(args: {
   repository: string; root: string; target: Release; commit: string; pending: Release[]; local: LocalStatus;
 }): string {
   const { repository, root, target, commit, pending, local } = args;
-  const fetch = `python3 scripts/updates.py fetch ${target.tag} --commit ${commit}`;
-  const begin = `python3 scripts/updates.py begin ${target.tag} --commit ${commit} --machines <id,id,...>`;
+  const apply = `python3 scripts/updates.py apply ${target.tag} --commit ${commit} --repository ${repository} --machines <id,id,...>`;
   return [
     `Примени обновление доработок BB из репозитория ${repository}.`,
     "",
     `Закреплённый релиз: ${target.tag}, коммит ${commit}.`,
     "Источник — только этот коммит. Не используй main, другие ветки или теги вместо него.",
-    `Checkout на сервере BB: ${root}`,
+    `Папка скрипта обновления на сервере BB: ${root}`,
     `Установленная версия по журналу: ${local.installed?.release ?? "не определена (каждый шаг сначала проверяется по фактическому состоянию)"}.`,
     `Релизы к применению по порядку: ${pending.map((r) => r.tag).join(", ")}.`,
     ...(local.partial ? [`Прошлый запуск ${local.partial.release} остался частичным: не завершено шагов — ${local.partial.remaining.length}. Продолжи остаток.`] : []),
     "",
     "Порядок:",
-    `1. В checkout выполни \`${fetch}\`. Ошибку не обходи сбросом или перезаписью локальных правок: разберись и при необходимости спроси пользователя.`,
-    "2. Прочитай из этого коммита `docs/updates.md` (обязательный порядок) и `docs/releases/<версия>.md` каждого релиза из списка.",
-    `3. Получи машины через \`bb machine list --json\` и открой запуск: \`${begin}\`. Отказ из-за чужого запуска означает параллельное обновление — не дублируй его.`,
-    "4. Для каждого шага из плана: `python3 scripts/updates.py run <шаг>` (сначала проверяет состояние, применяет только при необходимости, проверяет результат). Шаги на других машинах и шаги без автоматической проверки выполняй по инструкции релиза и фиксируй через `record` с тем, что именно проверено.",
-    "5. Заверши `python3 scripts/updates.py finish`, затем `bb config-updates check`.",
+    `1. Получи машины через \`bb machine list --json\`. Из папки скрипта выполни одно действие: \`${apply}\`. Команда скачает закреплённый релиз, сведёт установку к его полному набору (недостающие компоненты ставит, устаревшие обновляет, исключённые и отключённые пользователем сохраняет), проверит шаги всех пропущенных релизов и запишет журнал. Повтор безопасен и доделывает остаток после сбоя. Рабочая ветка и локальные правки остаются нетронутыми.`,
+    "2. Разбери JSON-ответ. Код 0 — всё применено; 2 — остался остаток (`remaining`); 3 — нужно решение пользователя или подтверждение. Ошибку шага разбери по `docs/updates.md` и `docs/releases/<версия>.md` из каталога релиза (`.local/updates/releases/<коммит>`), исправь причину и повтори ту же команду.",
+    "3. Шаги на других машинах (`otherMachines`) и шаги без автоматической проверки выполняй по инструкции релиза и фиксируй через `record` с тем, что именно проверено (порядок — `docs/updates.md`).",
+    "4. Затем `bb config-updates check`.",
     "",
-    "Не применяй снимок настроек автора (`scripts/restore.py`) и не меняй личные настройки, аккаунты, маршруты и состав плагинов пользователя сверх шагов релиза. Новые компоненты ставь только с согласия пользователя. Не делай commit и push.",
-    "В конце сообщи по компонентам и машинам: что уже было применено, что применено сейчас, что осталось и почему.",
+    "Не применяй снимок настроек автора (`scripts/restore.py`) и не меняй личные настройки, аккаунты и маршруты пользователя. Компонент, от которого пользователь отказывается, исключи командой `python3 scripts/bundle.py exclude <id>` до повтора. Не делай commit и push.",
+    "В конце сообщи по компонентам и машинам: что уже было, что установлено или обновлено сейчас, что осталось и почему. Отдельно и явно перечисли пункты `attention`: личные входы (авторизация), настройки и действия на других машинах — сам их не выполняй без пользователя.",
   ].join("\n");
 }

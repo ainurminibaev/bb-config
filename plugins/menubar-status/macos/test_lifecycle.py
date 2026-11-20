@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native lifecycle smoke test; uses a temporary app, leaves BB Desktop running."""
+"""Native lifecycle and menu width smoke tests; leave BB Desktop running."""
 from pathlib import Path
 import subprocess,tempfile,plistlib
 source=Path(__file__).with_name('BBStatus.swift').read_text()
@@ -33,6 +33,30 @@ for _ in 0..<2 {
     precondition(!controller.popover.isShown)
 }
 print("PASS: hidden at startup, shown on launch, hidden on quit, shown on relaunch, hidden on second quit")
+
+func menuWidth(_ accounts: [Account]) -> CGFloat {
+    controller.accounts = accounts
+    controller.draw()
+    return controller.item.button!.image!.size.width
+}
+let reset = Date().addingTimeInterval(2 * 60 * 60 + 15 * 60)
+let ordinary = Account(provider: "codex", machines: "M", resets: 0, five: nil,
+                       week: 40, fiveReset: nil, weekReset: reset)
+let longLabel = Account(provider: "claude-code", machines: String(repeating: "W", count: 24),
+                        resets: 1, five: 95, week: 60, fiveReset: reset, weekReset: reset)
+controller.parts = [
+    Part(symbol: "exclamationmark.bubble.fill", color: .systemOrange, count: 1, spins: false),
+    Part(symbol: "xmark.octagon.fill", color: .systemRed, count: 3, spins: false),
+    Part(symbol: "arrow.triangle.2.circlepath", color: .systemBlue, count: 4, spins: true),
+]
+let countsOnly = menuWidth([])
+let compact = menuWidth([longLabel, longLabel, ordinary])
+precondition(compact > countsOnly && compact <= 180, "compact usage must fit alongside the counts")
+let overflow = menuWidth(Array(repeating: longLabel, count: 35))
+precondition(overflow <= countsOnly, "counts must stay available when the usage bars alone cannot fit")
+let normal = menuWidth([ordinary])
+precondition(normal > countsOnly && normal <= 180, "ordinary usage must still appear when the data changes")
+print("PASS: compact usage fits, extreme usage preserves counts, ordinary width returns")
 '''
  harness.write_text(code)
  exe=root/'Harness'; subprocess.run(['swiftc',str(harness),'-o',str(exe)],check=True)

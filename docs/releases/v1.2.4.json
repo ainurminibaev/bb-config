@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "version": "v1.2.4",
+  "title": "Доверие к проектам Codex в BB",
+  "steps": [
+    {
+      "id": "plugin-codex-project-trust",
+      "title": "Codex Project Trust — доверие к проекту из карточки треда",
+      "component": "codex-project-trust",
+      "where": "server",
+      "kind": "command",
+      "apply": [
+        "{python}",
+        "scripts/install_codex_project_trust.py",
+        "--apply"
+      ],
+      "verify": [
+        "{python}",
+        "scripts/install_codex_project_trust.py",
+        "--check"
+      ],
+      "rerun": "Управляемая сборка проверяется без повторной установки. Выключенный пользователем плагин остаётся выключенным.",
+      "rollback": "Отключить плагин штатной командой bb plugin disable codex-project-trust. Доверие к отдельным проектам хранится в пользовательском конфиге Codex."
+    }
+  ]
+}
