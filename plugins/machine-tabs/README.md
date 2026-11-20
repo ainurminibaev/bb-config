@@ -140,3 +140,10 @@ the whole surface with examples.
 
 Confused by the API, or need something the types don't explain? Clone the BB
 repo and read the source: <https://github.com/get-bb/bb>.
+
+## Other plugins' row marks (0.2.4)
+
+Rows draw the marks other plugins register with `experimental_threadRowMetadata`
+(for example Limit Guard's low-priority arrow, or its pause mark while work
+waits), through the SDK's `experimental_ThreadRowMetadata`, at the right end of
+the title next to bb's own status. Nothing changes on rows without marks.

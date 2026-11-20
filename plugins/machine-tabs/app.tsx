@@ -20,11 +20,12 @@ import {
   definePluginApp,
   experimental_Icon as BbIcon,
   experimental_useSidebarThreads,
+  experimental_ThreadRowMetadata as ThreadRowMetadata,
   useRealtime,
   useRpc,
   useSdk,
 } from "@get-bb/plugin-sdk/app";
-import type { PluginThreadListProps } from "@get-bb/plugin-sdk/app";
+import type { PluginSidebarThread, PluginThreadListProps } from "@get-bb/plugin-sdk/app";
 import type { rpcContract, TabsState } from "./server";
 import { cn } from "@/lib/utils";
 import { automaticProjectSectionOrder, projectsByLatestThread } from "./lib/project-order";
@@ -93,6 +94,8 @@ interface ProjectBadge {
 const ProjectBadges = createContext<ReadonlyMap<string, ProjectBadge> | null>(
   null,
 );
+/** Sidebar threads by id, so a row can draw every plugin's row marks (limit, PR, …). */
+const RowThreads = createContext<ReadonlyMap<string, PluginSidebarThread> | null>(null);
 
 const MachineFilter = createContext<ListView>(DEFAULT_VIEW);
 
@@ -455,10 +458,16 @@ async function loadNativeList(
     threadId: string;
   }) {
     const badge = useContext(ProjectBadges)?.get(props.threadId);
+    const thread = useContext(RowThreads)?.get(props.threadId);
     return (
       <>
         {badge ? <ProjectBadgeMark badge={badge} /> : null}
         <RealTitle {...props} />
+        {thread ? (
+          <span data-machine-tabs-row-meta="">
+            <ThreadRowMetadata thread={thread} />
+          </span>
+        ) : null}
       </>
     );
   };
@@ -1051,6 +1060,22 @@ const HIDE_EMPTY_GROUPS = `
 [data-machine-tabs-recent] [data-sidebar-visibility-group] {
   margin-bottom: 0;
 }
+/* Other plugins' row marks (limit-guard priority, PR status, …): quiet, at the
+   right end of the title, next to bb's own status dot or clock. */
+[data-machine-tabs-row-meta] {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding-left: 4px;
+  flex: none;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1;
+}
+[data-machine-tabs-row-meta]:empty {
+  display: none;
+}
 .bb-thread-title:has(> [data-machine-tabs-badge]) {
   align-items: center;
 }
@@ -1340,6 +1365,7 @@ function MachineThreadList(props: PluginThreadListProps) {
     }
     return map;
   }, [threads, projectBadges, rowMark]);
+  const threadsById = useMemo(() => new Map(threads.map((thread) => [thread.id, thread as PluginSidebarThread])), [threads]);
   const headerCss = useMemo(() => projectHeaderCss(projectBadges), [projectBadges]);
 
   // Each filter's list counts what it would leave with the other filter as it is now.
@@ -1588,7 +1614,7 @@ function MachineThreadList(props: PluginThreadListProps) {
       <style>{emptyCss}</style>
       {query.trim() !== "" ? <SearchExtras query={query} needles={needles}
         options={searchOptions} machineId={selectedId} topicFilter={topicFilter} projectFilter={projectFilter} localIds={new Set(shown.map((thread) => thread.id))} /> : null}
-      <ProjectBadges.Provider value={badges}>
+      <RowThreads.Provider value={threadsById}><ProjectBadges.Provider value={badges}>
         {RecentList && recentView && state !== null ? (
           <>
             <div
@@ -1603,7 +1629,7 @@ function MachineThreadList(props: PluginThreadListProps) {
             <div className="mx-3 mb-1.5 mt-1 border-b border-border" />
           </>
         ) : null}
-      </ProjectBadges.Provider>
+      </ProjectBadges.Provider></RowThreads.Provider>
       {matchIds !== null && shown.length === 0 ? (
         <p className="px-4 py-2 text-xs text-muted-foreground">
           {!query.trim() ? "По выбранным фильтрам тредов нет." : searchOptions.archive || searchOptions.messages
@@ -1612,7 +1638,7 @@ function MachineThreadList(props: PluginThreadListProps) {
         </p>
       ) : null}
       {NativeList && state !== null ? (
-        <ProjectBadges.Provider value={badges}>
+        <RowThreads.Provider value={threadsById}><ProjectBadges.Provider value={badges}>
         <div data-machine-tabs-list="" data-machine-tabs-host-id={baseView.machineId ?? undefined} data-machine-tabs-hide-empty={hideEmpty ? "" : undefined}>
           {outer === "none" ? (
             <MachineFilter.Provider value={baseView}>
@@ -1670,7 +1696,7 @@ function MachineThreadList(props: PluginThreadListProps) {
             })
           )}
         </div>
-        </ProjectBadges.Provider>
+        </ProjectBadges.Provider></RowThreads.Provider>
       ) : error ? (
         <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
           Machine Tabs could not load bb’s thread list. {error}

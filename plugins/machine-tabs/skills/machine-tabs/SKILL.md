@@ -91,9 +91,13 @@ project section. The original parent tree remains intact. Both occurrences use
 the same thread ID, native row actions, navigation and collapse state. No
 threads are copied or reparented. Supplemental rows are non-sortable to avoid
 ambiguous drag operations; drag the original tree occurrence when needed.
+Supplemental rows follow the project's sort and count toward its pager.
 A pinned thread and its children are shown the same way: under Pinned and
 also in the thread's own project section, so a project whose only threads are
 pinned is not treated as empty.
 The adapter matches semantic native renderer props and must be verified after
 BB updates. Verified with Show empty projects enabled (the current default);
 when disabled, BB can omit a section before this renderer is reached.
+
+Rows also show other plugins' row marks (`experimental_threadRowMetadata`), such as
+Limit Guard's arrow for a low-priority thread, at the right end of the title.
