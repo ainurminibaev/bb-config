@@ -426,6 +426,13 @@
     "source": "builtin:side-chat"
   },
   {
+    "id": "subthread-autocollapse",
+    "version": "0.1.0",
+    "enabled": true,
+    "name": "Subthread Autocollapse",
+    "source": "path:plugins/subthread-autocollapse"
+  },
+  {
     "id": "thread-account-usage",
     "version": "0.1.0",
     "enabled": true,

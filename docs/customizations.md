@@ -1965,3 +1965,30 @@ OpenCodex 12,780 с, direct 14,047 с. Прямой режим ускорени�
 прошёл. Задержанное сообщение повторяется через 30 секунд. Режим `inherit`
 возвращает собственные настройки CLI. Проверено тестами на Linux; на машине с
 работающим OpenCodex исправления не проверялись.
+
+## Subthread Autocollapse 0.1.0
+
+Собственный плагин `plugins/subthread-autocollapse/` (серверный, без UI).
+Сворачивает раскрытый список подтредов в боковой панели через 5 минут — после
+ручного раскрытия и когда список раскрылся сам из-за нового подтреда.
+
+- **Как работает:** каждые 20 с берёт активные треды с родителем
+  (`bb.sdk.threads.list({ hasParent: true })`) и настройку Thread list
+  `collapsedThreads` через RPC `thread-list/listPreferences`. Родитель, которого
+  нет в списке, считается раскрытым; с первого такого наблюдения идёт таймер.
+  По истечении родитель добавляется в `collapsedThreads` через
+  `thread-list/setPreference` (origin `subthread-autocollapse`), список
+  перечитывается непосредственно перед записью.
+- **Настройки:** `enabled` (по умолчанию вкл.), `minutes` (5, от 1 до 1440).
+- **Ограничения:** точность — интервал опроса (~20 с); таймер в памяти,
+  перезагрузка плагина начинает отсчёт заново. Раскрытие родителя при
+  открытии подтреда Thread list делает только в окне и без записи в настройку,
+  такое раскрытие плагин не видит и не сворачивает.
+- **Команды:** `bb subthread-autocollapse status|run`.
+- **Установка/обновление:** `cd plugins/subthread-autocollapse && npm ci &&
+  npm test && npm run typecheck && bb plugin build . && bb plugin install .
+  --yes` на сервере BB; запись есть в `config/plugins.json`, восстановление —
+  `python3 scripts/restore.py --plugins --apply`. Удаление:
+  `bb plugin remove subthread-autocollapse`.
+- **Обновление для установивших:** шаг
+  `docs/releases/next/plugin-subthread-autocollapse`.

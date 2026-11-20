@@ -1,0 +1,33 @@
+{
+  "name": "bb-plugin-subthread-autocollapse",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Collapses expanded subthread lists in the BB sidebar a few minutes after they open",
+  "engines": {
+    "bb": ">=0.50",
+    "bbPluginSdk": ">=0.6.157"
+  },
+  "bb": {
+    "name": "Subthread Autocollapse",
+    "description": "Сворачивает раскрытый список подтредов через 5 минут — и после ручного раскрытия, и когда он раскрылся из-за нового подтреда.",
+    "branding": {
+      "icon": "ListCollapse"
+    },
+    "server": "./server.ts",
+    "skills": [
+      "skills"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test logic.test.ts"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.6.157",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}
