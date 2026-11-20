@@ -99,6 +99,45 @@ class UpdatesTests(unittest.TestCase):
         checkout = updates.release_tree(self.repo.root, second)
         self.assertEqual(self.repo.git(checkout, 'tag'), 'v1.1.0')
 
+    def test_bundle_runs_first_so_older_steps_see_installed_components(self):
+        """The v1.3.1 regression: a step for a missing plugin was recorded not-applicable."""
+        applies = HAS + ['{root}/../../bundled']  # the component the old step needs
+        self.repo.release('v1.0.0', [step('old', applies=applies)])
+        sha = self.repo.release('v1.1.0', [{'id': 'bundle', 'title': 'set', 'component': 'bb-config', 'where': 'server',
+                                            'kind': 'bundle', 'rerun': 'safe', 'rollback': 'exclude'}])
+        self.call('fetch', 'v1.1.0', '--commit', sha)
+        checkout = updates.release_tree(self.repo.root, sha)
+        marker = checkout.parent.parent / 'bundled'
+
+        class Fake:
+            @staticmethod
+            def check(root, commit=None):
+                done = marker.exists()
+                return {'converged': done, 'left': [] if done else ['x'], 'configuration': {}, 'attention': [],
+                        'components': [{'id': 'x', 'state': 'ok' if done else 'missing'}]}
+
+            @staticmethod
+            def apply(root, commit=None):
+                marker.write_text('x')
+                result = Fake.check(root)
+                result['components'][0]['state'] = 'installed'
+                return result
+
+        with patch.object(updates, 'bundle_module', lambda: Fake):
+            code, begun = self.call('begin', 'v1.1.0', '--commit', sha)
+            self.assertEqual([row['step'] for row in begun['pending']], ['v1.1.0/bundle', 'v1.0.0/old'])
+            self.assertEqual(self.call('run', 'v1.0.0/old')[0], 2)  # waits for the bundle
+            self.call('finish')
+            code, result = self.call('pinned', 'v1.1.0', '--commit', sha, '--owner', 'thr_a', root=checkout)
+            self.assertEqual(code, 0, result)
+            self.assertEqual([(s['step'], s['status'], s['how']) for s in result['steps']],
+                             [('v1.1.0/bundle', 'verified', 'applied'), ('v1.0.0/old', 'verified', 'applied')])
+            self.assertEqual(result['installed']['release'], 'v1.1.0')
+            marker.unlink()  # drift after install: a repeated apply repairs it
+            code, again = self.call('pinned', 'v1.1.0', '--commit', sha, '--owner', 'thr_a', root=checkout)
+            self.assertEqual([(s['step'], s['how']) for s in again['steps']], [('v1.1.0/bundle', 'applied')])
+            self.assertTrue(marker.exists())
+
     def test_parallel_run_is_refused_and_same_owner_resumes(self):
         sha = self.repo.release('v1.0.0', [step('one')])
         self.call('fetch', 'v1.0.0', '--commit', sha)
