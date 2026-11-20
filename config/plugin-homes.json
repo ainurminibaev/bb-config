@@ -1,0 +1,18 @@
+{
+  "marusya-worktree": {
+    "home": "project",
+    "project": "marusya",
+    "source": "marusya-os/bb-plugins/marusya-worktree",
+    "install": "bash marusya-os/bb-plugins/install.sh --yes marusya-worktree",
+    "note": "Released as marusya-worktree/vX.Y.Z tags of marusya-os; the project offers and remembers installation itself. Status: bash marusya-os/bb-plugins/install.sh --status"
+  },
+  "proj": {
+    "home": "project",
+    "project": "demo",
+    "install": "bash tools/bb-plugins/install.sh --yes proj"
+  },
+  "telegram-projects": {
+    "home": "ignore",
+    "note": "Personal Telegram bridge, installed separately (formerly externally-managed-plugins.json)"
+  }
+}

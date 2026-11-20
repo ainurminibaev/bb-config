@@ -1777,14 +1777,80 @@ release range use BB's normal update/rollback path, not this migration script.
 The fork's v0.2.0 release is published. The pending bb-config steps cover the
 one-time migration and keeper change; no new bb-config stable release is implied.
 
-## Независимо устанавливаемые продукты
+## Дома плагинов: bb-config, проект или «не отслеживать» (20 ноября 2026)
 
-Компоненты из `config/externally-managed-plugins.json` не входят в комплект
-этого репозитория. Snapshot не сохраняет их настройки и исходники; restore
-не устанавливает, не включает, не выключает и не настраивает их, даже если
-осталась старая запись. Их установка и обновление выполняются владельцем
-соответствующего продукта отдельно. Рабочая установка BB от исключения
-не меняется.
+У каждого плагина BB ровно один «дом» — место, где живут его код, версия и
+способ установки. Дома записаны в `config/plugin-homes.json` (публично,
+обезличенно) и в `.local/config/plugin-homes.json` (личные записи, не в Git;
+перекрывают публичные по ID). Правило «bb-config tracking» перед снимком
+проверяет дом плагина и, если его нет, один раз спрашивает пользователя.
+
+### Формат `plugin-homes.json` (версия 1)
+
+Объект: ID плагина → запись. Другие проекты могут ссылаться на этот формат.
+
+```json
+{
+  "<plugin-id>": {
+    "home": "bb-config | project | ignore",
+    "project": "<имя проекта в BB>",
+    "source": "<путь внутри проекта или URL репозитория>",
+    "install": "<команда установки, запускается из корня проекта>",
+    "note": "<пояснение>"
+  }
+}
+```
+
+- `home` — обязательно:
+  - `bb-config` — исходники/настройки снимаются и восстанавливаются этим
+    репозиторием. Плагины, уже записанные в манифест (`config/plugins.json`
+    или `.local/config/plugins.json`), без записи считаются домом `bb-config`.
+  - `project` — плагин принадлежит репозиторию проекта и ставится оттуда.
+    Обязательны `project` и `install`; `source` желателен.
+  - `ignore` — bb-config плагин не отслеживает.
+- `install` разбирается на аргументы (`shlex`) без shell и запускается с
+  рабочей папкой = корень checkout'а проекта на этой машине. Путь скрипта
+  относительный, без `..`. Команда должна быть повторяемой (повтор = обновление).
+- Все строковые поля непустые; любая ошибка формата останавливает snapshot и
+  restore (fail closed).
+- Устаревший `config/externally-managed-plugins.json` (список ID) по-прежнему
+  читается: его ID считаются `ignore`, если `plugin-homes.json` не говорит иного.
+  Новые записи добавляй только в `plugin-homes.json`.
+
+Пример (действующая запись):
+
+```json
+"marusya-worktree": {
+  "home": "project", "project": "marusya",
+  "source": "marusya-os/bb-plugins/marusya-worktree",
+  "install": "bash marusya-os/bb-plugins/install.sh --yes marusya-worktree"
+}
+```
+
+Проект Маруся сам один раз предлагает установку своих плагинов при старте
+сессии и запоминает ответ у себя; релизы — теги `marusya-worktree/vX.Y.Z`
+репозитория marusya-os, статус — `install.sh --status`.
+
+### Поведение
+
+- `snapshot.py`: плагины `project`/`ignore` не попадают в `.local/config/plugins.json`,
+  их настройки и исходники не читаются и не копируются. Установленные плагины
+  без дома перечисляются, `--check` тогда завершается с кодом 1.
+- `restore.py --plugins`: `project`/`ignore` не устанавливаются, не включаются и
+  не настраиваются из bb-config. Для `project`, если плагин ещё не установлен,
+  restore находит checkout проекта через `bb project list/show` (папка должна
+  существовать на этой машине и содержать `source`) и выполняет `install` в нём.
+  Нет проекта на машине — шаг пропускается с сообщением
+  `skipped project plugin: …` и командой для ручной установки.
+- Запись ответа пользователя:
+  `python3 scripts/plugin_scope.py set <id> bb-config|ignore [--note …] [--private]`,
+  `python3 scripts/plugin_scope.py set <id> project --project <имя> --install "<команда>" [--source …]`.
+  Просмотр: `plugin_scope.py show [<id>]` (без ID — все дома и плагины без дома).
+  Личное (имена приватных проектов, пути) записывай с `--private`.
+
+Проверка: `python3 -m unittest scripts/test_plugin_scope.py`,
+`python3 scripts/snapshot.py --check`. Правило применяется в BB командой
+`python3 scripts/setup_tracking.py --apply`.
 
 ## Image Gen — генерация и правка картинок для всех агентов (17 ноября 2026)
 

@@ -1,0 +1,20 @@
+{
+  "id": "plugin-homes",
+  "title": "Дома плагинов: bb-config, проект или «не отслеживать» — один раз спросить и запомнить",
+  "component": "bb-config-tracking",
+  "where": "server",
+  "kind": "command",
+  "introduces": true,
+  "apply": [
+    "{python}",
+    "scripts/setup_tracking.py",
+    "--refresh"
+  ],
+  "verify": [
+    "{python}",
+    "scripts/setup_tracking.py",
+    "--check"
+  ],
+  "rerun": "Безопасно: обновляется только уже включённый блок «bb-config tracking»; если напоминание не включено, шаг ничего не меняет.",
+  "rollback": "Вернуть прежний текст блока: python3 scripts/setup_tracking.py --refresh из checkout предыдущего релиза."
+}

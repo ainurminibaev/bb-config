@@ -4,7 +4,7 @@ import argparse
 import json
 from voice_source import is_voice_fork
 from pathlib import Path
-from plugin_scope import externally_managed
+from plugin_scope import outside, project_homes, project_roots
 import shlex
 import subprocess
 import sys
@@ -57,7 +57,31 @@ def installed_ids():
     return {plugin['id'] for plugin in plugins}
 
 
-def plan(install_plugins=False, root=ROOT, installed=None):
+class InProject(list):
+    """argv run with the plugin's project checkout as working directory."""
+    cwd = None
+
+
+def project_plan(root=ROOT, installed=None, find_roots=project_roots):
+    """Plugins whose home is a project: install from the project, never from here."""
+    commands, notes = [], []
+    for plugin_id, home in sorted(project_homes(root).items()):
+        if installed is not None and plugin_id in installed:
+            continue
+        source = home.get('source', '')
+        roots = [r for r in find_roots(home['project'])
+                 if not source or '://' in source or (r / source).exists()]
+        if not roots:
+            notes.append(f'{plugin_id}: belongs to project {home["project"]}, which is not on this machine; '
+                         f'install it from that project: {home["install"]}')
+            continue
+        command = InProject(shlex.split(home['install']))
+        command.cwd = str(roots[0])
+        commands.append(command)
+    return commands, notes
+
+
+def plan(install_plugins=False, root=ROOT, installed=None, notes=None, find_roots=project_roots):
     """Commands are argv arrays; saved text is never interpreted by a shell.
 
     `installed` is the set of plugin ids BB already has, so a second run is
@@ -70,7 +94,7 @@ def plan(install_plugins=False, root=ROOT, installed=None):
     if (root / 'config/codex.json').is_file():
         commands.append([sys.executable, str(root / 'scripts/codex_defaults.py'),
                          '--defaults', str(root / 'config/codex.json'), '--apply'])
-    excluded = externally_managed(root)
+    excluded = outside(root)
     manifest = [p for p in read('plugins', root) if p['id'] not in excluded]
     if install_plugins:
         for plugin in manifest:
@@ -96,6 +120,10 @@ def plan(install_plugins=False, root=ROOT, installed=None):
             elif installed is None or plugin['id'] not in installed:
                 # Already installed catalog plugins keep their own updates.
                 commands.append(['bb', 'plugin', 'install', source, '--yes'])
+        project_commands, project_notes = project_plan(root, installed, find_roots)
+        commands.extend(project_commands)
+        if notes is not None:
+            notes.extend(project_notes)
     # Make commands contributed by bundled plugins available before their prefs.
     if install_plugins:
         for plugin in manifest:
@@ -146,7 +174,8 @@ def main():
     parser.add_argument('--apply', action='store_true', help='Execute the plan (default: print only)')
     parser.add_argument('--plugins', action='store_true', help='Also install plugins and restore enabled/disabled state')
     args = parser.parse_args()
-    commands = plan(args.plugins, installed=installed_ids() if args.plugins else None)
+    notes = []
+    commands = plan(args.plugins, installed=installed_ids() if args.plugins else None, notes=notes)
     if args.apply and args.plugins:
         # path: sources are read by the BB server. Refuse a remote-server path
         # mismatch before running even npm ci or changing any preferences.
@@ -161,6 +190,8 @@ def main():
             ['bb', 'settings', 'experiment']) or command[:4] in (
             ['bb', 'settings', 'ui', 'set'], ['bb', 'thread-list', 'prefs', 'set']) or command[:3] == ['bb', 'plugin', 'config']
         shown = shlex.join(command[:-1] + ['<saved value>'] if has_value else command)
+        if getattr(command, 'cwd', None):
+            shown = f'(in {command.cwd}) ' + shown
         print(shown, flush=True)
         if not args.apply:
             continue
@@ -173,7 +204,10 @@ def main():
                 print(f'  skipped: {reason}', flush=True)
                 skipped.append(shown)
         else:
-            subprocess.run(compat.argv(command), check=True, stdout=subprocess.DEVNULL)
+            subprocess.run(compat.argv(list(command)), check=True, stdout=subprocess.DEVNULL,
+                           cwd=getattr(command, 'cwd', None))
+    for note in notes:
+        print('skipped project plugin: ' + note)
     if skipped:
         print(f'\n{len(skipped)} saved preference(s) were not accepted by this BB version and were skipped:')
         for shown in skipped:
