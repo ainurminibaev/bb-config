@@ -1,0 +1,20 @@
+{
+  "id": "browser-relay",
+  "title": "Browser Relay: Chrome пользователя для агентов с любой машины без повторных «Allow remote debugging?»",
+  "component": "browser-relay",
+  "where": "server",
+  "kind": "command",
+  "introduces": true,
+  "apply": [
+    "{python}",
+    "scripts/browser_relay.py",
+    "--apply"
+  ],
+  "verify": [
+    "{python}",
+    "scripts/browser_relay.py",
+    "--check"
+  ],
+  "rerun": "Безопасно: установка плагина и перенос службы идемпотентны; работающая служба Browser Relay не перезапускается.",
+  "rollback": "bb browser-relay service remove --machine <Mac> (возвращает прежнюю запись chrome-devtools в ~/.codex/config.toml), затем bb plugin uninstall browser-relay."
+}

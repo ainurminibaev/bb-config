@@ -127,6 +127,13 @@
     "source": "path:plugins/browser-page"
   },
   {
+    "id": "browser-relay",
+    "version": "0.1.0",
+    "enabled": true,
+    "name": "Browser Relay",
+    "source": "git:https://github.com/ainurminibaev/bb-plugin-browser-relay.git@semver:>=0.1.0 <1.0.0"
+  },
+  {
     "id": "code-open",
     "version": "0.4.0",
     "enabled": true,
