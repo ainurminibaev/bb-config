@@ -287,13 +287,13 @@ export default function plugin(bb: BbPluginApi) {
     if (saved && Date.now() - saved.at < 10 * 60_000) return saved;
     return Promise.race([hostUsage(hostId, true).catch(() => null), new Promise<null>(resolve => setTimeout(() => resolve(null), 5_000))]);
   }
-  async function priorityFor(threadId: string, parentHint?: string | null): Promise<{ mode: PriorityMode; from: string | null; decision: HoldDecision }> {
+  async function priorityFor(threadId: string, parentHint?: string | null, wasHeld = false): Promise<{ mode: PriorityMode; from: string | null; decision: HoldDecision }> {
     const { mode, from } = await effectiveMode(threadId, parentHint);
     if (mode === 'normal') return { mode, from, decision: { hold: false, unknown: false, closest: null } };
     const row = await threadRow(threadId);
     const usage = row?.environmentHostId ? await quickUsage(row.environmentHostId) : null;
     const windows = usage && row ? windowsOf(usage, row.environmentHostId!, row.providerId) : null;
-    return { mode, from, decision: decideHold(mode, policies, windows && !windows.error ? windows.windows : null, await threadModel(threadId), Date.now()) };
+    return { mode, from, decision: decideHold(mode, policies, windows && !windows.error ? windows.windows : null, await threadModel(threadId), Date.now(), wasHeld) };
   }
   async function setMode(threadId: string, mode: PriorityMode) {
     await modesReady;
@@ -387,7 +387,7 @@ export default function plugin(bb: BbPluginApi) {
     // A steer into a running turn is the user talking to work already under way.
     if (ctx.attempt !== 'start-turn') return { action: 'proceed' };
     try {
-      const { mode, decision } = await priorityFor(ctx.thread.id, ctx.thread.parentThreadId ?? null);
+      const { mode, decision } = await priorityFor(ctx.thread.id, ctx.thread.parentThreadId ?? null, held.has(ctx.thread.id));
       if (!decision.hold) { if (held.delete(ctx.thread.id)) bb.realtime.publish('priority', { threadId: ctx.thread.id }); return { action: 'proceed' }; }
       if (!held.has(ctx.thread.id)) { held.add(ctx.thread.id); bb.realtime.publish('priority', { threadId: ctx.thread.id }); }
       return { action: 'wait', reason: holdReason(mode, decision), sendAt: nextCheckAt(decision, Date.now()) };

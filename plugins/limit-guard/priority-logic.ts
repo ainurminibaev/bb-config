@@ -56,7 +56,10 @@ export type HoldDecision =
   | { hold: false; unknown: boolean; closest: { label: string; used: number; threshold: number } | null }
   | { hold: true; label: string; key: PolicyKey; used: number; threshold: number; resetsAt: number | null; exhausted: boolean };
 
-export function decideHold(mode: PriorityMode, base: Policies, windows: QuotaWindow[] | null, model: string | null, now: number): HoldDecision {
+/** Held work goes only once the window is this many points under the threshold, so it does not flap. */
+export const RELEASE_MARGIN = 5;
+
+export function decideHold(mode: PriorityMode, base: Policies, windows: QuotaWindow[] | null, model: string | null, now: number, wasHeld = false): HoldDecision {
   if (mode === 'normal') return { hold: false, unknown: false, closest: null };
   if (!windows || windows.length === 0) return { hold: false, unknown: true, closest: null };
   const policies = policiesFor(mode, base);
@@ -72,7 +75,7 @@ export function decideHold(mode: PriorityMode, base: Policies, windows: QuotaWin
     if (!worst || margin > worst.margin) worst = { label: w.label, key, used: Math.round(w.usedPercent), threshold, resetsAt: Number.isFinite(resetsAt) ? resetsAt : null, margin };
   }
   if (!worst) return { hold: false, unknown: false, closest: null };
-  if (worst.margin >= 0) return { hold: true, label: worst.label, key: worst.key, used: worst.used, threshold: worst.threshold, resetsAt: worst.resetsAt, exhausted: worst.used >= 100 };
+  if (worst.margin >= (wasHeld ? -RELEASE_MARGIN : 0)) return { hold: true, label: worst.label, key: worst.key, used: worst.used, threshold: worst.threshold, resetsAt: worst.resetsAt, exhausted: worst.used >= 100 };
   return { hold: false, unknown: false, closest: { label: worst.label, used: worst.used, threshold: worst.threshold } };
 }
 

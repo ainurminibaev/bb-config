@@ -63,3 +63,14 @@ test('an exhausted window waits for its reset like a scheduled retry', () => {
   const partial = decideHold('low', P, [w('Current session', 70, 2 * H)], null, now);
   if (partial.hold) { assert.equal(partial.exhausted, false); assert.equal(nextCheckAt(partial, now), now + 2 * 60_000); }
 });
+
+test('held work is released only well under the threshold, so it does not flap', () => {
+  const windows = [w('Current session', 60, 2.5 * H)];
+  const fresh = decideHold('low', P, windows, null, now);
+  assert.equal(fresh.hold, false, 'a new message under the threshold goes');
+  if (fresh.hold || !fresh.closest) return;
+  const t = fresh.closest.threshold;
+  const near = [w('Current session', t - 2, 2.5 * H)];
+  assert.equal(decideHold('low', P, near, null, now, true).hold, true, 'held work waits until 5 points under');
+  assert.equal(decideHold('low', P, [w('Current session', t - 6, 2.5 * H)], null, now, true).hold, false);
+});
