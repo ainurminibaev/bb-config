@@ -249,6 +249,13 @@
     "source": "builtin:keep-awake"
   },
   {
+    "id": "knowledge-base",
+    "version": "0.2.0",
+    "enabled": true,
+    "name": "Knowledge Base",
+    "source": "path:plugins/knowledge-base"
+  },
+  {
     "id": "kodaforge",
     "version": "0.7.0",
     "enabled": true,
