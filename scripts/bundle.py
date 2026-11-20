@@ -309,7 +309,13 @@ def converge_one(component, row, root, installed):
         return None
     if state == 'outdated':
         code, output = run(bb_command('plugin', 'update', component['id']), root)
-        return None if code == 0 else f'bb plugin update {component["id"]}: {output}'
+        if code == 0 and managed_state(component, plugins())[0] == 'ok':
+            return None
+        # The recorded range or ref cannot reach the required version (an
+        # exact tag, an old range): move to the declared source. BB keeps the
+        # plugin's settings, secrets and schedules on a source change.
+        code, output = run(bb_command('plugin', 'install', component['install'], '--yes'), root)
+        return None if code == 0 else f'bb plugin install {component["install"]}: {output}'
     if state == 'failed' and installed.get(component['id']) and component['kind'] == 'local':
         return install_local(component, root, installed)
     return None
