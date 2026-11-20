@@ -1849,14 +1849,132 @@ bb-config это шаг `voice-mode-bridge-0-2-6`; он ждёт обновле�
 git:https://github.com/ainurminibaev/bb-plugin-voice-mode.git@v0.2.5 --yes`,
 затем `--apply`; к каналу `^0.2.0` вернуться тем же `bb plugin install`.
 
-## Независимо устанавливаемые продукты
+## Дома плагинов: bb-config, проект или «не отслеживать» (20 ноября 2026)
 
-Компоненты из `config/externally-managed-plugins.json` не входят в комплект
-этого репозитория. Snapshot не сохраняет их настройки и исходники; restore
-не устанавливает, не включает, не выключает и не настраивает их, даже если
-осталась старая запись. Их установка и обновление выполняются владельцем
-соответствующего продукта отдельно. Рабочая установка BB от исключения
-не меняется.
+У каждого плагина BB ровно один «дом» — место, где живут его код, версия и
+способ установки. Дома записаны в `config/plugin-homes.json` (публично,
+обезличенно) и в `.local/config/plugin-homes.json` (личные записи, не в Git;
+перекрывают публичные по ID). Правило «bb-config tracking» перед снимком
+проверяет дом плагина и, если его нет, один раз спрашивает пользователя.
+
+### Формат `plugin-homes.json` (версия 1)
+
+Объект: ID плагина → запись. Другие проекты могут ссылаться на этот формат.
+
+```json
+{
+  "<plugin-id>": {
+    "home": "bb-config | project | ignore",
+    "project": "<имя проекта в BB>",
+    "source": "<путь внутри проекта или URL репозитория>",
+    "install": "<команда установки, запускается из корня проекта>",
+    "note": "<пояснение>"
+  }
+}
+```
+
+- `home` — обязательно:
+  - `bb-config` — исходники/настройки снимаются и восстанавливаются этим
+    репозиторием. Плагины, уже записанные в манифест (`config/plugins.json`
+    или `.local/config/plugins.json`), без записи считаются домом `bb-config`.
+  - `project` — плагин принадлежит репозиторию проекта и ставится оттуда.
+    Обязательны `project` и `install`; `source` желателен.
+  - `ignore` — bb-config плагин не отслеживает.
+- `install` разбирается на аргументы (`shlex`) без shell и запускается с
+  рабочей папкой = корень checkout'а проекта на этой машине. Путь скрипта
+  относительный, без `..`. Команда должна быть повторяемой (повтор = обновление).
+- Все строковые поля непустые; любая ошибка формата останавливает snapshot и
+  restore (fail closed).
+- Устаревший `config/externally-managed-plugins.json` (список ID) по-прежнему
+  читается: его ID считаются `ignore`, если `plugin-homes.json` не говорит иного.
+  Новые записи добавляй только в `plugin-homes.json`.
+
+Пример (действующая запись):
+
+```json
+"marusya-worktree": {
+  "home": "project", "project": "marusya",
+  "source": "marusya-os/bb-plugins/marusya-worktree",
+  "install": "bash marusya-os/bb-plugins/install.sh --yes marusya-worktree"
+}
+```
+
+Проект Маруся сам один раз предлагает установку своих плагинов при старте
+сессии и запоминает ответ у себя; релизы — теги `marusya-worktree/vX.Y.Z`
+репозитория marusya-os, статус — `install.sh --status`.
+
+### Поведение
+
+- `snapshot.py`: плагины `project`/`ignore` не попадают в `.local/config/plugins.json`,
+  их настройки и исходники не читаются и не копируются. Установленные плагины
+  без дома перечисляются, `--check` тогда завершается с кодом 1.
+- `restore.py --plugins`: `project`/`ignore` не устанавливаются, не включаются и
+  не настраиваются из bb-config. Для `project`, если плагин ещё не установлен,
+  restore находит checkout проекта через `bb project list/show` (папка должна
+  существовать на этой машине и содержать `source`) и выполняет `install` в нём.
+  Нет проекта на машине — шаг пропускается с сообщением
+  `skipped project plugin: …` и командой для ручной установки.
+- Запись ответа пользователя:
+  `python3 scripts/plugin_scope.py set <id> bb-config|ignore [--note …] [--private]`,
+  `python3 scripts/plugin_scope.py set <id> project --project <имя> --install "<команда>" [--source …]`.
+  Просмотр: `plugin_scope.py show [<id>]` (без ID — все дома и плагины без дома).
+  Личное (имена приватных проектов, пути) записывай с `--private`.
+
+Проверка: `python3 -m unittest scripts/test_plugin_scope.py`,
+`python3 scripts/snapshot.py --check`. Правило применяется в BB командой
+`python3 scripts/setup_tracking.py --apply`.
+
+## Общие инструкции: короткие триггеры + навыки Shared Guides (20 ноября 2026)
+
+У Custom instructions BB лимит 4096 символов, и они всегда в контексте каждого
+агента. Поэтому там только «когда и что», а «как» — в навыках собственного
+плагина `plugins/shared-guides` (только навыки, без UI и инструментов):
+
+| Блок инструкций | Навык | Где хранится текст блока |
+|---|---|---|
+| `[bb-config tracking]` | `bb-config-tracking` | `config/tracking-instructions.txt` |
+| `[agent compatibility]` | `agent-compat` | `config/agent-compat-instructions.txt` |
+| `[thread transfer]` | `thread-transfer` | приватный снимок |
+| `[project logos]` | `project-logo` (плагин Project Logo) | приватный снимок |
+
+`[Tru project storage]` и `[codex delegation]` остаются короткими личными
+блоками; строка про Chrome удалена (агент по ней ничего сделать не может —
+общее подключение Chrome обеспечивает служба chrome-devtools-shared).
+Ревью 20.11.2026: 4077 → 1909 символов.
+
+Project Logo 0.2.2: навык `project-logo` раньше не попадал к агентам —
+`bb.agents.configure` возвращал `skills: []`. Теперь навык доступен во всех
+тредах обычных проектов (после автоматической проверки — без инструментов,
+с CLI `bb project-logo`) и описывает явную просьбу «поставь/замени логотип».
+
+- Публичные блоки применяет `python3 scripts/setup_tracking.py --apply`
+  (`--refresh` — только обновить уже включённые, `--check` — проверка). Скрипт
+  заменяет только свои блоки и отказывается записывать текст длиннее 4096.
+- Личные блоки и итоговый текст — в приватном снимке
+  `.local/config/plugins/custom-instructions.json`, восстанавливаются
+  `restore.py`.
+- Плагин: `bb plugin install path:<checkout>/plugins/shared-guides --yes`
+  (restore ставит его из `config/plugins.json`). Новые навыки добавляй в
+  `plugins/shared-guides/skills/<имя>/SKILL.md`, поднимай версию в `package.json`.
+
+## CLAUDE.md только как импорт AGENTS.md: хук Claude Code (20 ноября 2026)
+
+Правила проекта пишутся в `AGENTS.md` (их читают все агенты), а `CLAUDE.md`
+содержит только строку `@AGENTS.md`. Подстраховка для Claude Code на уровне
+пользователя: хук `PreToolUse` (Write/Edit/MultiEdit) в `~/.claude/settings.json`
+отклоняет запись, после которой в любом `CLAUDE.md` останется что-то кроме
+пустых строк и импортов `@путь`, и подсказывает писать в `AGENTS.md`.
+Правка, которая убирает старое содержимое, разрешена. Сбой самого хука
+запись не блокирует.
+
+- Источник: `scripts/claude_md_guard.py` (копируется в `~/.claude/hooks/`).
+- Установка/восстановление на машине с Claude Code:
+  `python3 scripts/claude_md_guard.py --apply`; проверка `--check`;
+  удаление `--remove` (другие хуки и настройки не трогаются).
+- Работает на Tru; на остальных машинах-исполнителях — после шага обновления
+  `claude-md-guard` или ручного `--apply`. Новые сессии Claude подхватывают хук
+  при запуске.
+- Тесты: `python3 -m unittest scripts/test_claude_md_guard.py`.
 
 ## Image Gen — генерация и правка картинок для всех агентов (17 ноября 2026)
 
@@ -2302,3 +2420,26 @@ v1.4.0 первым шагом `bundle` вызывает его, а `python3 scr
 Проверка: `python3 -m unittest discover -s scripts -p 'test_*.py'`,
 `npm test` в `plugins/config-updates`, сценарии на изолированных экземплярах BB
 (см. `docs/releases/v1.4.0.md`).
+
+## Codex Hook Trust и Codex Project Trust — свои репозитории (20 ноября 2026)
+
+Оба плагина живут в собственных публичных репозиториях; bb-config хранит только
+дом в `config/plugin-homes.json` (`home: project`), без кода и снимка настроек
+(настроек у плагинов нет).
+
+- `codex-hook-trust` 0.1.0 — карточка в Codex-тредах про новые/изменённые хуки
+  Codex, которые не запускаются без разрешения: что запускают, что изменилось
+  (в т. ч. «отпечаток пересчитал Codex 0.171»), кнопки «Разрешить» / «Не
+  запускать». Разрешение — через `codex app-server` на машине треда; агенты
+  только видят (`bb codex-hook-trust status`). Источник:
+  github.com/ainurminibaev/bb-codex-hook-trust, релизы `vX.Y.Z`; до появления в
+  каталоге BB ставится из Git, после — из каталога (запись дома обновить).
+- `codex-project-trust` 1.0.x — карточка доверия к проекту Codex. Источник:
+  github.com/ainurminibaev/bb-codex-project-trust.
+
+Установка/восстановление: команды `install` из `plugin-homes.json`
+(`bb plugin install git:<repo>.git@^<версия> --yes`). Обновление:
+`bb plugin update <id> --yes` (диапазон semver). Проверка: `bb plugin list`,
+для хуков — `bb codex-hook-trust status --thread <Codex-тред>`. Удаление:
+`bb plugin remove <id>`; данные карточки хуков (разрешённые определения,
+отказы) лежат в каталоге данных плагина на каждой машине.

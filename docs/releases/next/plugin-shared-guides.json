@@ -1,0 +1,11 @@
+{
+  "id": "plugin-shared-guides",
+  "title": "Shared Guides 0.1.0: навыки к коротким общим инструкциям (bb-config, перенос треда, совместимость агентов)",
+  "component": "shared-guides",
+  "where": "server",
+  "kind": "local-plugin",
+  "plugin": "shared-guides",
+  "introduces": true,
+  "rerun": "Безопасно: при совпадении версии и источника шаг только проверяется.",
+  "rollback": "bb plugin remove shared-guides. Короткие блоки инструкций останутся, но ссылки на навыки перестанут работать."
+}
