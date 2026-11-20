@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { basename, delimiter, dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -75,6 +75,8 @@ export const rpcContract = defineRpcContract({
 const EMPTY: UpdateStatus = { checkedAt: 0, okAt: 0, error: null, repository: "", installed: null, installedAt: null, installedAuto: false, remaining: 0, dependencyIssues: [],
   runOwner: null, runRelease: null, pending: [], commit: null, threadId: null, threadAt: 0, lastRunOwner: null, job: null, untested: [] };
 const STALE_MS = 6 * 3_600_000;
+/** Journal owner of runs started with the button; the same owner resumes them. */
+export const BUTTON_OWNER = "plugin-config-updates";
 const SHA = /^[0-9a-f]{40}$/;
 const NOTES_FOR = 5;
 const START_WINDOW_MS = 15 * 60_000;
@@ -133,7 +135,9 @@ export function summarize(tag: string, startedAt: number, code: number, answer: 
       other: steps.filter((s) => s.status !== "verified").length },
     installed: listed("installed"), updated: listed("updated"),
     attention: (result.attention ?? []).map(({ component, type, text }) => ({ component, type, text })),
-    remaining: result.remaining?.length ?? 0, error: error ?? (answer ? null : "updates.py apply не вернул результат"),
+    remaining: result.remaining?.length ?? 0,
+    error: error ?? (!answer ? "updates.py apply не вернул результат"
+      : code !== 0 && !(result.remaining?.length) ? `updates.py apply завершился с кодом ${code}: подробности в .local/updates/button-run.last.json` : null),
   };
 }
 
@@ -284,7 +288,7 @@ export default async function configUpdates(bb: BbPluginApi) {
     const cli = (await settings.get()).cliPath.trim() || process.env.BB_CLI || "";
     if (!cli || !existsSync(cli)) throw new Error("Не найден bb CLI: укажите путь в настройках плагина или используйте «Разобраться с ИИ».");
     return { ...process.env, BB_CLI: cli, PATH: `${dirname(cli)}${delimiter}${process.env.PATH ?? ""}`,
-      BB_SERVER_URL: bb.server.loopbackBaseUrl, BB_THREAD_ID: "plugin-config-updates" };
+      BB_SERVER_URL: bb.server.loopbackBaseUrl, BB_THREAD_ID: BUTTON_OWNER };
   }
 
   /** Prepare the pinned release and ask its own bundle.py what the update brings. */
@@ -331,7 +335,8 @@ export default async function configUpdates(bb: BbPluginApi) {
       return;
     }
     const { code, stdout, stderr } = JSON.parse(readFileSync(file, "utf8")) as { code: number; stdout: string; stderr: string };
-    rmSync(file, { force: true });
+    // The last result stays next to the journal for diagnosis.
+    renameSync(file, file.replace(/\.json$/, ".last.json"));
     const parsed = code === 0 ? { code, answer: JSON.parse(stdout) } : scriptAnswer({ code, stdout, stderr });
     await publish({ ...status, job: summarize(job.tag, job.startedAt, parsed.code, parsed.answer,
       parsed.answer ? null : (stderr || stdout).trim().slice(-400) || "updates.py apply завершился с ошибкой") });
@@ -343,7 +348,7 @@ export default async function configUpdates(bb: BbPluginApi) {
     if (status.job?.state === "running") return status;
     const target = status.pending.at(-1);
     if (!target || !status.commit) throw new Error("Новых опубликованных релизов нет.");
-    if (status.runOwner) throw new Error("Обновление уже ведёт тред агента: откройте его.");
+    if (status.runOwner && status.runOwner !== BUTTON_OWNER) throw new Error("Обновление уже ведёт тред агента: откройте его.");
     const env = await cliEnvironment();
     const startedAt = Date.now();
     const args = ["apply", target.tag, "--commit", status.commit, "--repository", status.repository, "--yes",

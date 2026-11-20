@@ -1062,6 +1062,8 @@ def command_apply(args, root):
     command = [sys.executable, str(script), 'pinned', args.release, '--commit', args.commit, '--owner', args.owner]
     if args.machines:
         command += ['--machines', args.machines]
+    if args.takeover:
+        command.append('--takeover')
     result = subprocess.run(compat.argv(command), cwd=checkout, capture_output=True, text=True)
     if result.returncode != 0 and 'invalid choice' in result.stderr:
         raise UpdateError(f'{args.release} predates one-step updates; follow docs/updates.md step by step.')
@@ -1110,7 +1112,7 @@ def command_pinned(args, root):
     if not release_location(root) or root.name != args.commit:
         raise UpdateError('pinned runs inside the prepared release; use `apply`.')
     opened = command_begin(argparse.Namespace(release=args.release, commit=args.commit, owner=args.owner,
-                                              machines=args.machines, takeover=False), root)
+                                              machines=args.machines, takeover=args.takeover), root)
     outcomes, attention, report = [], [], None
     steps = opened['steps']
     lead = lead_step(load_manifests(root, args.commit), {'installed': opened['installed']}, args.release)
@@ -1228,8 +1230,10 @@ def main(argv=None, root=ROOT):
     command.add_argument('--machines', help='comma-separated BB machine ids for executor steps')
     command.add_argument('--yes', action='store_true', help='install every new component without asking')
     command.add_argument('--skip', help='comma-separated component ids not to install (remembered)')
+    command.add_argument('--takeover', action='store_true', help='continue a run left open by a stopped owner (the update button)')
     command = add('pinned', command_pinned, release=True, commit=True, run=True)
     command.add_argument('--machines', help=argparse.SUPPRESS)
+    command.add_argument('--takeover', action='store_true', help=argparse.SUPPRESS)
     add('accept', command_accept, release=True, commit=True).add_argument('--repository', help='GitHub owner/repository (default: origin)')
     command = add('release', command_release, release=True)
     command.add_argument('--title', required=True)

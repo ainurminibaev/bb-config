@@ -158,7 +158,8 @@ function Summary({ status }: { status: UpdateStatus }) {
     <dd>{target ? <><b>{target.tag}</b> от {day(target.publishedAt)}</> : status.okAt > 0 ? "новых релизов нет" : "не проверено"}</dd>
     <dt className="text-muted-foreground">Проверено</dt>
     <dd>{status.checkedAt ? new Date(status.checkedAt).toLocaleString() : "ещё нет"}{status.error && " — с ошибкой"}</dd>
-    {status.runRelease && <><dt className="text-muted-foreground">Сейчас</dt><dd>идёт обновление до {status.runRelease}</dd></>}
+    {status.runRelease && <><dt className="text-muted-foreground">Сейчас</dt><dd>{status.runOwner === "plugin-config-updates" && status.job?.state !== "running"
+      ? `незавершённое обновление до ${status.runRelease}` : `идёт обновление до ${status.runRelease}`}</dd></>}
   </dl>{status.dependencyIssues.length > 0 && <div role="status" className="space-y-1 text-xs text-destructive">
     <p>Изменились зависимости доработок</p>
     <ul className="list-disc space-y-1 pl-4">{status.dependencyIssues.map((issue) => <li key={issue}>{issue}</li>)}</ul>
@@ -190,10 +191,10 @@ function Section() {
         {release.url && <a className="text-xs underline" href={release.url} target="_blank" rel="noreferrer">Релиз на GitHub</a>}
       </div>)}
       <div className="flex flex-wrap gap-2">
-        {status.runOwner ? <button type="button" className={button} disabled={busy !== null} onClick={() => { void start(); }}>Открыть идущее обновление</button>
+        {status.runOwner && status.runOwner !== "plugin-config-updates" ? <button type="button" className={button} disabled={busy !== null} onClick={() => { void start(); }}>Открыть идущее обновление</button>
           : <button type="button" className={`${button} bg-primary text-primary-foreground hover:bg-primary/90`} disabled={busy !== null || status.job?.state === "running"} onClick={openChooser}>
-            {status.job?.state === "running" ? "Обновляю…" : `Обновить до ${target.tag}`}</button>}
-        {!status.runOwner && (status.remaining > 0 || status.job?.state === "failed") &&
+            {status.job?.state === "running" ? "Обновляю…" : status.runOwner || status.remaining > 0 ? `Продолжить обновление до ${target.tag}` : `Обновить до ${target.tag}`}</button>}
+        {(!status.runOwner || status.runOwner === "plugin-config-updates") && status.job?.state !== "running" && (status.remaining > 0 || status.job?.state === "failed") &&
           <button type="button" className={button} disabled={busy !== null} onClick={() => { void start(); }}>{busy === "start" ? "Готовлю…" : "Разобраться с ИИ"}</button>}
       </div>
       <p className="text-xs text-muted-foreground">«Обновить» показывает новые компоненты на выбор и применяет релиз сам, без агента: ставит недостающее, обновляет устаревшее, сохраняет ваши настройки. Агент нужен, только если что-то не получилось. Проверка сама ничего не устанавливает.</p>
