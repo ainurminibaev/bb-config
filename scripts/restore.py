@@ -95,7 +95,8 @@ def plan(install_plugins=False, root=ROOT, installed=None):
                 ])
             elif installed is None or plugin['id'] not in installed:
                 # Already installed catalog plugins keep their own updates.
-                commands.append(['bb', 'plugin', 'install', source, '--yes'])
+                subdirectory = ['--subdirectory', plugin['subdirectory']] if plugin.get('subdirectory') else []
+                commands.append(['bb', 'plugin', 'install', source, *subdirectory, '--yes'])
     # Make commands contributed by bundled plugins available before their prefs.
     if install_plugins:
         for plugin in manifest:

@@ -2171,35 +2171,18 @@ MCP `--extension` и AppleScript `execute javascript`.
 
 ## Knowledge Base — личная база знаний из любого треда (20 ноября 2026)
 
-Плагин `plugins/knowledge-base` (0.2.0) подключает git-репозиторий базы знаний
-на сервере BB ко всем тредам, проектам и движкам (Claude Code, Codex) на любой
-машине. Код выполняется в процессе сервера BB, поэтому агенты на Mac и других
-машинах работают с базой без её копирования.
+С 20.11.2026 исходник плагина живёт в публичном комплекте помощника
+`ainurminibaev/bb-personal-assistant`, папка `plugins/knowledge-base`
+(выпуск v0.2.8 и новее); здесь его копии нет. Инструменты `kb_search`,
+`kb_read`, `kb_topics`, `kb_add`, навык `knowledge-base`, команда `bb kb`.
+Настройка `root` — папка базы на сервере BB, по умолчанию `~/knowledge-base`;
+пустая база создаётся при первом обращении. На Tru `root` =
+`/srv/projects/knowledge-base` (сама база — отдельный репозиторий).
 
-Почему плагин, а не только навык или MCP: навык сам по себе не даёт доступа к
-файлам на другой машине; отдельный MCP-сервер пришлось бы регистрировать для
-каждого CLI на каждой машине. Плагин один раз даёт инструменты всем сессиям
-через штатный мост BB и команду `bb kb` для любого shell.
+Установка/восстановление:
+`bb plugin install 'git:https://github.com/ainurminibaev/bb-personal-assistant.git@semver:^0.2.0-rc.1' --subdirectory plugins/knowledge-base --yes`,
+затем `bb plugin config knowledge-base set root /srv/projects/knowledge-base`.
+Обновление — штатно через «Настройки → Обновления». Удаление: `bb plugin remove knowledge-base`
+(удаляет и настройку `root`, база не меняется).
+Проверка: `bb kb search claude` и `kb_search` из треда другого проекта.
 
-- Инструменты: `kb_search` (слова/тег/тема), `kb_read` (путь, slug, `NNN-slug`,
-  `topic/NNN`), `kb_topics` (темы + `AGENTS.md`/`CLAUDE.md` базы как правила),
-  `kb_add` (шаблонный айтем).
-- CLI: `bb kb search|read|topics|add|remove` (`add … --body-text '…'`;
-  `remove` — для уборки и тестов).
-- Логика — `kb.py` (Python, без зависимостей): дубли по источнику
-  (Instagram reel id, YouTube id, GitHub owner/repo, URL) и slug; id = max в
-  теме + 1; запуск `scripts/kb-rebuild.py`; `git commit --only` своего айтема,
-  индексы — только если до этого в них не было чужих правок; блокировка
-  `.git/kb-add.lock`. Push не делается.
-- Динамические инструкции короткие: когда обращаться к базе (вопросы о
-  сохранённом, «запиши в базу», разбор рилсов/ссылок). Личные правила базы
-  (темы, шаблон, штатные загрузчики и распознавание на сервере) живут в
-  `CLAUDE.md` самой базы и приходят агенту через `kb_topics`.
-- Настройка `root` — абсолютный путь к базе на сервере BB; хранится в
-  приватном снимке. Без неё инструменты не подключаются.
-
-Установка/восстановление: `cd plugins/knowledge-base && npm ci --include=dev &&
-bb plugin install . --yes`, затем `bb plugin config knowledge-base set root
-<путь>` (или `restore.py --plugins --apply` + значение из `.local/config/`).
-Проверка: `bb kb topics`, `python3 -m unittest test_kb.py` в каталоге плагина.
-Удаление: `bb plugin remove knowledge-base`.

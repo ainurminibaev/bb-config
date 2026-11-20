@@ -250,10 +250,11 @@
   },
   {
     "id": "knowledge-base",
-    "version": "0.2.0",
+    "version": "0.2.8",
     "enabled": true,
     "name": "Knowledge Base",
-    "source": "path:plugins/knowledge-base"
+    "source": "git:https://github.com/ainurminibaev/bb-personal-assistant.git@semver:^0.2.0-rc.1",
+    "subdirectory": "plugins/knowledge-base"
   },
   {
     "id": "kodaforge",
