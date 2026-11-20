@@ -1100,6 +1100,20 @@ def command_pinned(args, root):
             except ValueError:
                 outcomes.append({'step': row['step'], 'status': {2: 'blocked', 3: 'needs-decision'}.get(error.code, 'failed'),
                                  'detail': text[-400:]})
+    target_bundle = next((f'{args.release}/{step["id"]}' for step in load_manifests(root, args.commit)[args.release]['steps']
+                          if step['kind'] == BUNDLE), None)
+    if target_bundle and not any(item['step'] == target_bundle for item in outcomes):
+        # Already recorded: a repeated apply still re-checks and repairs the set,
+        # and the journal gets the state found now.
+        try:
+            entry = command_run(argparse.Namespace(step=target_bundle, machine=None, install=False,
+                                                   development=False, owner=args.owner), root)
+            outcomes.append({'step': target_bundle, 'status': entry['status'], 'how': entry['how'], 'detail': entry['detail']})
+            report = entry.get('bundle') or report
+        except UpdateError as error:
+            failed = json.loads(str(error)) if str(error).startswith('{') else {'detail': str(error)}
+            outcomes.append({'step': target_bundle, 'status': 'failed', 'how': failed.get('how'), 'detail': failed.get('detail')})
+            report = failed.get('bundle') or report
     if report:
         attention = report.get('attention', [])
     elsewhere = [row for row in opened['pending'] if row['machine'] != SERVER]
