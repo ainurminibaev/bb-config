@@ -9,8 +9,8 @@ import {
 } from './logic.ts';
 import { snapshotMessage, snapshotRef } from './snapshot-logic.ts';
 import {
-  decideHold, DEFAULT_POLICIES, holdReason, MODE_LABEL, nextCheckAt, normalizePolicy, parseMode, POLICY_LABEL, priorityStatus,
-  type HoldDecision, type Policies, type PriorityMode,
+  decideHold, DEFAULT_POLICIES, holdReason, mergePolicies, MODE_LABEL, nextCheckAt, normalizePolicy, parseMode, parsePolicySpec, POLICY_LABEL, priorityStatus,
+  type CustomPolicies, type HoldDecision, type PolicyKey, type Policies, type PriorityMode,
 } from './priority-logic.ts';
 
 const SUPPORTED = new Set(['claude-code', 'codex']);
@@ -263,26 +263,28 @@ export default function plugin(bb: BbPluginApi) {
   }
   // ---------- Low-priority threads: new turns wait above a floating threshold ----------
   const modes = new Map<string, PriorityMode>();
+  /** A thread's own thresholds, for the windows it overrides; subthreads inherit them with the mode. */
+  const customs = new Map<string, CustomPolicies>();
   const modesReady = (async () => {
     for (const key of await bb.storage.kv.list('prio:')) {
-      const value = await bb.storage.kv.get<{ mode: PriorityMode }>(key);
-      if (value && value.mode !== 'normal') modes.set(key.slice(5), value.mode);
+      const value = await bb.storage.kv.get<{ mode: PriorityMode; custom?: CustomPolicies }>(key);
+      if (value && value.mode !== 'normal') { modes.set(key.slice(5), value.mode); if (value.custom) customs.set(key.slice(5), value.custom); }
     }
   })().catch(error => bb.log.warn(`Limit Guard: could not load priorities: ${message(error)}`));
   const held = new Set<string>();
   const unknownTries = new Map<string, number>();
   /** The thread's own mode, or the nearest ancestor's: subthreads inherit. */
-  async function effectiveMode(threadId: string, parentHint?: string | null): Promise<{ mode: PriorityMode; from: string | null }> {
+  async function effectiveMode(threadId: string, parentHint?: string | null): Promise<{ mode: PriorityMode; from: string | null; custom: CustomPolicies | null }> {
     await modesReady;
     let id: string | null = threadId;
     let parent: string | null | undefined = parentHint;
     for (let depth = 0; id && depth < 10; depth++) {
       const own = modes.get(id);
-      if (own) return { mode: own, from: id === threadId ? null : id };
+      if (own) return { mode: own, from: id === threadId ? null : id, custom: customs.get(id) ?? null };
       if (parent === undefined) parent = ((await bb.sdk.threads.get({ threadId: id }).catch(() => null)) as { parentThreadId?: string | null } | null)?.parentThreadId ?? null;
       id = parent; parent = undefined;
     }
-    return { mode: 'normal', from: null };
+    return { mode: 'normal', from: null, custom: null };
   }
   /** Usage for a dispatch decision: cached data within ten minutes, otherwise a quick fresh read; never slow. */
   async function quickUsage(hostId: string): Promise<HostUsage | null> {
@@ -290,25 +292,32 @@ export default function plugin(bb: BbPluginApi) {
     if (saved && Date.now() - saved.at < 10 * 60_000) return saved;
     return Promise.race([hostUsage(hostId, true).catch(() => null), new Promise<null>(resolve => setTimeout(() => resolve(null), 5_000))]);
   }
-  async function priorityFor(threadId: string, parentHint?: string | null, wasHeld = false): Promise<{ mode: PriorityMode; from: string | null; decision: HoldDecision }> {
-    const { mode, from } = await effectiveMode(threadId, parentHint);
-    if (mode === 'normal') return { mode, from, decision: { hold: false, unknown: false, closest: null } };
+  async function priorityFor(threadId: string, parentHint?: string | null, wasHeld = false): Promise<{ mode: PriorityMode; from: string | null; custom: CustomPolicies | null; decision: HoldDecision }> {
+    const { mode, from, custom } = await effectiveMode(threadId, parentHint);
+    if (mode === 'normal') return { mode, from, custom, decision: { hold: false, unknown: false, closest: null } };
     const row = await threadRow(threadId);
     const usage = row?.environmentHostId ? await quickUsage(row.environmentHostId) : null;
     const windows = usage && row ? windowsOf(usage, row.environmentHostId!, row.providerId) : null;
-    return { mode, from, decision: decideHold(mode, policies, windows && !windows.error ? windows.windows : null, await threadModel(threadId), Date.now(), wasHeld) };
+    return { mode, from, custom, decision: decideHold(mode, mergePolicies(policies, custom), windows && !windows.error ? windows.windows : null, await threadModel(threadId), Date.now(), wasHeld) };
   }
-  async function setMode(threadId: string, mode: PriorityMode) {
+  /** `custom` undefined keeps the thread's own thresholds, null drops them, an object replaces the windows it names. */
+  async function setMode(threadId: string, mode: PriorityMode, custom?: CustomPolicies | null) {
     await modesReady;
-    if (mode === 'normal') { modes.delete(threadId); await bb.storage.kv.delete(`prio:${threadId}`); }
-    else { modes.set(threadId, mode); await bb.storage.kv.set(`prio:${threadId}`, { mode }); }
+    if (custom === null) customs.delete(threadId);
+    else if (custom) customs.set(threadId, { ...(customs.get(threadId) ?? {}), ...custom });
+    if (mode === 'normal') { modes.delete(threadId); customs.delete(threadId); await bb.storage.kv.delete(`prio:${threadId}`); }
+    else { modes.set(threadId, mode); await bb.storage.kv.set(`prio:${threadId}`, { mode, ...(customs.get(threadId) ? { custom: customs.get(threadId) } : {}) }); }
     await bb.experimental_hooks.recheck('message.dispatch').catch(() => undefined);
   }
 
-  const rulesText = (mode: PriorityMode) => mode === 'normal' ? [] : (['short', 'long', 'model'] as const).map(k => {
-    const p = mode === 'background' ? { ...policies[k], low: Math.max(5, policies[k].low - 20), high: Math.max(5, policies[k].high - 20) } : policies[k];
-    return `${POLICY_LABEL[k]}: ${p.enabled ? `${p.low}% → ${p.high}% за ${p.nearMinutes >= 60 ? `${Math.round(p.nearMinutes / 60)} ч` : `${p.nearMinutes} мин`} до сброса` : 'не учитывается'}`;
-  });
+  const rulesText = (mode: PriorityMode, custom: CustomPolicies | null = null) => {
+    if (mode === 'normal') return [];
+    const merged = mergePolicies(policies, custom);
+    return (['short', 'long', 'model'] as const).map(k => {
+      const p = mode === 'background' ? { ...merged[k], low: Math.max(5, merged[k].low - 20), high: Math.max(5, merged[k].high - 20) } : merged[k];
+      return `${POLICY_LABEL[k]}: ${p.enabled ? `${p.low}% → ${p.high}% за ${p.nearMinutes >= 60 ? `${Math.round(p.nearMinutes / 60)} ч` : `${p.nearMinutes} мин`} до сброса` : 'не учитывается'}${custom?.[k] ? ' (свои для треда)' : ''}`;
+    });
+  };
   async function priorityView(threadId: string): Promise<PriorityView> {
     const p = await priorityFor(threadId);
     const d = p.decision;
@@ -320,7 +329,7 @@ export default function plugin(bb: BbPluginApi) {
     return {
       mode: p.mode, from: p.from, holding: waiting, unknown: !d.hold && d.unknown, text,
       window: d.hold ? d.label : d.closest?.label ?? null, used: d.hold ? d.used : d.closest?.used ?? null,
-      threshold: d.hold ? d.threshold : d.closest?.threshold ?? null, rules: rulesText(p.mode),
+      threshold: d.hold ? d.threshold : d.closest?.threshold ?? null, rules: rulesText(p.mode, p.custom),
     };
   }
   bb.rpc.register(rpcContract, {
@@ -586,17 +595,38 @@ export default function plugin(bb: BbPluginApi) {
       priority: cliCommand({
         summary: 'Режим треда: обычный, неприоритетный (ждёт выше плавающего порога) или фоновый (строже); без значения — показать',
         positionals: [{ name: 'mode', description: 'normal | low | background (обычный | неприоритетный | фоновый)' }],
-        options: { thread: threadOption, json: jsonOption },
+        options: {
+          thread: threadOption, json: jsonOption,
+          short: { type: 'string', aliases: ['5h'], description: 'Свои пороги 5-часового окна для треда: 40-90, 40-90@30 (минут до сброса), off, default' },
+          long: { type: 'string', aliases: ['week'], description: 'Свои пороги недельного окна: 60-95@12h, off, default' },
+          model: { type: 'string', description: 'Свои пороги окна модели: 60-95@12h, off, default' },
+          reset: { type: 'boolean', description: 'Убрать свои пороги треда: снова общие из настроек' },
+        },
         async run(input, ctx) {
           const threadId = requireThread(input.options.thread, ctx);
-          if (input.positionals.mode !== undefined) {
-            const mode = parseMode(input.positionals.mode);
-            if (!mode) throw new PluginCliError(`неизвестный режим «${input.positionals.mode}»`, { code: 'bad_mode', hint: 'Режимы: normal, low, background.' });
-            await setMode(threadId, mode);
+          let custom: CustomPolicies | null | undefined = input.options.reset ? null : undefined;
+          const drop: PolicyKey[] = [];
+          for (const key of ['short', 'long', 'model'] as const) {
+            const raw = input.options[key];
+            if (raw === undefined) continue;
+            const spec = parsePolicySpec(raw);
+            if (spec === null) throw new PluginCliError(`не понял «${raw}» для --${key}`, { code: 'bad_policy', hint: 'Примеры: 40-90, 40-90@30, 60-95@12h, off, default.' });
+            if (spec === 'default') { drop.push(key); continue; }
+            custom = { ...(custom ?? {}), [key]: spec };
           }
+          await modesReady;
+          if (drop.length && customs.has(threadId)) {
+            const left = { ...customs.get(threadId)! };
+            for (const key of drop) delete left[key];
+            customs.set(threadId, left);
+          }
+          const current = (await effectiveMode(threadId)).mode;
+          const mode = input.positionals.mode !== undefined ? parseMode(input.positionals.mode) : (custom || drop.length || input.options.reset) && current === 'normal' ? 'low' : current;
+          if (!mode) throw new PluginCliError(`неизвестный режим «${input.positionals.mode}»`, { code: 'bad_mode', hint: 'Режимы: normal, low, background.' });
+          if (input.positionals.mode !== undefined || custom !== undefined || drop.length) await setMode(threadId, mode, custom);
           const p = await priorityFor(threadId);
           if (input.options.json) return { exitCode: 0, stdout: JSON.stringify({ threadId, ...p, policies }, null, 2) };
-          const rules = (['short', 'long', 'model'] as const).map(k => `  ${POLICY_LABEL[k]}: ${policies[k].enabled ? `${policies[k].low}% → ${policies[k].high}% за ${policies[k].nearMinutes} мин до сброса` : 'не учитывается'}`);
+          const rules = rulesText(p.mode, p.custom).map(line => `  ${line}`);
           return { exitCode: 0, stdout: [priorityStatus(p.mode, p.decision, p.from), ...(p.mode === 'normal' ? [] : [`Пороги (${MODE_LABEL[p.mode]}${p.mode === 'background' ? ', на 20 ниже' : ''}):`, ...rules])].join('\n') };
         },
       }),

@@ -106,3 +106,29 @@ export function parseMode(value: unknown): PriorityMode | null {
   if (['background', 'bg', 'фоновый', 'фон'].includes(v)) return 'background';
   return null;
 }
+
+/** A thread's own thresholds: only the windows it overrides. */
+export type CustomPolicies = Partial<Record<PolicyKey, Partial<WindowPolicy>>>;
+
+export function mergePolicies(base: Policies, custom: CustomPolicies | null | undefined): Policies {
+  if (!custom) return base;
+  const one = (k: PolicyKey) => (custom[k] ? normalizePolicy({ ...base[k], ...custom[k] }, base[k]) : base[k]);
+  return { short: one('short'), long: one('long'), model: one('model') };
+}
+
+/**
+ * A window rule typed by a person: "off", "default", "40-90" or "40-90@30"
+ * (minutes before the reset; "@2h" for hours). Null when it does not parse.
+ */
+export function parsePolicySpec(spec: string): Partial<WindowPolicy> | 'default' | null {
+  const v = spec.trim().toLowerCase();
+  if (['off', 'выкл', 'нет', 'no'].includes(v)) return { enabled: false };
+  if (['default', 'по умолчанию', 'reset'].includes(v)) return 'default';
+  const m = /^(\d{1,3})\s*[-–]\s*(\d{1,3})(?:\s*@\s*(\d{1,4})\s*(h|ч|m|мин)?)?$/.exec(v);
+  if (!m) return null;
+  const low = Number(m[1]); const high = Number(m[2]);
+  if (low < 1 || high > 100 || low > high) return null;
+  const out: Partial<WindowPolicy> = { enabled: true, low, high };
+  if (m[3]) out.nearMinutes = Number(m[3]) * (m[4] === 'h' || m[4] === 'ч' ? 60 : 1);
+  return out;
+}

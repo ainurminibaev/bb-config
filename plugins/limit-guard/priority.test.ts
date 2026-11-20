@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyWindow, type QuotaWindow } from './logic.ts';
-import { decideHold, DEFAULT_POLICIES as P, floatingThreshold, holdReason, nextCheckAt, normalizePolicy, parseMode, policiesFor, priorityStatus } from './priority-logic.ts';
+import { decideHold, DEFAULT_POLICIES as P, floatingThreshold, holdReason, mergePolicies, nextCheckAt, normalizePolicy, parseMode, parsePolicySpec, policiesFor, priorityStatus } from './priority-logic.ts';
 
 const H = 3_600_000;
 const now = Date.parse('2026-11-19T12:00:00Z');
@@ -73,4 +73,18 @@ test('held work is released only well under the threshold, so it does not flap',
   const near = [w('Current session', t - 2, 2.5 * H)];
   assert.equal(decideHold('low', P, near, null, now, true).hold, true, 'held work waits until 5 points under');
   assert.equal(decideHold('low', P, [w('Current session', t - 6, 2.5 * H)], null, now, true).hold, false);
+});
+
+test("a thread's own thresholds override only the windows it names", () => {
+  assert.deepEqual(parsePolicySpec('30-80'), { enabled: true, low: 30, high: 80 });
+  assert.deepEqual(parsePolicySpec('30-80@2h'), { enabled: true, low: 30, high: 80, nearMinutes: 120 });
+  assert.deepEqual(parsePolicySpec('off'), { enabled: false });
+  assert.equal(parsePolicySpec('default'), 'default');
+  assert.equal(parsePolicySpec('90-30'), null);
+  assert.equal(parsePolicySpec('abc'), null);
+  const merged = mergePolicies(P, { short: { low: 20, high: 50 }, model: { enabled: false } });
+  assert.deepEqual(merged.short, { enabled: true, low: 20, high: 50, nearMinutes: 30 });
+  assert.deepEqual(merged.long, P.long);
+  assert.equal(merged.model.enabled, false);
+  assert.equal(decideHold('low', merged, [w('Current session', 30, 4.9 * H)], null, now).hold, true, 'own 20% start holds at 30%');
 });
