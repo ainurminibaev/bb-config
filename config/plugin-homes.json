@@ -1,4 +1,11 @@
 {
+  "knowledge-base": {
+    "home": "project",
+    "project": "ai_agents",
+    "source": "https://github.com/ainurminibaev/bb-personal-assistant",
+    "install": "bb plugin install git:https://github.com/ainurminibaev/bb-personal-assistant.git@^0.2.0 --subdirectory plugins/knowledge-base --yes",
+    "note": "Since 2026-11-20 in the assistant repository, plugins/knowledge-base (v0.2.8)"
+  },
   "marusya-worktree": {
     "home": "project",
     "project": "marusya",
@@ -6,13 +13,23 @@
     "install": "bash marusya-os/bb-plugins/install.sh --yes marusya-worktree",
     "note": "Released as marusya-worktree/vX.Y.Z tags of marusya-os; the project offers and remembers installation itself. Status: bash marusya-os/bb-plugins/install.sh --status"
   },
+  "personal-assistant": {
+    "home": "project",
+    "project": "ai_agents",
+    "source": "https://github.com/ainurminibaev/bb-personal-assistant",
+    "install": "bb plugin install git:https://github.com/ainurminibaev/bb-personal-assistant.git@^0.2.0 --yes",
+    "note": "Platform workshop; full setup with workdir via setup.py from the release"
+  },
   "proj": {
     "home": "project",
     "project": "demo",
     "install": "bash tools/bb-plugins/install.sh --yes proj"
   },
   "telegram-projects": {
-    "home": "ignore",
-    "note": "Personal Telegram bridge, installed separately (formerly externally-managed-plugins.json)"
+    "home": "project",
+    "project": "ai_agents",
+    "source": "https://github.com/ainurminibaev/bb-plugin-telegram-projects",
+    "install": "bb plugin install git:https://github.com/ainurminibaev/bb-plugin-telegram-projects.git@^0.9.1-personal.24 --yes",
+    "note": "Personal Telegram bridge; formerly externally-managed-plugins.json"
   }
 }
