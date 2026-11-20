@@ -2144,16 +2144,15 @@ bb browser-relay service install --machine <Mac с Chrome>   # новая маш
 запись Codex), `bb plugin uninstall browser-relay`, убрать блок `[browser relay]`
 из Custom instructions.
 
-**Состояние у автора (20 ноября 2026).** Плагин 0.1.0 установлен из локальной
-папки; служба на Mac перенесена с метки `com.ainur.chrome-devtools-mcp-shared` на
+**Состояние у автора (20 ноября 2026).** Плагин 0.1.0 установлен из GitHub
+(`ainurminibaev/bb-plugin-browser-relay`, тег v0.1.0); служба на Mac перенесена с метки `com.ainur.chrome-devtools-mcp-shared` на
 `dev.bb.browser-relay`, Allow нажат один раз; вызовы с Tru проходят за ~0,9 с без
-окон. Запись в `config/plugins.json` указывает на GitHub — до публикации
-репозитория восстановление из неё не сработает.
+окон.
 
 **Сторонний McpGo на Mac.** На Mac есть чужие службы McpGo
 (`com.mcphub.playwright.*`, браузер Playwright с туннелем; на 20 ноября не
 запущены), а в `~/.codex/config.toml` — автоодобрение его инструментов
-`mcpgo_browser.*`. К Browser Relay не относятся; это не продукт пользователя — решить, нужны ли они.
+`mcpgo_browser.*`. К Browser Relay не относятся; не продукт пользователя, но нужны — оставлены как есть.
 
 ## Мост telegram-projects 0.9.8: итог делегированной задачи (18 ноября 2026)
 
