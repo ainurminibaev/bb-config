@@ -573,6 +573,9 @@ def plugin_state(step, root, plugins, commit=None):
 
 
 def bundle_module():
+    # Run as a script this module is __main__; bundle.py must see the same
+    # UpdateError and journal helpers, not a second copy imported as `updates`.
+    sys.modules.setdefault('updates', sys.modules[__name__])
     import bundle
     return bundle
 

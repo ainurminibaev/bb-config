@@ -188,6 +188,12 @@ class BundleTests(unittest.TestCase):
         self.assertTrue(result['converged'], result['left'])
         self.assertEqual(self.states(result)['catalog'], 'installed')
 
+    def test_older_declared_set_without_descriptions_still_loads(self):
+        for component in self.declared['components']:
+            component.pop('description', None)
+        (self.root / 'config/bundle.json').write_text(json.dumps(self.declared))
+        self.assertEqual(bundle.load(self.root)['components'][0]['description'], 'Catalog')
+
     def test_plan_lists_new_components_and_choice_is_remembered(self):
         fake = FakeBB(self.root, [self.local('alpha', '1.1.0'),
                                   {'id': 'catalog', 'version': '1.3.0', 'source': 'git:https://example.org/catalog.git@^1',
@@ -213,6 +219,8 @@ class BundleTests(unittest.TestCase):
         data = bundle.load(root)
         ids = [c['id'] for c in data['components']]
         self.assertEqual(len(ids), len(set(ids)))
+        raw = json.loads((root / 'config/bundle.json').read_text())
+        self.assertEqual([c['id'] for c in raw['components'] if not c.get('description')], [], 'every component has a description')
         local = {p.name for p in (root / 'plugins').iterdir() if (p / 'package.json').is_file()}
         self.assertEqual(local - set(ids), set(), 'every own plugin with package.json is in the declared set')
 

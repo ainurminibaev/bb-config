@@ -76,8 +76,8 @@ def errors(data, root):
                 problems.append(f'{name}: {kind} needs source (git:<url>@) and install')
             if not updates.PLUGIN_VERSION.fullmatch(str(component.get('min', ''))):
                 problems.append(f'{name}: min must be X.Y.Z')
-        if not str(component.get('description', '')).strip():
-            problems.append(f'{name}: description is required (shown when the user chooses components)')
+        # Older releases have no description: they load, the chooser shows the name.
+        component.setdefault('description', component.get('name', name))
         if 'tested' in component and not (updates.PLUGIN_VERSION.fullmatch(str(component['tested'])) and
                                           updates.version_tuple(component['tested']) >= updates.version_tuple(component.get('min', '0.0.0'))):
             problems.append(f'{name}: tested must be X.Y.Z, not below min')
