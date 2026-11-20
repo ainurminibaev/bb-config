@@ -43,6 +43,8 @@
     {"id": "project-catalog", "kind": "local", "name": "Project Catalog", "requires": ["machine-tabs"]},
     {"id": "project-machine-setup", "kind": "local", "name": "Project Machine Setup"},
     {"id": "subthread-autocollapse", "kind": "local", "name": "Subthread Autocollapse"},
+    {"id": "codex-delegation-watch", "kind": "local", "name": "Codex Delegation Watch"},
+    {"id": "shared-guides", "kind": "local", "name": "Shared Guides"},
     {"id": "thread-account-usage", "kind": "local", "name": "Thread Account Usage"},
     {"id": "menubar-status", "kind": "local", "name": "Menubar Status",
      "attention": [{"type": "machine", "text": "На Mac: zsh install.sh из plugins/menubar-status/macos (нужен xcode-select --install); на Windows: install.ps1 из plugins/menubar-status/windows. Задайте hostId и filePath в настройках плагина."}]},
