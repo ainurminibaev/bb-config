@@ -271,7 +271,11 @@ def check(root, commit=None, installed=None):
     by_id = {c['id']: c for c in data['components']}
     hooks = {row['id']: results for row in rows if row['state'] in DONE and row['state'] != 'excluded'
              if (results := configure_rows(by_id[row['id']], root, installed, False))}
-    return summary(data, rows, hooks)
+    result = summary(data, rows, hooks)
+    if wants_project(data, rows) and not has_project(root):
+        result['converged'] = False
+        result['left'].append('config-updates: BB project for this checkout')
+    return result
 
 
 # --- convergence -------------------------------------------------------------
@@ -311,17 +315,24 @@ def converge_one(component, row, root, installed):
     return None
 
 
-def ensure_project(root):
-    """Config Updates opens its update thread in the BB project of this checkout."""
+def has_project(root):
     target = updates.installation_root(root).resolve()
     listing = json.loads(subprocess.run(compat.argv(bb_command('project', 'list', '--json')),
                                         capture_output=True, text=True, check=True).stdout)
     projects = listing if isinstance(listing, list) else listing.get('projects', [])
-    for project in projects:
-        for source in project.get('sources', []):
-            path = source.get('path') or ''
-            if Path(path).is_absolute() and Path(path).resolve() == target:
-                return None
+    return any(Path(source.get('path') or '').is_absolute() and Path(source['path']).resolve() == target
+               for project in projects for source in project.get('sources', []))
+
+
+def wants_project(data, rows):
+    return any(r['id'] == 'config-updates' and r['state'] != 'excluded' for r in rows)
+
+
+def ensure_project(root):
+    """Config Updates opens its update thread in the BB project of this checkout."""
+    target = updates.installation_root(root).resolve()
+    if has_project(root):
+        return None
     status = json.loads(subprocess.run(compat.argv(bb_command('status', '--json')),
                                        capture_output=True, text=True, check=True).stdout)
     host = (Path(status['dataDir']) / 'host-id').read_text(encoding='utf-8').strip()
@@ -361,7 +372,7 @@ def apply(root, commit=None):
         if was and not was.get('enabled') and now and now.get('enabled'):
             run(bb_command('plugin', 'disable', row['id']), root)
     project = None
-    if 'config-updates' in by_id and not any(r['id'] == 'config-updates' and r['state'] == 'excluded' for r in rows):
+    if wants_project(data, rows):
         try:
             project = ensure_project(root)
         except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
