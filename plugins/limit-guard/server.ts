@@ -240,7 +240,12 @@ export default function plugin(bb: BbPluginApi) {
     const hosts = [...new Set([...rows.map(row => row.environmentHostId!), ...connected])];
     const usage = new Map<string, HostUsage>();
     await Promise.all(hosts.map(async hostId => { try { usage.set(hostId, await hostUsage(hostId, true)); } catch { /* offline */ } }));
-    for (const row of rows) await notePriority(row, usage).catch(error => bb.log.warn(`Limit Guard: priority note: ${message(error)}`));
+    // A low-priority thread gets the priority note only: two notes in a row say the same thing twice.
+    const lowPriority = new Set<string>();
+    for (const row of rows) {
+      if ((await effectiveMode(row.id)).mode !== 'normal') lowPriority.add(row.id);
+      await notePriority(row, usage).catch(error => bb.log.warn(`Limit Guard: priority note: ${message(error)}`));
+    }
     for (const row of rows) {
       const u = usage.get(row.environmentHostId!);
       if (!u) continue;
@@ -253,6 +258,7 @@ export default function plugin(bb: BbPluginApi) {
       const earlier = (await sentFor(row.id)).find(item => item.key === key);
       if (earlier && RANK[a.mode] <= RANK[earlier.mode]) continue;
       if (a.mode === 'finish') void snapshot(row, 'финиш по лимиту', [row.id]).catch(() => undefined);
+      if (lowPriority.has(row.id)) { await markSent(row.id, { key, mode: a.mode, at: Date.now() }); continue; }
       if (!cfg.steer) { await markSent(row.id, { key, mode: a.mode, at: Date.now() }); continue; }
       try {
         // steer-if-active joins the running turn; our dispatch hook refuses it if the turn has just ended.
@@ -359,10 +365,11 @@ export default function plugin(bb: BbPluginApi) {
   async function scheduleResume(threadId: string, note: string | null): Promise<string> {
     await resumesReady;
     const s = await status(threadId, true);
-    const d = resumeWindow(s.assessment.windows, s.model, thresholds, Date.now());
-    const reset = d?.resetsAt ? Date.parse(d.resetsAt) : Number.NaN;
-    if (!d || !Number.isFinite(reset)) return 'Время сброса окна неизвестно — продолжение не поставлено. Напиши пользователю, что продолжать нужно вручную.';
-    const at = Math.max(reset, Date.now()) + 30_000;
+    const pressing = resumeWindow(s.assessment.windows, s.model, thresholds, Date.now());
+    const reset = pressing?.resetsAt ? Date.parse(pressing.resetsAt) : Number.NaN;
+    // No window is pressing: continue in a minute; if the turn hits the limit, BB's own retry waits for the reset.
+    const d = pressing ?? { label: 'лимит сейчас не давит' };
+    const at = Number.isFinite(reset) ? Math.max(reset, Date.now()) + 30_000 : Date.now() + 60_000;
     for (const [id, r] of resumes) if (r.threadId === threadId) {
       await bb.sdk.threads.queuedMessages.delete({ threadId, queuedMessageId: id }).catch(() => undefined);
       resumes.delete(id);
@@ -378,7 +385,7 @@ export default function plugin(bb: BbPluginApi) {
     try {
       if (typeof row.updatedAt === 'number') await bb.sdk.threads.queuedMessages.update({ threadId, queuedMessageId: id, expectedUpdatedAt: row.updatedAt, sendAt: at });
     } catch (error) { bb.log.warn(`Limit Guard: could not set the resume time: ${message(error)}`); }
-    return `Продолжение поставлено в очередь треда на ${clock(at)} (после сброса «${d.label}»). Закончи текущий шаг и заверши ход.`;
+    return `Продолжение поставлено в очередь треда на ${clock(at)} (${pressing ? `после сброса «${d.label}»` : 'лимит сейчас не давит; если ход упрётся, BB повторит его сам после сброса'}). Закончи текущий шаг и заверши ход.`;
   }
   async function forgetResume(queuedMessageId: string) {
     const r = resumes.get(queuedMessageId);

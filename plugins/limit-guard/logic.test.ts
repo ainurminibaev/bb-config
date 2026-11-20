@@ -129,7 +129,9 @@ test('a resume waits for the most pressing window, the soonest among equals', ()
   const now = Date.parse('2026-11-20T04:30:00Z');
   const at = (h: number) => new Date(now + h * 3_600_000).toISOString();
   const calm = [w('Current session', 27, { resetsAt: at(5) }), w('Weekly limit', 44, { resetsAt: at(80) })];
-  assert.equal(resumeWindow(calm, null, T, now)?.label, 'Current session', 'nothing pressing: the soonest reset');
+  assert.equal(resumeWindow(calm, null, T, now), null, 'nothing pressing: no window to wait for');
+  const hidden = [w('Current session', 0, { resetsAt: null }), w('Weekly limit', 65, { resetsAt: at(80) })];
+  assert.equal(resumeWindow(hidden, null, T, now), null, 'an exhausted window without a reset time must not pick the far weekly reset');
   const weekly = [w('Current session', 20, { resetsAt: at(4) }), w('Weekly limit', 98, { resetsAt: at(30) })];
   assert.equal(resumeWindow(weekly, null, T, now)?.label, 'Weekly limit', 'a full week decides even if later');
   assert.equal(resumeWindow([w('Current session', 50, { resetsAt: null })], null, T, now), null);

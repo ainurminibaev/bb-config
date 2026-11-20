@@ -287,5 +287,7 @@ export function resumeWindow(windows: QuotaWindow[], model: string | null, t: Th
   const ranked = windows.filter(w => appliesToModel(w, model) && w.resetsAt && Date.parse(w.resetsAt) > now)
     .map(w => ({ w, rank: RANK[windowMode(w, t)], at: Date.parse(w.resetsAt!) }))
     .sort((a, b) => b.rank - a.rank || a.at - b.at);
-  return ranked[0]?.w ?? null;
+  // Nothing is pressing (or the pressing window hides its reset): a far weekly reset is no reason to wait.
+  if (!ranked[0] || ranked[0].rank <= RANK.normal) return null;
+  return ranked[0].w;
 }
