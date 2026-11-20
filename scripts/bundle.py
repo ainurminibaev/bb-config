@@ -311,11 +311,15 @@ def converge_one(component, row, root, installed):
         code, output = run(bb_command('plugin', 'update', component['id']), root)
         if code == 0 and managed_state(component, plugins())[0] == 'ok':
             return None
-        # The recorded range or ref cannot reach the required version (an
-        # exact tag, an old range): move to the declared source. BB keeps the
-        # plugin's settings, secrets and schedules on a source change.
-        code, output = run(bb_command('plugin', 'install', component['install'], '--yes'), root)
-        return None if code == 0 else f'bb plugin install {component["install"]}: {output}'
+        # The saved range or ref cannot reach the required version (an exact
+        # tag, an old range): BB changes the saved range in place, keeping the
+        # plugin's settings, secrets and schedules.
+        declared = component['install'].rpartition('@')[2] if component['kind'] == 'git' else f'>={component["min"]}'
+        code, output = run(bb_command('plugin', 'update', component['id'], '--range', declared, '--yes'), root)
+        if code != 0:
+            return f'bb plugin update {component["id"]} --range {declared}: {output}'
+        return None if managed_state(component, plugins())[0] == 'ok' else \
+            f'{component["id"]} is still older than {component["min"]} after the update'
     if state == 'failed' and installed.get(component['id']) and component['kind'] == 'local':
         return install_local(component, root, installed)
     return None
