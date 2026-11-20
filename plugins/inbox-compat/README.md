@@ -1,32 +1,18 @@
-# Needs You: совместимость интерфейса BB
+**English** · [Русский](README.ru.md)
 
-Небольшой патч стороннего плагина Needs You 0.2.1, upstream commit
-`077a7be9356f220a093a1e9df264e1537a4899fa`:
-https://github.com/notpritam/bb-plugin-inbox. Лицензия upstream — MIT.
+# Needs You: BB interface compatibility
 
-Плагин регистрировал `experimental_sidebarAccessory`. BB начиная с SDK0.6.53
-игнорирует это поле: перестали монтироваться слушатель попапов и счётчик.
-Патч переносит слушатель в `experimental_appOverlay`, а счётчик — в
-`experimental_useBadge`. Это не патч самого BB и не замена списка тредов.
+A small patch for the third-party Needs You plugin 0.2.1 (upstream
+[notpritam/bb-plugin-inbox](https://github.com/notpritam/bb-plugin-inbox), MIT).
 
-Применяется к установленному плагину через `bb file`, затем штатные types,
-npm install, build и reload. Удаление/переустановка не выполняется: managed →
-path штатный установщик требует удаления плагина с данными. Настройки,
-вопросы и история сохраняются; source остаётся managed Git. Здесь хранится
-только diff, не ещё одна копия всего плагина.
+The plugin registered `experimental_sidebarAccessory`, which BB ignores since
+SDK 0.6.53, so its popup listener and badge stopped mounting. The patch moves
+the listener to `experimental_appOverlay` and the badge to
+`experimental_useBadge`. It patches neither BB nor its thread list.
 
-Проверка: `python3 scripts/apply_inbox_compat.py`.
-Применение: `python3 scripts/apply_inbox_compat.py --apply`.
-Скрипт сверяет исходный/исправленный SHA-256 и использует compare-before-write.
-Обновление из каталога заменяет исправленный файл; исправление сам восстанавливает
-хранитель плагинов (`plugins/voice-mode-keeper/patch_keeper.py`): накладывает
-`app.patch` на копию с допуском на сдвиги, собирает и только затем ставит и
-перезагружает; при неудаче оставляет версию автора и показывает уведомление.
-Если автор выпустит исправление, патч больше не применяется. Исправление
-отправлено автору: notpritam/bb-plugin-inbox#3 (с SDK 0.6.132 проходят typecheck
-и все 60 тестов).
+Plugin Keeper (`voice-mode-keeper`) applies it to the installed catalog copy
+after every update and verifies it; settings, questions and history are kept and
+the source stays the managed Git install. Only the diff is stored here.
 
-На SDK0.6.94 прошли typecheck, build и все60 upstream-тестов. `widget-test.patch`
-переводит тестовую обвязку с удалённого слота на глобальный overlay и проверяет
-наличие нового badge hook. Тесты также проверяют показ, закрытие, смену текущего
-треда, дедупликацию и уведомления extension activity.
+Manual check: `python3 scripts/apply_inbox_compat.py`; apply:
+`python3 scripts/apply_inbox_compat.py --apply` (SHA-256 checked, compare-before-write).
