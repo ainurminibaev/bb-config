@@ -116,7 +116,7 @@ test("start spawns one agent thread on the server checkout with the pinned relea
   const spawn = s.state.spawned[0]!;
   assert.equal(spawn.projectId, "proj");
   assert.deepEqual(spawn.environment, { type: "host", hostId: "host_server", workspace: { type: "unmanaged", path: "/srv/config" } });
-  assert.match(spawn.prompt, new RegExp(`fetch v1\\.1\\.0 --commit ${SHA}`));
+  assert.match(spawn.prompt, new RegExp(`apply v1\\.1\\.0 --commit ${SHA}`));
   assert.doesNotMatch(spawn.prompt, /origin\/main|git pull/);
   assert.deepEqual(await cliStart(s), { threadId: "thr_1", existing: true, tag: "v1.1.0" });
   s.state.local = { partial: { release: "v1.1.0", remaining: [{ step: "v1.1.0/x", machine: "server" }] },
@@ -176,7 +176,8 @@ test("the button hands the task to the new-thread screen and spawns nothing", as
   const plan = await s.rpc("compose");
   assert.equal(s.state.spawned.length, 0);
   assert.deepEqual([plan.tag, plan.threadId, plan.projectId, plan.hostId], ["v1.1.0", null, "proj", "host_server"]);
-  assert.match(plan.prompt, new RegExp(`begin v1\\.1\\.0 --commit ${SHA}`));
+  assert.match(plan.prompt, new RegExp(`apply v1\\.1\\.0 --commit ${SHA}`));
+  assert.match(plan.prompt, /attention/);
   s.state.local = { run: { release: "v1.1.0", owner: "thr_running", startedAt: "x" } };
   assert.deepEqual(await s.rpc("compose"), { tag: "v1.1.0", threadId: "thr_running", projectId: null, hostId: null, prompt: null });
   await s.harness.lifecycle.dispose();

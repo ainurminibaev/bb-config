@@ -1,0 +1,10 @@
+{
+  "id": "plugin-config-updates-one-step",
+  "title": "Config Updates 0.2.0: обновление одним действием",
+  "component": "config-updates",
+  "where": "server",
+  "kind": "local-plugin",
+  "plugin": "config-updates",
+  "rerun": "Проверяет версию и источник плагина; совпадающая сборка не пересобирается.",
+  "rollback": "Поставить Config Updates из каталога предыдущего релиза в .local/updates/releases/<коммит>/plugins/config-updates."
+}

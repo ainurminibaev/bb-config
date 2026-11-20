@@ -29,7 +29,10 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = re.compile(r'^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$')
 STEP_ID = re.compile(r'^[a-z0-9][a-z0-9-]*$')
 PLUGIN_VERSION = re.compile(r'^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$')
-KINDS = {'local-plugin', 'command', 'manual'}
+KINDS = {'local-plugin', 'command', 'manual', 'bundle'}
+# The bundle step converges the installation to config/bundle.json; it runs
+# first, before every other pending step up to the target release.
+BUNDLE = 'bundle'
 WHERE = {'server', 'executors'}
 DONE = {'verified', 'not-applicable'}
 SERVER = 'server'
@@ -121,6 +124,8 @@ def manifest_errors(manifest, tag):
             argv = step.get(field)
             if argv is not None and not (isinstance(argv, list) and argv and all(isinstance(a, str) for a in argv)):
                 errors.append(f'{name}: {field} must be a non-empty argv list')
+        if kind == BUNDLE and (step.get('where') != SERVER or any(step.get(f) for f in ('apply', 'verify', 'plugin'))):
+            errors.append(f'{name}: bundle steps run on the server and take no apply, verify or plugin')
         if kind == 'command' and not (step.get('apply') and step.get('verify')):
             errors.append(f'{name}: command steps need both apply and verify')
         if kind == 'manual' and step.get('apply'):
@@ -368,9 +373,35 @@ def targets(step, machines):
     return [SERVER] if step['where'] == 'server' else list(machines)
 
 
-def pending(manifests, data, target, machines, commit):
-    """Steps of releases in (installed, target] that are not done, oldest first."""
+def lead_step(manifests, data, target):
+    """Full id of the bundle step that runs before everything else up to target, or None."""
     base = version_key(installed_version(data)) if installed_version(data) else (-1, -1, -1)
+    for tag in sorted(manifests, key=version_key, reverse=True):
+        if base < version_key(tag) <= version_key(target):
+            for step in manifests[tag]['steps']:
+                if step['kind'] == BUNDLE:
+                    return f'{tag}/{step["id"]}'
+    return None
+
+
+def pending(manifests, data, target, machines, commit):
+    """Steps of releases in (installed, target] that are not done, oldest first.
+
+    The newest bundle step in range comes first: it installs and updates the
+    whole set, then older steps are verified against that state.
+    """
+    base = version_key(installed_version(data)) if installed_version(data) else (-1, -1, -1)
+    lead = lead_step(manifests, data, target)
+    if lead:
+        entry = latest(data, lead, SERVER, commit=commit)
+        if not entry or entry['status'] not in DONE:
+            rows = [{'step': lead, 'machine': SERVER, 'status': entry['status'] if entry else 'pending',
+                     'detail': entry['detail'] if entry else ''}]
+            return rows + [row for row in pending_plain(manifests, data, target, machines, commit, base) if row['step'] != lead]
+    return pending_plain(manifests, data, target, machines, commit, base)
+
+
+def pending_plain(manifests, data, target, machines, commit, base):
     rows = []
     for tag, manifest in manifests.items():
         if not base < version_key(tag) <= version_key(target):
@@ -539,10 +570,49 @@ def plugin_state(step, root, plugins, commit=None):
     return True, f'{step["plugin"]} {which} from {source}' + ('' if plugin.get('enabled') else ' (disabled by the user, kept)')
 
 
+def bundle_module():
+    import bundle
+    return bundle
+
+
+def bundle_record(report):
+    """Compact, factual journal form of a bundle report."""
+    groups = {}
+    for row in report['components']:
+        groups.setdefault(row['state'], []).append(row['id'])
+    order = ('installed', 'updated', 'reinstalled', 'failed', 'missing', 'outdated', 'adopt', 'excluded', 'kept-source', 'kept-newer')
+    parts = [('converged' if report['converged'] else 'not converged')]
+    parts += [f'{state}: {", ".join(groups[state])}' for state in order if groups.get(state)]
+    configured = [f'{name} ({hook["hook"]})' for name, hooks in report['configuration'].items()
+                  for hook in hooks if hook['how'] == 'configured']
+    if configured:
+        parts.append('configured: ' + ', '.join(configured))
+    if report['attention']:
+        parts.append(f'attention: {len(report["attention"])} (personal sign-in, settings, other machines)')
+    detail = '; '.join(parts)
+    checks = {'bundle': {'components': {row['id']: {'state': row['state'], 'version': row.get('version')}
+                                        for row in report['components']},
+                         'left': report['left'], 'attention': report['attention']}}
+    return detail, checks
+
+
+def excluded_plugin(root, plugin_id):
+    try:
+        bundle = bundle_module()
+        return plugin_id in bundle.read_selection(root)['excluded']
+    except (OSError, ValueError):
+        return False
+
+
 def settled(root, step, commit=None):
     """(status, how, detail) when the step needs no action here, else None. Changes nothing."""
+    if step['kind'] == BUNDLE:
+        report = bundle_module().check(root, commit)
+        return ('verified', 'existing', *bundle_record(report)) if report['converged'] else None
     if step['kind'] == 'local-plugin':
         plugins = installed_plugins()
+        if step['plugin'] not in plugins and excluded_plugin(root, step['plugin']):
+            return 'not-applicable', 'excluded', 'the user excluded this component (bundle.py exclude)'
         if step['plugin'] not in plugins and not step.get('introduces'):
             return 'not-applicable', 'not-selected', 'plugin is not installed here; the user did not choose it'
         if step['plugin'] in plugins:
@@ -567,6 +637,10 @@ def run_step(root, step, install=False, commit=None):
     done = settled(root, step, commit)
     if done:
         return done
+    if step['kind'] == BUNDLE:
+        report = bundle_module().apply(root, commit)
+        detail, checks = bundle_record(report)
+        return ('verified' if report['converged'] else 'failed', 'applied' if report['converged'] else 'apply', detail, checks)
     if step['kind'] == 'local-plugin':
         plugins = installed_plugins()
         detail = plugin_state(step, root, plugins, commit)[1]
@@ -704,8 +778,13 @@ def command_begin(args, root):
                           if f'{tag}/{s["id"]}' in active}}
 
 
-def dependencies_done(manifests, data, tag, step, machine, mode, commit):
+def dependencies_done(manifests, data, tag, step, machine, mode, commit, target=None):
     base = version_key(installed_version(data)) if installed_version(data) else (-1, -1, -1)
+    lead = lead_step(manifests, data, target) if mode == 'release' and target else None
+    if lead and lead != f'{tag}/{step["id"]}':
+        entry = latest(data, lead, SERVER, mode, commit)
+        if not entry or entry['status'] not in DONE:
+            raise UpdateError(f'{lead} must be done first: it installs and updates the whole set.', 2)
     for dependency in step.get('after', []):
         name = full_id(tag, dependency)
         other_tag, other = find_step(manifests, name)
@@ -730,10 +809,10 @@ def command_run(args, root):
     if (step['where'] == 'server') != (machine == SERVER):
         raise UpdateError(f'{args.step} runs on {step["where"]}; pass a matching --machine.')
     with journal(root) as data:
-        dependencies_done(manifests, data, tag, step, machine, mode, commit)
+        dependencies_done(manifests, data, tag, step, machine, mode, commit, run and run['release'])
     try:
-        status, how, detail = run_step(checkout, step, args.install, commit)
-        checks = observed_checks(step) if status == 'verified' else None
+        status, how, detail, *extra = run_step(checkout, step, args.install, commit)
+        checks = extra[0] if extra else observed_checks(step) if status == 'verified' else None
     except UpdateError as error:
         if error.code != 3:
             with journal(root, write=True) as data:
@@ -760,11 +839,11 @@ def command_record(args, root):
         tag, step = find_step(manifests, args.step)
         if (step['where'] == 'server') != (args.machine == SERVER):
             raise UpdateError(f'{args.step} runs on {step["where"]}; pass a matching --machine.')
-        automatic = step['kind'] == 'local-plugin' or bool(step.get('verify'))
+        automatic = step['kind'] in {'local-plugin', BUNDLE} or bool(step.get('verify'))
         if args.status == 'verified' and args.machine == SERVER and automatic:
             raise UpdateError('This step has an automatic check on the server; use `run`, not `record`.')
         if args.status == 'verified':
-            dependencies_done(manifests, data, tag, step, args.machine, mode, commit)
+            dependencies_done(manifests, data, tag, step, args.machine, mode, commit, run and run['release'])
         return add_entry(data, args.step, args.machine, args.status, 'evidence', args.evidence, mode, commit)
 
 
@@ -807,6 +886,23 @@ def command_finish(args, root):
     return result
 
 
+BUNDLE_STEP = {
+    'id': 'bundle', 'title': 'Полный набор компонентов bb-config', 'component': 'bb-config',
+    'where': 'server', 'kind': 'bundle',
+    'rerun': 'Безопасно: установленное и актуальное только проверяется; повтор доделывает остаток после сбоя.',
+    'rollback': 'Компонент, который не нужен, исключите командой python3 scripts/bundle.py exclude <id> и удалите '
+                'штатно (bb plugin remove <id>); прежнюю версию собственного плагина ставит предыдущий релиз.',
+}
+BUNDLE_PROSE = (
+    'Выполняется первым. Сводит установку к заявленному набору `config/bundle.json` этого релиза: '
+    'ставит отсутствующие компоненты, обновляет устаревшие (собственные плагины — из закреплённого '
+    'коммита, форки и каталоговые — штатным `bb plugin install`/`update`), проверяет и чинит их '
+    'настройку (например, мост Voice Mode). Исключённые пользователем компоненты не ставятся, '
+    'отключённые остаются отключёнными, плагины из другого источника не заменяются. Личные входы, '
+    'настройки и действия на других машинах перечисляются в отчёте (`attention`). Затем шаги '
+    'пропущенных релизов проверяются по уже сведённому состоянию.')
+
+
 def command_release(args, root):
     """Assemble docs/releases/vX.Y.Z.json and .md from the waiting steps in docs/releases/next/."""
     key = version_key(args.release)
@@ -816,7 +912,7 @@ def command_release(args, root):
     waiting = next_steps(root)
     chosen = [name for name in args.steps.split(',') if name] if args.steps else list(waiting)
     problems = [f'no waiting step {name}' for name in chosen if name not in waiting]
-    if not chosen:
+    if not chosen and not (root / 'config/bundle.json').is_file():
         problems.append(f'docs/releases/{NEXT}/ has no steps')
     directory = root / 'docs/releases' / NEXT
     for name in chosen:
@@ -833,6 +929,10 @@ def command_release(args, root):
     if problems:
         raise UpdateError('\n'.join(problems))
     steps, prose = [], []
+    if (root / 'config/bundle.json').is_file():
+        # Every release converges the installation to its declared set first.
+        steps.append(dict(BUNDLE_STEP))
+        prose.append(f'### `{BUNDLE_STEP["id"]}` — {BUNDLE_STEP["title"]}\n\n{BUNDLE_PROSE}\n')
     for name in chosen:
         step = dict(waiting[name])
         after = [d.split('/', 1)[1] if d.startswith(f'{NEXT}/') else d for d in step.get('after', [])]
@@ -889,7 +989,9 @@ def command_accept(args, root):
         step = find_step(manifests, row['step'])[1]
         try:
             done = settled(checkout, step, args.commit)
-            checks = observed_checks(step) if done and done[0] == 'verified' else None
+            checks = (done[3] if done and len(done) > 3 else
+                      observed_checks(step) if done and done[0] == 'verified' else None)
+            done = done[:3] if done else done
         except UpdateError as error:
             return refuse(f'{row["step"]}: {error}')
         if not done:
@@ -905,6 +1007,107 @@ def command_accept(args, root):
         data['installed'] = {'release': args.release, 'commit': args.commit, 'how': 'auto-accept', 'at': now()}
         data['partial'] = None
         return {'accepted': True, 'installed': data['installed'], 'steps': [name for name, *_ in results]}
+
+
+def latest_release(repository):
+    """(tag, commit) of the newest stable GitHub Release. A failure is an error, never 'nothing new'."""
+    import urllib.request
+    request = urllib.request.Request(f'https://api.github.com/repos/{repository}/releases/latest',
+                                     headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'bb-config-updates'})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            tag = json.loads(response.read().decode())['tag_name']
+    except (OSError, ValueError, KeyError) as error:
+        raise UpdateError(f'Could not read the latest release of {repository}: {error}')
+    version_key(tag)
+    refs = dict(reversed(line.split('\t', 1)) for line in git(
+        ROOT, 'ls-remote', '--', f'https://github.com/{repository}.git', f'refs/tags/{tag}', f'refs/tags/{tag}^{{}}').splitlines())
+    commit = refs.get(f'refs/tags/{tag}^{{}}') or refs.get(f'refs/tags/{tag}')
+    if not commit or not re.fullmatch(r'[0-9a-f]{40}', commit):
+        raise UpdateError(f'Tag {tag} of {repository} was not found.')
+    return tag, commit
+
+
+def origin_repository(root):
+    url = git(root, 'remote', 'get-url', 'origin', check=False)
+    match = re.search(r'github\.com[/:]([\w-]+/[\w.-]+?)(?:\.git)?/?$', url.stdout.strip()) if url.returncode == 0 else None
+    return match.group(1) if match else None
+
+
+def command_apply(args, root):
+    """Install or update in one action: fetch the pinned release and converge to it.
+
+    Without a tag the newest stable release is used. The work itself runs from
+    the fetched release (`pinned`), so the procedure of that release applies.
+    """
+    if not args.release:
+        repository = args.repository or origin_repository(root)
+        if not repository:
+            raise UpdateError('Pass vX.Y.Z --commit <sha>, or --repository owner/repo to use the latest release.')
+        args.release, args.commit = latest_release(repository)
+        args.repository = repository
+    elif not args.commit:
+        raise UpdateError('--commit is required with a release tag.')
+    checkout = Path(command_fetch(args, root)['checkout'])
+    script = checkout / 'scripts/updates.py'
+    command = [sys.executable, str(script), 'pinned', args.release, '--commit', args.commit, '--owner', args.owner]
+    if args.machines:
+        command += ['--machines', args.machines]
+    result = subprocess.run(compat.argv(command), cwd=checkout, capture_output=True, text=True)
+    if result.returncode != 0 and 'invalid choice' in result.stderr:
+        raise UpdateError(f'{args.release} predates one-step updates; follow docs/updates.md step by step.')
+    sys.stderr.write(result.stderr)
+    try:
+        answer = json.loads(result.stdout)
+    except ValueError:
+        raise UpdateError((result.stdout + result.stderr).strip()[-800:] or 'pinned run failed', result.returncode or 1)
+    if result.returncode:
+        raise UpdateError(json.dumps(answer, ensure_ascii=False, indent=1), result.returncode)
+    return answer
+
+
+def command_pinned(args, root):
+    """Inside a fetched release: begin, run every server step in order, finish."""
+    if not release_location(root) or root.name != args.commit:
+        raise UpdateError('pinned runs inside the prepared release; use `apply`.')
+    opened = command_begin(argparse.Namespace(release=args.release, commit=args.commit, owner=args.owner,
+                                              machines=args.machines, takeover=False), root)
+    outcomes, attention, report = [], [], None
+    steps = opened['steps']
+    for row in opened['pending']:
+        if row['machine'] != SERVER:
+            continue
+        try:
+            entry = command_run(argparse.Namespace(step=row['step'], machine=None, install=False,
+                                                   development=False, owner=args.owner), root)
+            outcomes.append({'step': row['step'], 'status': entry['status'], 'how': entry['how'], 'detail': entry['detail']})
+            if entry.get('bundle'):
+                report = entry['bundle']
+        except UpdateError as error:
+            text = str(error)
+            try:
+                failed = json.loads(text)
+                outcomes.append({'step': row['step'], 'status': 'failed', 'how': failed.get('how'), 'detail': failed.get('detail')})
+                report = failed.get('bundle') or report
+            except ValueError:
+                outcomes.append({'step': row['step'], 'status': {2: 'blocked', 3: 'needs-decision'}.get(error.code, 'failed'),
+                                 'detail': text[-400:]})
+    if report:
+        attention = report.get('attention', [])
+    elsewhere = [row for row in opened['pending'] if row['machine'] != SERVER]
+    try:
+        finished = command_finish(argparse.Namespace(owner=args.owner), root)
+        code = 0
+    except UpdateError as error:
+        finished = json.loads(str(error)) if str(error).startswith('{') else {'error': str(error)}
+        code = error.code
+    result = {'release': args.release, 'commit': args.commit, 'steps': outcomes, 'attention': attention,
+              'otherMachines': [{**row, 'title': steps.get(row['step'], {}).get('title')} for row in elsewhere],
+              'installed': finished.get('installed'), 'remaining': (finished.get('partial') or {}).get('remaining', [])}
+    if code:
+        decisions = any(item['status'] == 'needs-decision' for item in outcomes)
+        raise UpdateError(json.dumps(result, ensure_ascii=False, indent=1), 3 if decisions else code)
+    return result
 
 
 def command_validate(args, root):
@@ -961,6 +1164,13 @@ def main(argv=None, root=ROOT):
     command.add_argument('--evidence', required=True)
     command.add_argument('--development', action='store_true')
     add('finish', command_finish, run=True)
+    command = add('apply', command_apply, run=True)
+    command.add_argument('release', nargs='?', help='release tag vX.Y.Z (default: the newest stable release)')
+    command.add_argument('--commit', help='pinned 40-character commit of the release')
+    command.add_argument('--repository', help='GitHub owner/repository (default: origin)')
+    command.add_argument('--machines', help='comma-separated BB machine ids for executor steps')
+    command = add('pinned', command_pinned, release=True, commit=True, run=True)
+    command.add_argument('--machines', help=argparse.SUPPRESS)
     add('accept', command_accept, release=True, commit=True).add_argument('--repository', help='GitHub owner/repository (default: origin)')
     command = add('release', command_release, release=True)
     command.add_argument('--title', required=True)
