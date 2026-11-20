@@ -1,0 +1,3 @@
+[agent compatibility]
+Правила, навыки, хуки и MCP проекта должны работать и в Claude Code, и в Codex. Правила пиши в AGENTS.md; CLAUDE.md — одна строка «@AGENTS.md». Не привязывай инструкции к одному агенту. Создаёшь или меняешь их — навык agent-compat.
+[/agent compatibility]

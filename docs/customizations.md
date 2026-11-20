@@ -1852,6 +1852,34 @@ one-time migration and keeper change; no new bb-config stable release is implied
 `python3 scripts/snapshot.py --check`. Правило применяется в BB командой
 `python3 scripts/setup_tracking.py --apply`.
 
+## Общие инструкции: короткие триггеры + навыки Shared Guides (20 ноября 2026)
+
+У Custom instructions BB лимит 4096 символов, и они всегда в контексте каждого
+агента. Поэтому там только «когда и что», а «как» — в навыках собственного
+плагина `plugins/shared-guides` (только навыки, без UI и инструментов):
+
+| Блок инструкций | Навык | Где хранится текст блока |
+|---|---|---|
+| `[bb-config tracking]` | `bb-config-tracking` | `config/tracking-instructions.txt` |
+| `[agent compatibility]` | `agent-compat` | `config/agent-compat-instructions.txt` |
+| `[thread transfer]` | `thread-transfer` | приватный снимок |
+| `[project logos]` | `project-logos` | приватный снимок |
+
+`[Tru project storage]` и `[codex delegation]` остаются короткими личными
+блоками; строка про Chrome удалена (агент по ней ничего сделать не может —
+общее подключение Chrome обеспечивает служба chrome-devtools-shared).
+Ревью 20.11.2026: 4077 → 1909 символов.
+
+- Публичные блоки применяет `python3 scripts/setup_tracking.py --apply`
+  (`--refresh` — только обновить уже включённые, `--check` — проверка). Скрипт
+  заменяет только свои блоки и отказывается записывать текст длиннее 4096.
+- Личные блоки и итоговый текст — в приватном снимке
+  `.local/config/plugins/custom-instructions.json`, восстанавливаются
+  `restore.py`.
+- Плагин: `bb plugin install path:<checkout>/plugins/shared-guides --yes`
+  (restore ставит его из `config/plugins.json`). Новые навыки добавляй в
+  `plugins/shared-guides/skills/<имя>/SKILL.md`, поднимай версию в `package.json`.
+
 ## CLAUDE.md только как импорт AGENTS.md: хук Claude Code (20 ноября 2026)
 
 Правила проекта пишутся в `AGENTS.md` (их читают все агенты), а `CLAUDE.md`

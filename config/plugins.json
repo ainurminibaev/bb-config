@@ -279,6 +279,13 @@
     "installSource": "limits@bb-community"
   },
   {
+    "id": "local-transcribe",
+    "version": "0.2.4",
+    "enabled": true,
+    "name": "Local Transcribe",
+    "source": "path:plugins/local-transcribe"
+  },
+  {
     "id": "mac-computer-use",
     "version": "0.4.1",
     "enabled": true,
@@ -433,6 +440,13 @@
     "source": "builtin:secrets"
   },
   {
+    "id": "shared-guides",
+    "version": "0.1.0",
+    "enabled": true,
+    "name": "Shared Guides",
+    "source": "path:plugins/shared-guides"
+  },
+  {
     "id": "side-chat",
     "version": "0.1.0",
     "enabled": true,
@@ -504,12 +518,5 @@
     "enabled": true,
     "name": "Workflows",
     "source": "builtin:workflows"
-  },
-  {
-    "id": "local-transcribe",
-    "version": "0.2.4",
-    "enabled": true,
-    "name": "Local Transcribe",
-    "source": "path:plugins/local-transcribe"
   }
 ]
