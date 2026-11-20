@@ -297,7 +297,14 @@ export default async function configUpdates(bb: BbPluginApi) {
     const checkout = z.object({ checkout: z.string() }).parse(JSON.parse(stdout)).checkout;
     const script = resolve(checkout, "scripts/bundle.py");
     if (!existsSync(script)) return { tag: target.tag, components: [], untested: fresh.untested };
-    const answer = JSON.parse((await python(script, ["plan"], { timeout: 120_000, cwd: checkout, env })).stdout);
+    let answer: { components: unknown[]; untested: unknown[] };
+    try {
+      answer = JSON.parse((await python(script, ["plan"], { timeout: 120_000, cwd: checkout, env })).stdout);
+    } catch (error) {
+      // A release before v1.5.0 has no `plan`: nothing to choose, the update still converges.
+      if (!/invalid choice/.test(String((error as { stderr?: string }).stderr ?? ""))) throw error;
+      return { tag: target.tag, components: [], untested: fresh.untested };
+    }
     return PlanSchema.parse({ tag: target.tag, components: answer.components, untested: answer.untested });
   }
 
