@@ -181,10 +181,15 @@ def managed_state(component, installed):
     return 'ok', version
 
 
+# Installed and loaded, waiting for the user's own sign-in or settings: delivered,
+# reported under attention, never filled in by the installer.
+WAITING = 'needs-configuration'
+
+
 def running(plugin):
     if not plugin:
         return 'not installed'
-    if plugin.get('enabled') and plugin.get('status') != 'running':
+    if plugin.get('enabled') and plugin.get('status') not in ('running', WAITING):
         return f'status {plugin.get("status")}: {plugin.get("statusDetail") or ""}'.strip()
     return None
 
@@ -209,6 +214,8 @@ def assess(root, commit=None, installed=None, chosen=None):
             state, detail = 'failed', problem
         row.update(state=state, detail=detail, version=plugin and plugin.get('version'),
                    enabled=plugin and plugin.get('enabled'))
+        if plugin and plugin.get('enabled') and plugin.get('status') == WAITING:
+            row['waiting'] = plugin.get('statusDetail') or "the plugin waits for its settings"
         rows.append(row)
     return data, rows
 
@@ -237,6 +244,9 @@ def attention(data, rows, fresh=()):
     for row in rows:
         if row['state'] == 'excluded':
             continue
+        if row.get('waiting'):
+            items.append({'component': row['id'], 'type': 'needs-configuration', 'text': row['waiting'],
+                          'new': row['id'] in fresh})
         for note in by_id[row['id']].get('attention', []):
             items.append({'component': row['id'], 'type': note['type'], 'text': note['text'], 'new': row['id'] in fresh})
         for dependency in by_id[row['id']].get('requires', []):

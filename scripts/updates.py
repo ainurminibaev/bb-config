@@ -563,11 +563,13 @@ def plugin_state(step, root, plugins, commit=None):
         return False, 'the pinned release build is not installed'
     if plugin.get('version') != wanted and not newer:
         return False, f'installed {plugin.get("version")}, release has {wanted}'
-    if plugin.get('enabled') and plugin.get('status') != 'running':
+    if plugin.get('enabled') and plugin.get('status') not in ('running', 'needs-configuration'):
         return False, f'status {plugin.get("status")}: {plugin.get("statusDetail")}'
     which = f'{plugin.get("version")} (newer than release {wanted}; a later build is installed)' if newer else wanted
     source = f'release {prepared.name}' if prepared else 'the existing installation'
-    return True, f'{step["plugin"]} {which} from {source}' + ('' if plugin.get('enabled') else ' (disabled by the user, kept)')
+    waiting = (" (waits for the user's settings: " + (plugin.get('statusDetail') or '')[:160] + ')'
+               if plugin.get('enabled') and plugin.get('status') == 'needs-configuration' else '')
+    return True, f'{step["plugin"]} {which} from {source}' + ('' if plugin.get('enabled') else ' (disabled by the user, kept)') + waiting
 
 
 def bundle_module():
@@ -592,7 +594,10 @@ def bundle_record(report):
     detail = '; '.join(parts)
     checks = {'bundle': {'components': {row['id']: {'state': row['state'], 'version': row.get('version')}
                                         for row in report['components']},
-                         'left': report['left'], 'attention': report['attention']}}
+                         'left': report['left'], 'attention': report['attention'],
+                         'problems': {row['id']: str(row.get('detail'))[-300:] for row in report['components']
+                                      if row['state'] not in ('ok', 'installed', 'updated', 'reinstalled', 'excluded',
+                                                              'kept-source', 'kept-newer')}}}
     return detail, checks
 
 
@@ -1056,9 +1061,8 @@ def command_apply(args, root):
     result = subprocess.run(compat.argv(command), cwd=checkout, capture_output=True, text=True)
     if result.returncode != 0 and 'invalid choice' in result.stderr:
         raise UpdateError(f'{args.release} predates one-step updates; follow docs/updates.md step by step.')
-    sys.stderr.write(result.stderr)
     try:
-        answer = json.loads(result.stdout)
+        answer = json.loads(result.stdout if result.returncode == 0 else result.stderr)
     except ValueError:
         raise UpdateError((result.stdout + result.stderr).strip()[-800:] or 'pinned run failed', result.returncode or 1)
     if result.returncode:
@@ -1074,8 +1078,12 @@ def command_pinned(args, root):
                                               machines=args.machines, takeover=False), root)
     outcomes, attention, report = [], [], None
     steps = opened['steps']
+    lead = lead_step(load_manifests(root, args.commit), {'installed': opened['installed']}, args.release)
     for row in opened['pending']:
         if row['machine'] != SERVER:
+            continue
+        if lead and outcomes and outcomes[0]['step'] == lead and outcomes[0]['status'] != 'verified':
+            outcomes.append({'step': row['step'], 'status': 'blocked', 'detail': f'waits for {lead}'})
             continue
         try:
             entry = command_run(argparse.Namespace(step=row['step'], machine=None, install=False,
