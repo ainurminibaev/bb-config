@@ -19,6 +19,9 @@
 - **Неприоритетные треды:** `bb limit priority low|background|normal`;
   задания ждут, пока окно выше порога, который растёт к сбросу окна
   (5 ч 40→90%, неделя и окно модели 60→95%).
+- **Продолжение после сброса:** в финише агент ставит в очередь треда строку
+  «продолжай» на момент сброса окна (`limit_resume_after_reset`,
+  `bb limit resume`); тред продолжит сам.
 - **Выключатели:** файл `.bb/hands-off` в папке,
   `bb plugin config limit-guard set snapshots off`,
   `bb plugin disable limit-guard`.

@@ -140,7 +140,7 @@ const MODE_TITLE: Record<Mode, string> = { normal: 'ОБЫЧНЫЙ', economy: '�
 export const MODE_ADVICE: Record<Mode, string> = {
   normal: 'Работай как обычно.',
   economy: 'Работай короткими законченными шагами. Законченный шаг — обычный коммит по правилам проекта. Незаконченное при обрыве плагин сохранит сам.',
-  finish: 'Новое не начинай. Доведи текущий шаг до рабочего состояния и коротко напиши «что сделано / что дальше / как проверить». Незаконченное плагин сохранит сам.',
+  finish: 'Новое не начинай, но не останавливайся, ничего не сделав: доведи текущий шаг до рабочего состояния и коротко напиши «что сделано / что дальше / как проверить». Если по задаче осталась работа — вызови limit_resume_after_reset: плагин поставит в очередь треда продолжение на момент сброса окна. Незаконченное плагин сохранит сам.',
   unknown: 'Лимит неизвестен — работай как обычно.',
 };
 
@@ -187,7 +187,7 @@ export function thresholdMessage(a: Assessment, now: number, provider: string): 
 export function agentRules(): string {
   return [
     'Лимиты подписки (плагин limit-guard). Когда лимит подходит к порогу, плагин сам пришлёт в ход короткое сообщение [limit-guard] с режимом; при обрыве хода он сам сохранит снимок незаконченной работы. Ради лимита коммитить не нужно.',
-    '- «Экономный»: работай короткими законченными шагами. «Финиш»: новое не начинай, доведи шаг до рабочего состояния и напиши «что сделано / что дальше / как проверить».',
+    '- «Экономный»: работай короткими законченными шагами. «Финиш»: новое не начинай, но доведи текущий шаг до рабочего состояния и напиши «что сделано / что дальше / как проверить»; если работа по задаче осталась — вызови limit_resume_after_reset, чтобы тред сам продолжил после сброса окна.',
     '- Коммиты — только законченные шаги, только свои файлы по именам (не `git add -A`), push — по правилам проекта. В общей папке не переключай ветку и не делай stash, reset, pull, rebase.',
     '- Узнать лимит самому можно инструментом limit_status, например перед большой задачей.',
   ].join('\n');
@@ -271,4 +271,21 @@ export function stuckText(s: StuckThread, now: number): string {
     lines.push(`  у ${providerName(s.alternative.providerId)} лимит тоже на исходе или неизвестен — лучше подождать`);
   }
   return lines.join('\n');
+}
+
+/** The queued message that resumes a thread after its window resets. */
+export function resumeText(note: string | null): string {
+  const clean = note?.replace(/\s+/g, ' ').trim().slice(0, 600);
+  return `[limit-guard] Окно лимита сбросилось — продолжай задачу с того места, где остановился.${clean ? ` Что дальше: ${clean}` : ''}`;
+}
+
+/**
+ * The window a resume should wait for: the most pressing one (finish over economy
+ * over normal), and among equals the one that resets first.
+ */
+export function resumeWindow(windows: QuotaWindow[], model: string | null, t: Thresholds, now: number): QuotaWindow | null {
+  const ranked = windows.filter(w => appliesToModel(w, model) && w.resetsAt && Date.parse(w.resetsAt) > now)
+    .map(w => ({ w, rank: RANK[windowMode(w, t)], at: Date.parse(w.resetsAt!) }))
+    .sort((a, b) => b.rank - a.rank || a.at - b.at);
+  return ranked[0]?.w ?? null;
 }

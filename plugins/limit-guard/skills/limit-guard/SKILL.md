@@ -62,6 +62,15 @@ anything itself.
   - a handoff of a stuck thread (a thread from the `handoff` plugin whose
     first message names it) removes the source's queued retry row.
 
+## Resume after a reset
+
+In finish mode, if work on the task remains, call `limit_resume_after_reset`
+(optional `next`: what to do next). It queues a real row «продолжай с того
+места» in this thread, scheduled for the reset of the most pressing window
+(+30 s); the plugin's hook holds it until then. Do not stop without finishing
+the current step. `bb limit resume` does the same from a shell; `bb limit stuck`
+lists scheduled resumes.
+
 ## Low-priority threads
 
 `bb limit priority normal|low|background [--thread <id>]`; the composer chip and

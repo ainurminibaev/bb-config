@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   agentRules, appliesToModel, assess, blockingReset, classifyWindow, DEFAULT_THRESHOLDS as T, etaMinutes, formatDuration,
-  normalizeThresholds, notification, render, shouldNotify, stuckText, thresholdMessage, windowMode,
+  normalizeThresholds, notification, render, resumeWindow, shouldNotify, stuckText, thresholdMessage, windowMode,
   type QuotaWindow, type StuckThread,
 } from './logic.ts';
 
@@ -123,4 +123,14 @@ test('suggestions: another provider with room, another model, or wait', () => {
   assert.match(notification(stuck({ retry: 'none' }), now).body, /Автоповтора нет/);
   assert.match(stuckText(stuck({ alternative: { providerId: 'codex', mode: 'finish', percent: 97 } }), now), /лучше подождать/);
   assert.ok(notification(stuck({ title: 'x'.repeat(200) }), now).title.length <= 80);
+});
+
+test('a resume waits for the most pressing window, the soonest among equals', () => {
+  const now = Date.parse('2026-11-20T04:30:00Z');
+  const at = (h: number) => new Date(now + h * 3_600_000).toISOString();
+  const calm = [w('Current session', 27, { resetsAt: at(5) }), w('Weekly limit', 44, { resetsAt: at(80) })];
+  assert.equal(resumeWindow(calm, null, T, now)?.label, 'Current session', 'nothing pressing: the soonest reset');
+  const weekly = [w('Current session', 20, { resetsAt: at(4) }), w('Weekly limit', 98, { resetsAt: at(30) })];
+  assert.equal(resumeWindow(weekly, null, T, now)?.label, 'Weekly limit', 'a full week decides even if later');
+  assert.equal(resumeWindow([w('Current session', 50, { resetsAt: null })], null, T, now), null);
 });

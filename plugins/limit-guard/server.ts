@@ -3,7 +3,7 @@ import { PluginCliError, cliCommand, defineCli } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
 import { hostContract, rpcContract, type PriorityView, type SnapshotResult } from './contract.ts';
 import {
-  agentRules, assess, blockingReset, classifyWindow, DEFAULT_THRESHOLDS, etaMinutes, normalizeThresholds, notification, render,
+  agentRules, assess, blockingReset, classifyWindow, clock, DEFAULT_THRESHOLDS, etaMinutes, normalizeThresholds, notification, render, resumeText, resumeWindow,
   setTimeZone, shouldNotify, stuckText, thresholdMessage,
   type Assessment, type Mode, type QuotaWindow, type RetryState, type StuckThread, type Thresholds,
 } from './logic.ts';
@@ -335,9 +335,55 @@ export default function plugin(bb: BbPluginApi) {
     },
   });
 
+  // ---------- Resume after a reset: a real queue row, scheduled for the window's reset ----------
+  type Resume = { threadId: string; queuedMessageId: string; at: number; window: string; createdAt: number };
+  const resumes = new Map<string, Resume>();
+  const resumesReady = (async () => {
+    for (const key of await bb.storage.kv.list('resume:')) {
+      const value = await bb.storage.kv.get<Resume>(key);
+      if (value) resumes.set(value.queuedMessageId, value);
+    }
+  })().catch(error => bb.log.warn(`Limit Guard: could not load resumes: ${message(error)}`));
+  async function scheduleResume(threadId: string, note: string | null): Promise<string> {
+    await resumesReady;
+    const s = await status(threadId, true);
+    const d = resumeWindow(s.assessment.windows, s.model, thresholds, Date.now());
+    const reset = d?.resetsAt ? Date.parse(d.resetsAt) : Number.NaN;
+    if (!d || !Number.isFinite(reset)) return 'Время сброса окна неизвестно — продолжение не поставлено. Напиши пользователю, что продолжать нужно вручную.';
+    const at = Math.max(reset, Date.now()) + 30_000;
+    for (const [id, r] of resumes) if (r.threadId === threadId) {
+      await bb.sdk.threads.queuedMessages.delete({ threadId, queuedMessageId: id }).catch(() => undefined);
+      resumes.delete(id);
+    }
+    const created = await bb.sdk.threads.queuedMessages.create({ threadId, input: [{ type: 'text', text: resumeText(note), mentions: [] }] }) as unknown;
+    const row = record(record(created).queuedMessage ?? created);
+    const id = text(row.id);
+    if (!id) throw new Error('BB не вернул строку очереди');
+    const entry: Resume = { threadId, queuedMessageId: id, at, window: d.label, createdAt: Date.now() };
+    resumes.set(id, entry);
+    await bb.storage.kv.set(`resume:${threadId}`, entry);
+    // The time on the row gives the thread a clock in lists; our hook below holds it until then anyway.
+    try {
+      if (typeof row.updatedAt === 'number') await bb.sdk.threads.queuedMessages.update({ threadId, queuedMessageId: id, expectedUpdatedAt: row.updatedAt, sendAt: at });
+    } catch (error) { bb.log.warn(`Limit Guard: could not set the resume time: ${message(error)}`); }
+    return `Продолжение поставлено в очередь треда на ${clock(at)} (после сброса «${d.label}»). Закончи текущий шаг и заверши ход.`;
+  }
+  async function forgetResume(queuedMessageId: string) {
+    const r = resumes.get(queuedMessageId);
+    if (!r) return;
+    resumes.delete(queuedMessageId);
+    if ((await bb.storage.kv.get<Resume>(`resume:${r.threadId}`))?.queuedMessageId === queuedMessageId) await bb.storage.kv.delete(`resume:${r.threadId}`);
+  }
+  bb.events.on('message.dispatched', ({ entry }) => { void forgetResume((entry as { id: string }).id); });
+  bb.events.on('message.cancelled', ({ entry }) => { void forgetResume((entry as { id: string }).id); });
+
   bb.experimental_hooks.on('message.dispatch', async ctx => {
+    // A resume row waits for its reset, then goes like any message (priority rules still apply below).
+    await resumesReady;
+    const resume = ctx.queuedMessages.map(m => resumes.get((m as { id: string }).id)).find(Boolean);
+    if (resume && Date.now() < resume.at) return { action: 'wait', reason: `Продолжение после сброса «${resume.window}» в ${clock(resume.at)}`, sendAt: resume.at };
     // A limit note must never start a turn of its own.
-    if (ctx.originPluginId === bb.pluginId && ctx.attempt === 'start-turn') return { action: 'reject', message: 'limit-guard: тред уже не работает — сообщение о лимите не нужно' };
+    if (!resume && ctx.originPluginId === bb.pluginId && ctx.attempt === 'start-turn') return { action: 'reject', message: 'limit-guard: тред уже не работает — сообщение о лимите не нужно' };
     // A steer into a running turn is the user talking to work already under way.
     if (ctx.attempt !== 'start-turn') return { action: 'proceed' };
     try {
@@ -364,7 +410,7 @@ export default function plugin(bb: BbPluginApi) {
     const key = `prio|${d.label}|${d.resetsAt ? Math.round(d.resetsAt / 600_000) : ''}`;
     if ((await sentFor(row.id)).some(item => item.key === key)) return;
     try {
-      await bb.sdk.threads.send({ threadId: row.id, mode: 'steer-if-active', input: [{ type: 'text', text: `[limit-guard] ${holdReason(mode, d)} Доведи текущий шаг до рабочего состояния, коротко напиши «что сделано / что дальше» и остановись: следующие задания подождут.`, mentions: [] }] });
+      await bb.sdk.threads.send({ threadId: row.id, mode: 'steer-if-active', input: [{ type: 'text', text: `[limit-guard] ${holdReason(mode, d)} Доведи текущий шаг до рабочего состояния, коротко напиши «что сделано / что дальше» и остановись: следующие задания подождут. Если по задаче осталась работа — вызови limit_resume_after_reset, и тред сам продолжит.`, mentions: [] }] });
       await markSent(row.id, { key, mode: 'finish', at: Date.now() });
     } catch (error) { bb.log.warn(`Limit Guard: could not message ${row.id}: ${message(error)}`); }
   }
@@ -489,8 +535,18 @@ export default function plugin(bb: BbPluginApi) {
       catch (error) { return { content: [{ type: 'text', text: `Лимит не удалось узнать: ${message(error)}` }], isError: true }; }
     },
   });
+  bb.agents.registerTool({
+    name: 'limit_resume_after_reset',
+    description: 'В режиме финиша, если по задаче осталась работа: поставить в очередь этого треда продолжение на момент сброса окна лимита. Тред сам продолжит, когда окно сбросится.',
+    presentation: { label: { pending: 'Ставлю продолжение после сброса лимита', completed: 'Поставил продолжение после сброса лимита' } },
+    parameters: z.object({ next: z.string().max(600).optional().describe('Коротко: что сделать дальше, когда тред продолжится') }),
+    async execute({ next }, ctx) {
+      try { return await scheduleResume(ctx.threadId, next ?? null); }
+      catch (error) { return { content: [{ type: 'text', text: `Продолжение не поставлено: ${message(error)}` }], isError: true }; }
+    },
+  });
   bb.agents.configure(context => SUPPORTED.has(context.provider.id)
-    ? { tools: ['limit_status'], skills: [], instructions: agentRules() }
+    ? { tools: ['limit_status', 'limit_resume_after_reset'], skills: [], instructions: agentRules() }
     : { tools: [], skills: [] });
 
   // ---------- CLI ----------
@@ -545,9 +601,20 @@ export default function plugin(bb: BbPluginApi) {
         options: { json: jsonOption },
         async run(input) {
           await stuckReady;
+          await resumesReady;
           const list = [...stuck.values()].sort((a, b) => b.failedAt - a.failedAt);
-          if (input.options.json) return { exitCode: 0, stdout: JSON.stringify(list, null, 2) };
-          return { exitCode: 0, stdout: list.length ? list.map(item => stuckText(item, Date.now())).join('\n') : 'Тредов, ждущих лимит, нет.' };
+          const waiting = [...resumes.values()].sort((a, b) => a.at - b.at);
+          if (input.options.json) return { exitCode: 0, stdout: JSON.stringify({ stuck: list, resumes: waiting }, null, 2) };
+          const lines = [...list.map(item => stuckText(item, Date.now())),
+            ...waiting.map(r => `${r.threadId}  продолжение в очереди на ${clock(r.at)} (после сброса «${r.window}», строка ${r.queuedMessageId})`)];
+          return { exitCode: 0, stdout: lines.length ? lines.join('\n') : 'Тредов, ждущих лимит, нет.' };
+        },
+      }),
+      resume: cliCommand({
+        summary: 'Поставить в очередь треда продолжение на момент сброса окна лимита (строка очереди со временем)',
+        options: { thread: threadOption, next: { type: 'string', description: 'Что сделать дальше (до 600 символов)' } },
+        async run(input, ctx) {
+          return { exitCode: 0, stdout: await scheduleResume(requireThread(input.options.thread, ctx), input.options.next ?? null) };
         },
       }),
       snapshot: cliCommand({
