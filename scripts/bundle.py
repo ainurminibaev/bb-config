@@ -19,6 +19,9 @@ marked `new`.
 
   check     report; exit 0 when converged, 2 when something is left
   apply     converge, then report; exit 0 when converged, 1 otherwise
+  plan      what an update would bring: new components with description and
+            link, excluded ones, plugins newer than the version tested here
+  choose    record the user's choice: --skip ids are excluded, --take ids included
   exclude   remember that the user does not want a component
   include   forget such a decision
 
@@ -73,6 +76,11 @@ def errors(data, root):
                 problems.append(f'{name}: {kind} needs source (git:<url>@) and install')
             if not updates.PLUGIN_VERSION.fullmatch(str(component.get('min', ''))):
                 problems.append(f'{name}: min must be X.Y.Z')
+        if not str(component.get('description', '')).strip():
+            problems.append(f'{name}: description is required (shown when the user chooses components)')
+        if 'tested' in component and not (updates.PLUGIN_VERSION.fullmatch(str(component['tested'])) and
+                                          updates.version_tuple(component['tested']) >= updates.version_tuple(component.get('min', '0.0.0'))):
+            problems.append(f'{name}: tested must be X.Y.Z, not below min')
         for dependency in component.get('requires', []):
             if dependency not in seen:
                 problems.append(f'{name}: requires {dependency}, which must be declared before it')
@@ -238,6 +246,38 @@ def configure_rows(component, root, installed, fix):
     return results
 
 
+def link(data, component):
+    """Where the user can read the code of a component."""
+    if component.get('repository'):
+        return component['repository']
+    return f'{data.get("repository", "").rstrip("/")}/tree/main/plugins/{component["id"]}'
+
+
+def untested(data, rows):
+    """Installed external plugins newer than the version this release was tested with."""
+    by_id = {c['id']: c for c in data['components']}
+    found = []
+    for row in rows:
+        tested = by_id[row['id']].get('tested')
+        if tested and row.get('version') and row['state'] != 'excluded' and \
+                updates.version_tuple(row['version']) > updates.version_tuple(tested):
+            found.append({'component': row['id'], 'name': row['name'], 'installed': row['version'], 'tested': tested,
+                          'needed': [c['name'] for c in data['components'] if row['id'] in c.get('requires', [])]})
+    return found
+
+
+def plan(root, commit=None, installed=None):
+    data, rows = assess(root, commit, installed)
+    by_id = {c['id']: c for c in data['components']}
+    items = [{'id': row['id'], 'name': row['name'], 'description': by_id[row['id']]['description'],
+              'link': link(data, by_id[row['id']]), 'kind': row['kind'], 'state': row['state'],
+              'version': row.get('version'), 'tested': by_id[row['id']].get('tested'),
+              'requires': by_id[row['id']].get('requires', []),
+              'new': row['state'] == 'missing', 'excluded': row['state'] == 'excluded'} for row in rows]
+    return {'components': items, 'new': [item['id'] for item in items if item['new']],
+            'excluded': [item['id'] for item in items if item['excluded']], 'untested': untested(data, rows)}
+
+
 def attention(data, rows, fresh=()):
     by_id = {c['id']: c for c in data['components']}
     items = []
@@ -253,6 +293,11 @@ def attention(data, rows, fresh=()):
             if next(r for r in rows if r['id'] == dependency)['state'] == 'excluded':
                 items.append({'component': row['id'], 'type': 'dependency', 'new': False,
                               'text': f'{row["id"]} needs {dependency}, which the user excluded.'})
+    for item in untested(data, rows):
+        users = f' ({", ".join(item["needed"])} может работать неправильно)' if item['needed'] else ''
+        items.append({'component': item['component'], 'type': 'untested', 'new': False,
+                      'text': f'{item["name"]} {item["installed"]} новее проверенной {item["tested"]}{users}. '
+                              f'Если что-то сломалось, верните {item["tested"]} или дождитесь релиза bb-config.'})
     for action in data.get('machineActions', []):
         items.append({'component': 'bb-config', 'type': 'machine', 'text': action['text'], 'new': bool(fresh)})
     return items
@@ -418,12 +463,33 @@ def main(argv=None, root=ROOT):
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('check')
     sub.add_parser('apply')
+    sub.add_parser('plan')
+    command = sub.add_parser('choose')
+    command.add_argument('--skip', default='', help='comma-separated ids the user does not want')
+    command.add_argument('--take', default='', help='comma-separated ids the user wants (clears an exclusion)')
     command = sub.add_parser('exclude')
     command.add_argument('component')
     command.add_argument('--reason', default='')
     sub.add_parser('include').add_argument('component')
     args = parser.parse_args(argv)
     try:
+        if args.command == 'plan':
+            print(json.dumps(plan(root, head_commit(root)), ensure_ascii=False, indent=1))
+            return 0
+        if args.command == 'choose':
+            ids = {c['id'] for c in load(root)['components']}
+            skip, take = ([x for x in value.split(',') if x] for value in (args.skip, args.take))
+            unknown = [x for x in skip + take if x not in ids]
+            if unknown:
+                raise updates.UpdateError(f'not in the declared set: {", ".join(unknown)}')
+            selection = read_selection(root)
+            for component in skip:
+                selection['excluded'][component] = {'reason': 'снята галочка при обновлении', 'at': updates.now()}
+            for component in take:
+                selection['excluded'].pop(component, None)
+            write_selection(root, selection)
+            print(json.dumps({'excluded': sorted(selection['excluded'])}, ensure_ascii=False, indent=1))
+            return 0
         if args.command in {'exclude', 'include'}:
             ids = {c['id'] for c in load(root)['components']}
             if args.component not in ids:
