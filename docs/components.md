@@ -1,6 +1,9 @@
 # Состав bb-config: компоненты, источники, зависимости
 
-Заявленный набор описан в [`config/bundle.json`](../config/bundle.json). Одна
+Заявленный набор описан в [`config/bundle.json`](../config/bundle.json): у каждого
+компонента — описание и ссылка на код (их показывает окно выбора), у внешних —
+проверенная версия `tested` (Handoff 0.8.2, Needs You 0.2.1, Tokenomics 0.2.2,
+KodaForge 0.7.0, ChatGPT Realtime 0.1.0; более новая даёт предупреждение). Одна
 установка и одно обновление сводят BB к этому набору
 (`python3 scripts/updates.py apply`, см. [updates.md](updates.md)). Порядок в файле —
 порядок установки: зависимости раньше зависимых.
@@ -16,7 +19,7 @@
 | `handoff` | каталог BB | `handoff@bb-community`, от 0.7.0 | для `handoff-button` | — |
 | `handoff-button` | свой плагин | `plugins/handoff-button` | зависит от `handoff` | — |
 | `inbox` (Needs You) | каталог BB | `inbox@bb-community`, от 0.2.0 | исправление `plugins/inbox-compat` накладывает Keeper | — |
-| `tokenomics` | каталог BB | `tokenomics@bb-community`, от 0.2.0 | исправление `plugins/tokenomics-compat` накладывает Keeper | — |
+| `tokenomics` | каталог BB | `tokenomics@bb-community`, от 0.2.0 | исправление `plugins/voice-mode-keeper/tokenomics_compat.py` накладывает Keeper | — |
 | `kodaforge` | каталог BB | `kodaforge@bb-community`, от 0.7.0 | для `code-open`, `kodaforge-inspector`; исправления `plugins/kodaforge-compat` (Keeper) | — |
 | `kodaforge-inspector` | свой плагин | `plugins/kodaforge-inspector` | зависит от `kodaforge` | — |
 | `code-open` | свой плагин | `plugins/code-open` | зависит от `kodaforge` | — |
@@ -39,8 +42,8 @@
 Вне плагинов: на каждой машине с Codex — `python3 scripts/codex_defaults.py --apply --verify`.
 Это действие на других машинах; установка показывает его в `attention`.
 
-Патчи сторонних плагинов (`plugins/inbox-compat`, `plugins/tokenomics-compat`,
-`plugins/kodaforge-compat`) и правки Voice Mode (`plugins/voice-mode`) — не
+Патчи сторонних плагинов (`plugins/inbox-compat`, `plugins/kodaforge-compat`,
+Tokenomics — внутри `plugins/voice-mode-keeper`) и правки Voice Mode (`plugins/voice-mode`) — не
 отдельные плагины: их применяют Keeper, форк и шаги релизов.
 
 ## Вне набора

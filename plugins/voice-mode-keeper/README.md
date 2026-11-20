@@ -1,3 +1,5 @@
+**English** · [Русский](README.ru.md)
+
 # Plugin Keeper (id `voice-mode-keeper`)
 
 Automatically preserves the managed Voice Mode catalog installation's personal

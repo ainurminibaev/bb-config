@@ -232,3 +232,22 @@ test("the checkout matches its project source however the path is written", () =
   // Windows: bb may store forward slashes or another case than realpath returns.
   assert.equal(samePath("d:/Work/BB-Config/", "D:\\Work\\bb-config"), process.platform === "win32");
 });
+
+test("the button's run result: installed and updated components, attention, failure answer on stderr", async () => {
+  const { summarize, scriptAnswer } = await import("./server.ts");
+  const answer = { steps: [
+    { step: "v1.5.0/bundle", status: "verified", how: "applied", detail: "converged; installed: voice-mode, handoff; updated: machine-tabs; attention: 2" },
+    { step: "v1.3.1/voice-mode-routes-0-2-8", status: "verified", how: "existing" }],
+    attention: [{ component: "codex-realtime", type: "auth", text: "codex login", new: true }], remaining: [] };
+  const job = summarize("v1.5.0", 1, 0, answer, null);
+  assert.equal(job.state, "done");
+  assert.deepEqual([job.installed, job.updated], [["voice-mode", "handoff"], ["machine-tabs"]]);
+  assert.deepEqual(job.steps, { applied: 1, existing: 1, other: 0 });
+  assert.deepEqual(job.attention, [{ component: "codex-realtime", type: "auth", text: "codex login" }]);
+  const failed = scriptAnswer({ code: 2, stdout: "", stderr: JSON.stringify({ steps: [], remaining: [{ step: "x" }] }) });
+  assert.equal(failed.code, 2);
+  const partial = summarize("v1.5.0", 1, failed.code, failed.answer, null);
+  assert.deepEqual([partial.state, partial.remaining, partial.error], ["failed", 1, null]);
+  const broken = scriptAnswer({ code: 1, stdout: "", stderr: "Traceback" });
+  assert.equal(summarize("v1.5.0", 1, broken.code, broken.answer, "Traceback").error, "Traceback");
+});

@@ -573,6 +573,9 @@ def plugin_state(step, root, plugins, commit=None):
 
 
 def bundle_module():
+    # Run as a script this module is __main__; bundle.py must see the same
+    # UpdateError and journal helpers, not a second copy imported as `updates`.
+    sys.modules.setdefault('updates', sys.modules[__name__])
     import bundle
     return bundle
 
@@ -1054,10 +1057,13 @@ def command_apply(args, root):
     elif not args.commit:
         raise UpdateError('--commit is required with a release tag.')
     checkout = Path(command_fetch(args, root)['checkout'])
+    choose_components(args, checkout)
     script = checkout / 'scripts/updates.py'
     command = [sys.executable, str(script), 'pinned', args.release, '--commit', args.commit, '--owner', args.owner]
     if args.machines:
         command += ['--machines', args.machines]
+    if args.takeover:
+        command.append('--takeover')
     result = subprocess.run(compat.argv(command), cwd=checkout, capture_output=True, text=True)
     if result.returncode != 0 and 'invalid choice' in result.stderr:
         raise UpdateError(f'{args.release} predates one-step updates; follow docs/updates.md step by step.')
@@ -1070,12 +1076,43 @@ def command_apply(args, root):
     return answer
 
 
+def choose_components(args, checkout):
+    """Let the user decline new components before they are installed.
+
+    --skip names them; in a terminal without --yes the list is shown with a
+    description and a link, and everything is installed unless numbers are
+    entered. The choice is recorded by the release's own bundle.py.
+    """
+    tool = checkout / 'scripts/bundle.py'
+    if not tool.is_file():
+        return
+    def bundle(*argv):
+        result = subprocess.run(compat.argv([sys.executable, str(tool), *argv]), cwd=checkout, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise UpdateError(f'bundle.py {argv[0]}: {(result.stderr or result.stdout).strip()[-400:]}')
+        return json.loads(result.stdout)
+    skip = [item for item in (args.skip or '').split(',') if item]
+    if not skip and not args.yes and sys.stdin.isatty():
+        fresh = [item for item in bundle('plan')['components'] if item['new']]
+        if fresh:
+            print(f'Будут установлены новые компоненты ({len(fresh)}):', file=sys.stderr)
+            for number, item in enumerate(fresh, 1):
+                print(f'  {number:2}. {item["name"]} — {item["description"]}\n      {item["link"]}', file=sys.stderr)
+            answer = input('Enter — установить все. Или номера через запятую, которые НЕ ставить: ').strip()
+            picked = [int(x) for x in re.findall(r'\d+', answer)]
+            if any(not 1 <= x <= len(fresh) for x in picked):
+                raise UpdateError('Нет такого номера; ничего не установлено, повторите.')
+            skip = [fresh[x - 1]['id'] for x in picked]
+    if skip:
+        bundle('choose', '--skip', ','.join(skip))
+
+
 def command_pinned(args, root):
     """Inside a fetched release: begin, run every server step in order, finish."""
     if not release_location(root) or root.name != args.commit:
         raise UpdateError('pinned runs inside the prepared release; use `apply`.')
     opened = command_begin(argparse.Namespace(release=args.release, commit=args.commit, owner=args.owner,
-                                              machines=args.machines, takeover=False), root)
+                                              machines=args.machines, takeover=args.takeover), root)
     outcomes, attention, report = [], [], None
     steps = opened['steps']
     lead = lead_step(load_manifests(root, args.commit), {'installed': opened['installed']}, args.release)
@@ -1191,8 +1228,12 @@ def main(argv=None, root=ROOT):
     command.add_argument('--commit', help='pinned 40-character commit of the release')
     command.add_argument('--repository', help='GitHub owner/repository (default: origin)')
     command.add_argument('--machines', help='comma-separated BB machine ids for executor steps')
+    command.add_argument('--yes', action='store_true', help='install every new component without asking')
+    command.add_argument('--skip', help='comma-separated component ids not to install (remembered)')
+    command.add_argument('--takeover', action='store_true', help='continue a run left open by a stopped owner (the update button)')
     command = add('pinned', command_pinned, release=True, commit=True, run=True)
     command.add_argument('--machines', help=argparse.SUPPRESS)
+    command.add_argument('--takeover', action='store_true', help=argparse.SUPPRESS)
     add('accept', command_accept, release=True, commit=True).add_argument('--repository', help='GitHub owner/repository (default: origin)')
     command = add('release', command_release, release=True)
     command.add_argument('--title', required=True)

@@ -1,3 +1,5 @@
+**English** · [Русский](README.ru.md)
+
 # Project Catalog
 
 Adds a **Проекты** tab and a `bb catalog` command: one central card per BB

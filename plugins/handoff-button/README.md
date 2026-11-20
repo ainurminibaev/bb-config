@@ -1,25 +1,28 @@
+**English** · [Русский](README.ru.md)
+
 # Handoff Button
 
-Кнопка в строке composer открывает **оригинальную панель Handoff справа**.
-Закрытие, выбор машины и агента, Preview и сам перенос принадлежат оригинальному
-[Handoff](https://getbb.app/marketplace/handoff). Дополнительного попапа нет.
+A composer button that opens the **original Handoff panel on the right**.
+Closing, choosing the machine and agent, Preview and the handoff itself belong
+to the original [Handoff](https://getbb.app/marketplace/handoff) plugin; there
+is no extra popup.
 
-Оригинальный `handoff` установлен из каталога и продолжает получать обновления.
-В этой папке только небольшая UI-кнопка. Она нажимает штатные элементы BB:
-Show right panel → New tab → действие `plugin-action:handoff:handoff`.
-Не читает и не меняет React state, не отправляет черновик, не запускает перенос
-и не хранит историю. Код и данные оригинального Handoff не копируются.
+`handoff` stays installed from the BB catalog and keeps receiving its updates.
+This folder holds only a small UI button. It presses BB's own controls: Show
+right panel → New tab → the `plugin-action:handoff:handoff` action. It does not
+read or change React state, send the draft, start a handoff or keep history, and
+copies no code or data of Handoff.
 
-SDK BB 0.6.94 позволяет плагину программно открывать только собственные панели.
-Поэтому здесь используется UI-мост, проверенный по разметке BB 0.48: атрибуты
-`data-panel-new-tab` и `data-panel-new-tab-item`, штатный ID действия Handoff.
-Поддерживаются и встроенная панель, и панель, вынесенная BB за пределы треда.
-Если внешних подходящих кнопок несколько, надстройка не выбирает случайную.
-Если BB изменит разметку, кнопка покажет ошибку; открыть Hand off вручную из
-правой панели по-прежнему можно. Автоматического запуска переноса при ошибке нет.
-На узком экране, где BB скрывает composer actions, используй оригинальную панель.
+The BB SDK lets a plugin open only its own panels, so the button is a UI bridge
+checked against BB's markup (`data-panel-new-tab`, `data-panel-new-tab-item`,
+Handoff's action id). It supports the in-thread and the detached panel. If BB
+changes the markup, the button shows an error and Handoff stays available from
+the right panel. On narrow screens, where BB hides composer actions, use the
+original panel.
 
-## Восстановление на сервере BB
+## Install
+
+Part of the [bb-config](../../README.md) set: `python3 scripts/updates.py apply` from the repository root installs it with everything else. It needs `handoff` (also in the set). Alone:
 
 ```sh
 bb plugin install handoff
@@ -27,27 +30,3 @@ npm --prefix plugins/handoff-button ci
 bb plugin build plugins/handoff-button
 bb plugin install path:"$PWD/plugins/handoff-button"
 ```
-
-## Что такое рабочая папка
-
-Проект BB содержит Sources — привязки «машина → путь к checkout».
-На новой машине можно привязать существующую папку или клонировать Git remote:
-`bb project source add <projectId> --machine <machine> --clone`.
-Это git clone из репозитория, не копирование рабочей папки старой машины.
-
-- **Project checkout** — зарегистрированная существующая папка проекта на
-  выбранной машине. У неё своя текущая ветка и незакоммиченные изменения.
-- **Worktree** — отдельная папка и ветка из зарегистрированного checkout.
-  При смене машины Handoff пытается использовать имя исходной ветки;
-  если ветки нет, предупреждает об использовании default branch. Одинаковые
-  имена веток ещё не означают одинаковые коммиты.
-- **Same workspace** — исходная папка; доступна только на той же машине.
-- **Personal workspace** — пустая папка без репозитория.
-
-Handoff передаёт переписку и отдельно файл патча незакоммиченных изменений;
-применение патча поручается принимающему агенту. Незапушенные коммиты, ignored
-файлы и зависимости так не переносятся. Сначала обеспечь доступность исходного
-HEAD на новой машине, затем проверяй/применяй патч. При несовпадении кода или
-лимитах патча нельзя считать всю рабочую папку точно перенесённой.
-
-Проверено с Handoff 0.8.1 (16.11.2026): плагин перешёл с `threadPanelAction` на `experimental_tab` с `availability: "action"`, но bb 0.49 даёт такому пункту тот же id `plugin-action:handoff:handoff`, и кнопка открывает панель «Hand off» без изменений.

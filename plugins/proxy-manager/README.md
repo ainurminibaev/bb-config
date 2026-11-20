@@ -1,3 +1,5 @@
+**English** · [Русский](README.ru.md)
+
 # Proxy Manager
 
 Named HTTP/HTTPS proxies, per-machine connectivity checks, and native Codex routing.

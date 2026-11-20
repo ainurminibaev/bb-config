@@ -81,15 +81,16 @@ class BundleTests(unittest.TestCase):
             (folder / 'package.json').write_text(json.dumps({'version': version}))
             (folder / 'package-lock.json').write_text('{}')
         self.declared = {'schemaVersion': 1, 'machineActions': [{'id': 'x', 'text': 'run on every machine'}], 'components': [
-            {'id': 'catalog', 'kind': 'catalog', 'name': 'Catalog', 'source': 'git:https://example.org/catalog.git@',
+            {'id': 'catalog', 'kind': 'catalog', 'name': 'Catalog', 'description': 'catalog plugin', 'tested': '1.2.0',
+             'repository': 'https://example.org/catalog', 'source': 'git:https://example.org/catalog.git@',
              'install': 'catalog@bb-community', 'min': '1.0.0',
              'attention': [{'type': 'auth', 'text': 'personal sign-in'}]},
-            {'id': 'fork', 'kind': 'git', 'name': 'Fork', 'source': GIT, 'install': GIT + '^0.3.0', 'min': '0.3.0',
+            {'id': 'fork', 'kind': 'git', 'name': 'Fork', 'description': 'own fork', 'source': GIT, 'install': GIT + '^0.3.0', 'min': '0.3.0',
              'requires': ['catalog'],
              'configure': [{'name': 'bridge', 'check': ['{python}', 'hook.py', 'check'], 'apply': ['{python}', 'hook.py', 'apply']}]},
-            {'id': 'alpha', 'kind': 'local', 'name': 'Alpha'},
-            {'id': 'beta', 'kind': 'local', 'name': 'Beta'},
-        ]}
+            {'id': 'alpha', 'kind': 'local', 'name': 'Alpha', 'description': 'own plugin'},
+            {'id': 'beta', 'kind': 'local', 'name': 'Beta', 'description': 'own plugin', 'requires': ['catalog']},
+        ], 'repository': 'https://example.org/bb-config'}
         (self.root / 'config/bundle.json').write_text(json.dumps(self.declared))
 
     def tearDown(self):
@@ -187,11 +188,50 @@ class BundleTests(unittest.TestCase):
         self.assertTrue(result['converged'], result['left'])
         self.assertEqual(self.states(result)['catalog'], 'installed')
 
+    def test_follow_release_moves_a_plugin_to_the_current_release(self):
+        releases = updates.state_dir(self.root) / 'releases'
+        old, new = releases / ('a' * 40), releases / ('b' * 40)
+        for directory in (old, new):
+            (directory / 'plugins/alpha').mkdir(parents=True)
+            (directory / 'plugins/alpha/package.json').write_text(json.dumps({'version': '1.1.0'}))
+        plugin = {'id': 'alpha', 'version': '1.1.0', 'rootDir': str(old / 'plugins/alpha'), 'enabled': True, 'status': 'running'}
+        with patch.object(updates, 'release_location', lambda root: {'root': str(self.root)} if root.parent == releases else None):
+            state, _ = bundle.local_state({'id': 'alpha', 'followRelease': True}, new, {'alpha': plugin}, new.name)
+        self.assertEqual(state, 'outdated')
+
+    def test_older_declared_set_without_descriptions_still_loads(self):
+        for component in self.declared['components']:
+            component.pop('description', None)
+        (self.root / 'config/bundle.json').write_text(json.dumps(self.declared))
+        self.assertEqual(bundle.load(self.root)['components'][0]['description'], 'Catalog')
+
+    def test_plan_lists_new_components_and_choice_is_remembered(self):
+        fake = FakeBB(self.root, [self.local('alpha', '1.1.0'),
+                                  {'id': 'catalog', 'version': '1.3.0', 'source': 'git:https://example.org/catalog.git@^1',
+                                   'rootDir': '/c', 'enabled': True, 'status': 'running'}])
+        with patch.object(bundle, 'plugins', fake.list), patch.object(updates, 'installed_plugins', fake.list):
+            result = bundle.plan(self.root)
+            self.assertEqual(result['new'], ['fork', 'beta'])
+            beta = next(item for item in result['components'] if item['id'] == 'beta')
+            self.assertEqual(beta['link'], 'https://example.org/bb-config/tree/main/plugins/beta')
+            self.assertEqual(result['untested'], [{'component': 'catalog', 'name': 'Catalog', 'installed': '1.3.0',
+                                                    'tested': '1.2.0', 'needed': ['Fork', 'Beta']}])
+            self.assertEqual(bundle.main(['choose', '--skip', 'beta'], self.root), 0)
+            self.assertEqual(bundle.plan(self.root)['excluded'], ['beta'])
+            self.assertEqual(bundle.main(['choose', '--take', 'beta'], self.root), 0)
+            self.assertEqual(bundle.plan(self.root)['excluded'], [])
+            self.assertEqual(bundle.main(['choose', '--skip', 'nope'], self.root), 1)
+            _, rows = bundle.assess(self.root)
+            texts = [item['text'] for item in bundle.attention(bundle.load(self.root), rows) if item['type'] == 'untested']
+            self.assertTrue(texts and 'Beta' in texts[0] and '1.2.0' in texts[0])
+
     def test_declared_set_of_the_repository_is_valid(self):
         root = Path(__file__).resolve().parents[1]
         data = bundle.load(root)
         ids = [c['id'] for c in data['components']]
         self.assertEqual(len(ids), len(set(ids)))
+        raw = json.loads((root / 'config/bundle.json').read_text())
+        self.assertEqual([c['id'] for c in raw['components'] if not c.get('description')], [], 'every component has a description')
         local = {p.name for p in (root / 'plugins').iterdir() if (p / 'package.json').is_file()}
         self.assertEqual(local - set(ids), set(), 'every own plugin with package.json is in the declared set')
 

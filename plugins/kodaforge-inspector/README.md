@@ -1,35 +1,31 @@
+**English** · [Русский](README.ru.md)
+
 # KodaForge Inspector
 
-Откройте диалог BB, затем нажмите кнопку редактора `</>` в его шапке. При первом открытии редактора в каждом проекте инспектор показывает окно выбора с двумя схемами: **Штатный вид** (код по центру, чат справа) и **Чат по центру**. Заранее отмечен штатный вид; до выбора и после «Позже» KodaForge остаётся штатным, а окно появится при следующем открытии. **Применить** сохраняет выбор для этого проекта. **Сохранить для всех** записывает его в настройку `layout` (`ask`, `native`, `center`) и сбрасывает выбор отдельных проектов, после чего окно больше не появляется. Собственный выбор проекта важнее общего. Сменить вид можно кнопкой **Вид…** в строке вкладок (в виде с центральным чатом), в настройках плагина или командой `bb plugin config kodaforge-inspector set layout <ask|native|center>`.
+Open a BB thread, then the editor button `</>` in its header. The first time
+the editor opens in a project, the inspector offers two layouts: **Native**
+(code in the middle, chat on the right) and **Chat in the centre**. Native is
+preselected; until you choose (or after "Later") KodaForge stays native.
+**Apply** saves the choice for this project; **Save for all** writes the
+`layout` setting (`ask`, `native`, `center`) and clears per-project choices.
+Change it later with **View…** in the tab row, in the plugin settings or with
+`bb plugin config kodaforge-inspector set layout <ask|native|center>`.
 
-В виде «Чат по центру» вкладка **Чат с ИИ** занимает центральное поле. Файлы видны слева, ветка Git и кнопка Terminal — в нижней строке. Нажмите на файл или выберите **Файлы и код**, чтобы перейти к редактору. Обе панели остаются смонтированными при переключении. Возврат на вкладку восстанавливает её содержимое.
+In the centred layout the **AI chat** tab fills the middle; files are on the
+left, the Git branch and Terminal in the bottom bar. Both panels stay mounted
+when switching. Only the editor page of a thread is affected; ordinary BB chat
+and KodaForge's own pages open as usual.
 
-Инспектор подключается на странице редактора конкретного диалога. Обычный чат BB, главная страница KodaForge и рабочие пространства проектов открываются штатно.
+**Auto-open**: turn on `autoOpen` and set `autoOpenThread` (`thr_…`) to open
+one chosen thread straight in KodaForge.
 
-## Автооткрытие выбранного диалога
+## Install
 
-Чтобы один конкретный диалог открывался сразу в KodaForge, включите настройку `autoOpen` и укажите его ID в `autoOpenThread` (`thr_…` из адреса диалога BB). По умолчанию переключатель выключен, ID пуст. Перенаправляется только обычная страница этого диалога; остальные диалоги и ссылки на конкретные сообщения открываются как обычно. Если KodaForge выключен или несовместим, перехода нет.
-
-## Установка на сервере BB
-
-Нужны Node.js с npm, BB с поддержкой SDK из манифеста и KodaForge. Для новой установки основной редактор доступен в каталоге BB по имени `kodaforge@bb-community`. Выполните из корня checkout bb-config:
+Part of the [bb-config](../../README.md) set: `python3 scripts/updates.py apply` from the repository root installs it with everything else. It needs KodaForge (`kodaforge@bb-community`, also in the set). Alone:
 
 ```sh
 cd plugins/kodaforge-inspector
-npm ci --include=dev
-npm run typecheck
-npm test
-bb plugin build .
-bb plugin install . --yes
+npm ci --include=dev && npm run typecheck && npm test
+bb plugin build . && bb plugin install . --yes
 bb kodaforge-inspector status
 ```
-
-Перезагрузите страницу браузера и откройте редактор диалога. В выводе повторной команды `status` поле `browser` покажет время и результат последней проверки. До первого открытия редактора результат может отсутствовать.
-
-## Обновление и возврат
-
-BB проверяет обновления основного KodaForge из настроенного источника. Установить предложенную версию можно кнопкой Update или командой `bb plugin update kodaforge --yes`. Инспектор поставляется отдельно в bb-config. После обновления он проверяет видимую область редактора, признаки навигации, ветки и терминала. Совместимый интерфейс получает центральный чат при открытии. Если структура изменилась, инспектор снимает свой слой и показывает причину. Изменение экспериментального API BB может потребовать обновления самого инспектора.
-
-Команда `bb kodaforge-inspector status` показывает установленный источник и результат последней проверки браузера. Поле `upstreamTracking` сверяет источник с записью KodaForge в конфигурации команды. Оно не определяет, установлена ли самая свежая версия.
-
-Для возврата к штатному KodaForge выберите «Штатный вид» кнопкой **Вид…** или выполните `bb plugin config kodaforge-inspector set layout native`. Полное отключение — `bb plugin disable kodaforge-inspector` и обновление страницы. Эти операции управляют только инспектором.
