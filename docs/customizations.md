@@ -1863,12 +1863,17 @@ one-time migration and keeper change; no new bb-config stable release is implied
 | `[bb-config tracking]` | `bb-config-tracking` | `config/tracking-instructions.txt` |
 | `[agent compatibility]` | `agent-compat` | `config/agent-compat-instructions.txt` |
 | `[thread transfer]` | `thread-transfer` | приватный снимок |
-| `[project logos]` | `project-logos` | приватный снимок |
+| `[project logos]` | `project-logo` (плагин Project Logo) | приватный снимок |
 
 `[Tru project storage]` и `[codex delegation]` остаются короткими личными
 блоками; строка про Chrome удалена (агент по ней ничего сделать не может —
 общее подключение Chrome обеспечивает служба chrome-devtools-shared).
 Ревью 20.11.2026: 4077 → 1909 символов.
+
+Project Logo 0.2.2: навык `project-logo` раньше не попадал к агентам —
+`bb.agents.configure` возвращал `skills: []`. Теперь навык доступен во всех
+тредах обычных проектов (после автоматической проверки — без инструментов,
+с CLI `bb project-logo`) и описывает явную просьбу «поставь/замени логотип».
 
 - Публичные блоки применяет `python3 scripts/setup_tracking.py --apply`
   (`--refresh` — только обновить уже включённые, `--check` — проверка). Скрипт

@@ -8,7 +8,7 @@
   },
   "bb": {
     "name": "Shared Guides",
-    "description": "Skills behind the short global instructions: bb-config tracking, thread transfer, project logos, agent compatibility.",
+    "description": "Skills behind the short global instructions: bb-config tracking, thread transfer, agent compatibility.",
     "branding": {
       "icon": "BookOpen"
     },

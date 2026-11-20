@@ -1,0 +1,11 @@
+{
+  "id": "plugin-project-logo-skill",
+  "title": "Project Logo 0.2.2: навык виден агентам, в том числе для явной просьбы поставить или заменить логотип",
+  "component": "project-logo",
+  "where": "server",
+  "kind": "local-plugin",
+  "plugin": "project-logo",
+  "introduces": false,
+  "rerun": "Безопасно: при совпадении версии и источника шаг только проверяется.",
+  "rollback": "Установить project-logo 0.2.1 из предыдущего релиза bb-config."
+}
