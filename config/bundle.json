@@ -18,7 +18,8 @@
      "type": "setting",
      "text": "Checkout bb-config должен быть проектом BB на машине сервера; установка создаёт проект, если его нет."
     }
-   ]
+   ],
+   "followRelease": true
   },
   {
    "id": "voice-mode-keeper",

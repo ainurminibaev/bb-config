@@ -167,6 +167,11 @@ def local_state(component, root, installed, commit):
         if updates.version_tuple(plugin.get('version')) >= updates.version_tuple(wanted):
             return 'ok', f'{plugin.get("version")} from a prepared release'
         return 'outdated', f'installed {plugin.get("version")}, set has {wanted}'
+    prepared = updates.prepared_plugin_source(root, component['id'], plugin) if commit else None
+    if component.get('followRelease') and prepared and prepared.resolve() != root.resolve():
+        # Config Updates runs scripts/updates.py next to itself: it moves to every
+        # new release so fixed scripts reach it even when the plugin is unchanged.
+        return 'outdated', f'runs from release {prepared.name[:12]}; moves to {root.name[:12]}'
     ok, detail = updates.plugin_state({'plugin': component['id']}, root, installed, commit)
     if ok:
         return ('kept-newer' if 'newer than release' in detail else 'ok'), detail

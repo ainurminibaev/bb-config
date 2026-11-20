@@ -188,6 +188,17 @@ class BundleTests(unittest.TestCase):
         self.assertTrue(result['converged'], result['left'])
         self.assertEqual(self.states(result)['catalog'], 'installed')
 
+    def test_follow_release_moves_a_plugin_to_the_current_release(self):
+        releases = updates.state_dir(self.root) / 'releases'
+        old, new = releases / ('a' * 40), releases / ('b' * 40)
+        for directory in (old, new):
+            (directory / 'plugins/alpha').mkdir(parents=True)
+            (directory / 'plugins/alpha/package.json').write_text(json.dumps({'version': '1.1.0'}))
+        plugin = {'id': 'alpha', 'version': '1.1.0', 'rootDir': str(old / 'plugins/alpha'), 'enabled': True, 'status': 'running'}
+        with patch.object(updates, 'release_location', lambda root: {'root': str(self.root)} if root.parent == releases else None):
+            state, _ = bundle.local_state({'id': 'alpha', 'followRelease': True}, new, {'alpha': plugin}, new.name)
+        self.assertEqual(state, 'outdated')
+
     def test_older_declared_set_without_descriptions_still_loads(self):
         for component in self.declared['components']:
             component.pop('description', None)
