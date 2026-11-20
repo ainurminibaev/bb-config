@@ -1,34 +1,45 @@
-# Плагины для BB
+**English** · [Русский](README.ru.md)
 
-Набор дополнений для [BB](https://getbb.app): вкладки машин, управление прокси
-и небольшие кнопки к существующим возможностям приложения.
-Устанавливайте только нужные плагины — импортировать настройки автора не требуется.
+# bb-config: plugins and customizations for BB
 
-| Плагин | Что добавляет | Настройка после установки |
+A set of add-ons for [BB](https://getbb.app), the agentic IDE: machine tabs for
+the thread list, a project catalog, proxy management, a voice mode, account
+usage indicators and small buttons for existing BB features. The whole set
+installs and updates with one command; any component can be left out. You do
+not need the author's settings.
+
+Full list with sources and dependencies: [docs/components.md](docs/components.md)
+(in Russian).
+
+| Plugin | What it adds | Setup after install |
 | --- | --- | --- |
-| [Machine Tabs](plugins/machine-tabs) | Вкладки машин над списком тредов, двухуровневая группировка (проект, машина, день), поиск без учёта раскладки, фильтры по теме и проекту, блок «Last 5», значки проектов | Не требуется. Значок проекта — файл `.bb/icon.svg` или `.bb/icon.png` в корне проекта, затем `bb machine-tabs icons` |
-| [Project Logo](plugins/project-logo) | Подбирает общий значок проекта по названию и первому сообщению; сохраняет существующие значки | Дополнительных настроек нет; для показа нужен Machine Tabs. Подбор выполняет агент при следующем создании сессии провайдера |
-| [Menubar Status](plugins/menubar-status) | Значок bb в строке меню macOS или полоска на панели задач Windows: статусы агентов и расход лимитов; панель с usage аккаунтов, агентами (с текущим шагом) и чатом сбоку, где можно ответить агенту | Задайте `hostId` и `filePath` в настройках плагина; на Mac (нужен `xcode-select --install`): `zsh install.sh` из `plugins/menubar-status/macos`; на Windows: `install.ps1` из `plugins/menubar-status/windows` |
-| [Proxy Manager](plugins/proxy-manager) | Управление прокси, проверку соединений и маршрутов провайдеров | Добавьте собственные прокси |
-| [Project Open](plugins/project-open) | Кнопки у треда: открыть папку проекта в Finder и терминал BB | Для Finder — локальный обработчик на Mac (см. README плагина) |
-| [Push Button](plugins/push-button) | Кнопку «попросить агента запушить» в строке ветки; сам Git не запускает | Не требуется |
-| [Thread Account Usage](plugins/thread-account-usage) | Окна квот аккаунта у текущего треда, отдельно от расхода токенов | Не требуется |
-| [Handoff Button](plugins/handoff-button) | Кнопку открытия оригинальной панели Handoff в composer | Установите оригинальный Handoff из каталога BB |
-| [Web BB Button](plugins/web-bb-button) | Глобус в левой панели, открывающий BB в браузере | Укажите публичный URL своего BB в настройках |
-| [Open on Desktop](plugins/file-local-open) | Значки у ссылок на файлы: открыть файл на своём Mac или Windows-компьютере либо сохранить в Загрузки; просмотр PDF по ширине | Не требуется при одном настольном компьютере; иначе `macHostId` |
-| [Browser Page](plugins/browser-page) | Навык для агентов на Windows, где Browser Automation не запускается: открыть страницу во встроенном браузере BB, прочитать, нажать, снять снимок | Не требуется |
-| [Config Updates](plugins/config-updates) | Сообщает о новых стабильных релизах этого репозитория и запускает их применение агентом по кнопке «Обновить с ИИ» | Checkout репозитория должен быть проектом BB на машине сервера |
-| [Plugin Keeper](plugins/voice-mode-keeper) | Сохраняет ваши правки каталожных плагинов при их обновлениях: Voice Mode ([список правок](plugins/voice-mode)), исправления Needs You и Tokenomics. После обновления сам накладывает правки на новую версию (с допуском на сдвиги и переформатирование), проверяет тестами и сборкой, откатывает при несовместимости | Установите Voice Mode, Needs You и Tokenomics из каталога BB. Правки Voice Mode русскоязычные: голос говорит по-русски от первого лица |
+| [Machine Tabs](plugins/machine-tabs) | Machine tabs above the thread list, two-level grouping (project, machine, day), layout-independent search, topic and project filters, "Last 5", project icons | None. A project icon is `.bb/icon.svg` or `.bb/icon.png` in the project root, then `bb machine-tabs icons` |
+| [Project Logo](plugins/project-logo) | Picks a shared project icon from its name and first message; keeps existing icons | None; icons are shown by Machine Tabs |
+| [Project Catalog](plugins/project-catalog) | A "Projects" tab and `bb catalog`: one card per project and its folders on every machine | None |
+| [Menubar Status](plugins/menubar-status) | Agent statuses and limit usage in the macOS menu bar or on the Windows taskbar, with a chat to answer agents | `hostId` and `filePath` in the plugin settings; `install.sh` on the Mac or `install.ps1` on Windows |
+| [Proxy Manager](plugins/proxy-manager) | Named proxies, connectivity checks, native Codex routing | Add your own proxies |
+| [Project Open](plugins/project-open) | Thread buttons: open the project folder in Finder and a BB terminal | For Finder, a local handler on the Mac |
+| [Push Button](plugins/push-button) | A "ask the agent to push" button by the branch; runs no Git itself | None |
+| [Thread Account Usage](plugins/thread-account-usage) | Account quota windows of the current thread, separate from token spend | None |
+| [Handoff Button](plugins/handoff-button) | A composer button for the original Handoff panel | None (Handoff is in the set) |
+| [Code Open](plugins/code-open), [KodaForge Inspector](plugins/kodaforge-inspector) | Open a project's or thread's code in KodaForge with the chat beside it | None (KodaForge is in the set) |
+| [Web BB Button](plugins/web-bb-button) | A globe in the left rail that opens BB in the browser | Your public BB address |
+| [Open on Desktop](plugins/file-local-open) | Open a file from chat on your Mac or Windows PC, or save it to Downloads; PDF fitted to width | `macHostId` with several desktops |
+| [Browser Page](plugins/browser-page) | An agent skill for the built-in browser where Browser Automation does not run (Windows) | None |
+| [Local Transcribe](plugins/local-transcribe) | Local transcription of recordings with speakers on a Mac GPU or Linux | Executor machines (`workerHosts`), Python and ffmpeg on them |
+| [Subthread Autocollapse](plugins/subthread-autocollapse) | Folds expanded subthread lists after 5 minutes | None |
+| [Project Machine Setup](plugins/project-machine-setup) | "Connect project" beside a blocked send button | None |
+| [Config Updates](plugins/config-updates) | Reports new releases, offers new components to choose and installs the update with one button | The checkout is a BB project on the server (created by the installer) |
+| [Plugin Keeper](plugins/voice-mode-keeper) | Keeps fixes for catalog plugins (Needs You, Tokenomics, KodaForge) across their updates; tests and rolls back | None |
 
-Патчи к сторонним плагинам (ставятся отдельно, оригиналы остаются из каталога):
-[Needs You](plugins/inbox-compat) — `python3 scripts/apply_inbox_compat.py --host <ID машины сервера> --apply`,
-[Tokenomics](plugins/tokenomics-compat) — `python3 scripts/apply_tokenomics_compat.py --apply`.
+Also in the set: the author's [Voice Mode fork](https://github.com/ainurminibaev/bb-plugin-voice-mode)
+(voice chat with the thread's agent, Russian speech) with ChatGPT Realtime
+Connection, [Codex Project Trust](https://github.com/ainurminibaev/bb-codex-project-trust),
+and the catalog plugins the set builds on: Handoff, Needs You, Tokenomics, KodaForge.
 
-## Установка всего набора
+## Install the whole set
 
-Одно действие на машине сервера BB ставит весь набор
-([состав и зависимости](docs/components.md)): собственные плагины, форки и нужные
-плагины из каталога. Нужны BB 0.49+, Node.js 22+, npm, Python 3.11+ и git.
+On the BB server machine (BB 0.49+, Node.js 22+, npm, Python 3.11+, git):
 
 ```sh
 git clone https://github.com/ainurminibaev/bb-config.git
@@ -36,20 +47,16 @@ cd bb-config
 python3 scripts/updates.py apply
 ```
 
-Команда берёт последний стабильный релиз, ставит все компоненты, создаёт
-проект BB для этого checkout и записывает журнал. В конце она перечисляет
-пункты `attention`: личные входы (Codex для Voice Mode), настройки плагинов
-(например, адрес для Web BB Button) и действия на других машинах (Menubar
-Status на Mac). Их нужно выполнить самостоятельно. Не нужный компонент
-исключите до запуска: `python3 scripts/bundle.py exclude <id>`.
-Повторный запуск безопасен: он доделывает остаток после сбоя.
+The command takes the latest stable release, lists the components with a
+description and a link to their code (press Enter for all, or give the numbers
+to skip), installs them, creates a BB project for the checkout and writes a
+local journal. At the end it lists what you have to do yourself (`attention`):
+personal sign-ins (Codex for Voice Mode), plugin settings (such as the address
+for Web BB Button) and actions on other machines (Menubar Status on the Mac).
+Without a terminal prompt: `--yes` installs everything, `--skip id,id` leaves
+components out. A repeated run is safe and finishes what a failure left.
 
-## Установка одного плагина
-
-Нужны BB 0.49+, Node.js 22+ и npm на машине сервера BB. На Windows — Node.js 24.22.1+,
-Git for Windows и Python 3.11+; подробности — раздел «Windows» в
-[docs/customizations.md](docs/customizations.md).
-Локальный путь установки должен быть доступен самому серверу BB.
+## Install one plugin
 
 ```sh
 git clone https://github.com/ainurminibaev/bb-config.git
@@ -59,111 +66,47 @@ bb plugin build plugins/machine-tabs
 bb plugin install path:"$PWD/plugins/machine-tabs"
 ```
 
-Вместо `machine-tabs` подставьте каталог любого плагина из таблицы. Для Handoff Button сначала установите оригинальный Handoff
-из каталога BB. Его формы и логика переноса остаются в оригинальном плагине.
+Replace `machine-tabs` with any plugin folder. The plugin's README lists its
+settings and dependencies.
 
-После установки откройте **Settings → Installed plugins**.
-Web BB Button без адреса показывает **«Требуется настройка»**: заполните поле
-**«Публичный адрес BB»**. Это адрес вашей установки, например
-`https://example.getbb.app`, а не адрес этого репозитория.
+## Updates
 
-Плагины, обращающиеся к разметке BB, могут требовать обновления после изменения
-интерфейса приложения. Поддержка и ограничения описаны в README каждого плагина.
-Отключение плагина выполняется через Settings → Installed plugins или
-`bb plugin disable <id>`.
-
-## Обновление
-
-Стабильные версии публикуются как [GitHub Releases](../../releases) `vX.Y.Z`;
-ветка `main` — текущая разработка. [Config Updates](plugins/config-updates)
-(входит в набор) показывает новый релиз и кнопку «Обновить с ИИ». Агент выполняет
-одну команду:
+Stable versions are published as [GitHub Releases](../../releases) `vX.Y.Z`;
+`main` is development. [Config Updates](plugins/config-updates) shows a new
+release and an **Update** button: a window with the release's new components
+(name, link, description, checkbox), then the plugin applies the update itself
+and lists what is left for you. **Ask AI** appears only if something failed. The
+same by hand:
 
 ```sh
 python3 scripts/updates.py apply vX.Y.Z --commit <sha> --repository ainurminibaev/bb-config
 ```
 
-Обновление ставит недостающие компоненты набора и обновляет устаревшие, в том
-числе форки и плагины из каталога. Ваши настройки, секреты, отключённые и
-исключённые компоненты сохраняются. Без тега `apply` берёт последний релиз.
-Порядок описан в [docs/updates.md](docs/updates.md).
+An update installs missing components of the set and updates older ones,
+including forks and catalog plugins. Your settings, secrets, disabled plugins
+and excluded components are kept; plugins installed from another source are not
+replaced. BB itself never applies plugin updates automatically; when an
+external plugin is newer than the version a release was tested with, Config
+Updates shows a warning. Leave a component out with
+`python3 scripts/bundle.py exclude <id>`. Procedure: [docs/updates.md](docs/updates.md).
 
-Вручную, без плагина, из чистого checkout получите изменения и пересоберите
-нужный плагин:
+## Personal settings and restore
 
-```sh
-git pull --ff-only
-npm --prefix plugins/machine-tabs ci --include=dev
-bb plugin build plugins/machine-tabs
-bb plugin reload machine-tabs
-```
+Sources and anonymised examples are in Git. Server addresses, proxies, machine
+ids and personal instructions are kept only in the ignored `.local/config/`;
+passwords and sign-ins never enter the snapshot (`scripts/snapshot.py`,
+`scripts/private_backup.py`). Restoring the author's own installation with its
+snapshot is `scripts/restore.py`; see [docs/customizations.md](docs/customizations.md).
 
-## Личные настройки
-
-Исходники и обезличенные примеры находятся в Git. Адреса серверов и прокси,
-идентификаторы машин и личные инструкции сохраняются только в игнорируемой
-`.local/config/`. Пароли и авторизации в снимок не включаются.
-
-```sh
-python3 scripts/snapshot.py --settings-only
-python3 scripts/snapshot.py --check
-python3 scripts/private_backup.py
-```
-
-Скрипт снимка не меняет публичный `config/`. Зашифрованную личную копию нужно
-сохранять отдельно от репозитория. Подробности — в
-[инструкции резервного копирования](docs/server-backups.md).
-Автоматический бэкап: ежедневно личная конфигурация и текущие исходники (7 копий), раз в неделю —
-полный экспорт BB (3 копии). Зашифрованные копии доставляются на отдельную машину;
-недоступность машины приводит к повтору доставки, а не к повторной упаковке.
-
-## Восстановление целой установки
-
-Обычная установка отдельных плагинов не требует этих команд. Без своей
-`.local/config/` скрипт ставит набор из публичного `config/plugins.json` (все
-плагины из таблицы и нужные из каталога) с нейтральными настройками. Для
-восстановления своего BB сначала верните собственную `.local/config/`, затем
-просмотрите план:
-
-```sh
-python3 scripts/restore.py --plugins
-# После проверки плана, на машине сервера BB:
-python3 scripts/restore.py --plugins --apply
-```
-
-Восстановление читает публичные примеры и личный слой с приоритетом личных
-значений. Сетевые маршруты, учётные данные и новые идентификаторы машин требуют
-ручной настройки. См. [подробную инструкцию](docs/customizations.md).
-
-## Базовые настройки нового Codex
-
-При установке Codex на каждой машине примените общие defaults и проверьте
-загрузку инструкций:
-
-```sh
-python3 scripts/codex_defaults.py --apply --verify
-```
-
-Сейчас это минимальный бюджет AGENTS.md 65536 байт вместо штатных 32768.
-Остальные настройки CLI сохраняются. `restore.py --apply` также включает этот
-шаг автоматически. Применение включено в restore; при установке одного CLI используется команда выше.
-Для проверки: `python3 scripts/codex_defaults.py --check --verify`.
-
-## Разработка
-
-Перед публикацией изменений проверяйте текущие файлы и историю:
+## Development
 
 ```sh
 python3 scripts/privacy_check.py
 python3 scripts/privacy_check.py --history
 python3 -m unittest discover -s scripts -p 'test_*.py'
-node --test plugins/web-bb-button/*.test.ts
 ```
 
-Проверка по шаблонам помогает находить секреты и личные данные, но не заменяет
-просмотр diff. Не добавляйте `.local/` в Git принудительно.
+## License
 
-## Лицензия
-
-Собственный код распространяется под [MIT](LICENSE). Зависимости и сторонние
-плагины сохраняют свои лицензии и устанавливаются из собственных источников.
+Own code is [MIT](LICENSE). Dependencies and third-party plugins keep their
+licenses and are installed from their own sources.
