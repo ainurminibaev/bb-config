@@ -1,4 +1,18 @@
 {
+  "codex-hook-trust": {
+    "home": "project",
+    "project": "bb-codex-hook-trust",
+    "source": "https://github.com/ainurminibaev/bb-codex-hook-trust",
+    "install": "bb plugin install git:https://github.com/ainurminibaev/bb-codex-hook-trust.git@^0.1.0 --yes",
+    "note": "Codex hook approval card; GitHub releases until it is in the BB Community catalog"
+  },
+  "codex-project-trust": {
+    "home": "project",
+    "project": "bb-codex-project-trust",
+    "source": "https://github.com/ainurminibaev/bb-codex-project-trust",
+    "install": "bb plugin install git:https://github.com/ainurminibaev/bb-codex-project-trust.git@^1.0.0 --yes",
+    "note": "Codex project trust card; GitHub releases"
+  },
   "knowledge-base": {
     "home": "project",
     "project": "ai_agents",

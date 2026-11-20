@@ -2321,3 +2321,26 @@ bb plugin install . --yes`, затем `bb plugin config knowledge-base set root
 <путь>` (или `restore.py --plugins --apply` + значение из `.local/config/`).
 Проверка: `bb kb topics`, `python3 -m unittest test_kb.py` в каталоге плагина.
 Удаление: `bb plugin remove knowledge-base`.
+
+## Codex Hook Trust и Codex Project Trust — свои репозитории (20 ноября 2026)
+
+Оба плагина живут в собственных публичных репозиториях; bb-config хранит только
+дом в `config/plugin-homes.json` (`home: project`), без кода и снимка настроек
+(настроек у плагинов нет).
+
+- `codex-hook-trust` 0.1.0 — карточка в Codex-тредах про новые/изменённые хуки
+  Codex, которые не запускаются без разрешения: что запускают, что изменилось
+  (в т. ч. «отпечаток пересчитал Codex 0.171»), кнопки «Разрешить» / «Не
+  запускать». Разрешение — через `codex app-server` на машине треда; агенты
+  только видят (`bb codex-hook-trust status`). Источник:
+  github.com/ainurminibaev/bb-codex-hook-trust, релизы `vX.Y.Z`; до появления в
+  каталоге BB ставится из Git, после — из каталога (запись дома обновить).
+- `codex-project-trust` 1.0.x — карточка доверия к проекту Codex. Источник:
+  github.com/ainurminibaev/bb-codex-project-trust.
+
+Установка/восстановление: команды `install` из `plugin-homes.json`
+(`bb plugin install git:<repo>.git@^<версия> --yes`). Обновление:
+`bb plugin update <id> --yes` (диапазон semver). Проверка: `bb plugin list`,
+для хуков — `bb codex-hook-trust status --thread <Codex-тред>`. Удаление:
+`bb plugin remove <id>`; данные карточки хуков (разрешённые определения,
+отказы) лежат в каталоге данных плагина на каждой машине.
