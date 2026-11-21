@@ -192,6 +192,7 @@ export function ProjectQuickMenu<P extends QuickProject>({
   const openTimer = useRef<number | undefined>(undefined);
   const closeTimer = useRef<number | undefined>(undefined);
   const flyTimer = useRef<number | undefined>(undefined);
+  const flyCloseTimer = useRef<number | undefined>(undefined);
   const [now, setNow] = useState(() => Date.now());
   const scope = usePortalScopeProps();
 
@@ -266,9 +267,15 @@ export function ProjectQuickMenu<P extends QuickProject>({
     list.current?.querySelector<HTMLElement>(`[data-pq-index="${cursor}"]`)?.scrollIntoView({ block: "nearest" });
   }, [cursor]);
 
+  /** The thread list closes a moment after the pointer leaves it and its project row. */
+  const closeFlySoon = useCallback(() => {
+    window.clearTimeout(flyCloseTimer.current);
+    flyCloseTimer.current = window.setTimeout(() => setFly(null), 260);
+  }, []);
   const openFly = useCallback((projectId: string, anchor: HTMLElement, delay: number) => {
     window.clearTimeout(flyTimer.current);
     flyTimer.current = window.setTimeout(() => {
+      window.clearTimeout(flyCloseTimer.current);
       const row = anchor.closest<HTMLElement>(".mt-pq-row") ?? anchor;
       setFly({ projectId, anchor: row.getBoundingClientRect() });
     }, delay);
@@ -341,10 +348,15 @@ export function ProjectQuickMenu<P extends QuickProject>({
               data-pq-index={index}
               data-current={index === cursor || fly?.projectId === id ? "" : undefined}
               data-empty={summary.threads.length === 0 ? "" : undefined}
-              onPointerEnter={() => {
+              onPointerEnter={(event) => {
                 setCursor(index);
-                if (fly && fly.projectId !== id) window.clearTimeout(flyTimer.current);
+                window.clearTimeout(flyCloseTimer.current);
+                if (fly?.projectId === id) return;
+                // A long rest opens the project's threads; with a list already open, it follows the pointer sooner.
+                if (summary.threads.length > 0) openFly(id, event.currentTarget, fly ? 160 : 450);
+                else { window.clearTimeout(flyTimer.current); closeFlySoon(); }
               }}
+              onPointerLeave={() => { window.clearTimeout(flyTimer.current); closeFlySoon(); }}
             >
               <button
                 type="button"
@@ -365,7 +377,6 @@ export function ProjectQuickMenu<P extends QuickProject>({
                   aria-label={`Треды проекта ${summary.project.name}`}
                   aria-expanded={fly?.projectId === id}
                   onPointerEnter={(event) => openFly(id, event.currentTarget, 90)}
-                  onPointerLeave={() => window.clearTimeout(flyTimer.current)}
                   onClick={(event) => openFly(id, event.currentTarget, 0)}
                 >
                   <Icon name="ChevronRight" className="size-3.5" />
@@ -389,8 +400,8 @@ export function ProjectQuickMenu<P extends QuickProject>({
       aria-label={`Треды: ${flySummary.project.name}`}
       {...scope}
       style={{ left: flyPlace.left, top: flyPlace.top, maxHeight: flyPlace.maxHeight }}
-      onPointerEnter={enter}
-      onPointerLeave={leave}
+      onPointerEnter={() => { enter(); window.clearTimeout(flyCloseTimer.current); }}
+      onPointerLeave={() => { leave(); closeFlySoon(); }}
     >
       <div className="mt-pq-head">
         <span className="mt-pq-mark">{mark(flySummary.project.id)}</span>

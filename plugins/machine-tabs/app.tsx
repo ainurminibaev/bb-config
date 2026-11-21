@@ -1543,7 +1543,7 @@ function MachineThreadList(props: PluginThreadListProps) {
         </div>
       )}
       <div ref={filterAreaRef} onPointerEnter={keepFilters} onPointerLeave={filtering ? undefined : leaveFilters}
-        className="machine-tabs-search relative z-[100] px-2 pb-1.5">
+        className="machine-tabs-search sticky top-0 z-[100] bg-sidebar px-2 pb-1.5 pt-0.5">
         <BbIcon
           name="Search"
           className="pointer-events-none absolute left-4 top-1.5 size-3.5 text-muted-foreground"
