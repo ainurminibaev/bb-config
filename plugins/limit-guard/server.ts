@@ -274,7 +274,8 @@ export default function plugin(bb: BbPluginApi) {
   const modesReady = (async () => {
     for (const key of await bb.storage.kv.list('prio:')) {
       const value = await bb.storage.kv.get<{ mode: PriorityMode; custom?: CustomPolicies }>(key);
-      if (value && value.mode !== 'normal') { modes.set(key.slice(5), value.mode); if (value.custom) customs.set(key.slice(5), value.custom); }
+      // An explicit 'normal' is kept too: it stops a subthread from inheriting its parent's mode.
+      if (value) { modes.set(key.slice(5), value.mode); if (value.custom) customs.set(key.slice(5), value.custom); }
     }
   })().catch(error => bb.log.warn(`Limit Guard: could not load priorities: ${message(error)}`));
   const held = new Set<string>();
@@ -311,7 +312,14 @@ export default function plugin(bb: BbPluginApi) {
     await modesReady;
     if (custom === null) customs.delete(threadId);
     else if (custom) customs.set(threadId, { ...(customs.get(threadId) ?? {}), ...custom });
-    if (mode === 'normal') { modes.delete(threadId); customs.delete(threadId); await bb.storage.kv.delete(`prio:${threadId}`); }
+    if (mode === 'normal') {
+      customs.delete(threadId);
+      // Keep 'normal' explicitly only where it overrides an inherited mode; otherwise just forget the thread.
+      const parent = ((await bb.sdk.threads.get({ threadId }).catch(() => null)) as { parentThreadId?: string | null } | null)?.parentThreadId ?? null;
+      const inherited = parent ? (await effectiveMode(parent)).mode : 'normal';
+      if (inherited !== 'normal') { modes.set(threadId, 'normal'); await bb.storage.kv.set(`prio:${threadId}`, { mode: 'normal' }); }
+      else { modes.delete(threadId); await bb.storage.kv.delete(`prio:${threadId}`); }
+    }
     else { modes.set(threadId, mode); await bb.storage.kv.set(`prio:${threadId}`, { mode, ...(customs.get(threadId) ? { custom: customs.get(threadId) } : {}) }); }
     await bb.experimental_hooks.recheck('message.dispatch').catch(() => undefined);
   }
