@@ -62,7 +62,7 @@ export const PROJECT_QUICK_CSS = `
 .mt-pq-arrow:hover, .mt-pq-arrow[aria-expanded="true"] { color: var(--popover-foreground); background: var(--state-active); }
 .mt-pq-none { padding: 10px 8px; color: var(--muted-foreground); }
 .mt-pq-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--border); font-weight: 600; }
-.mt-pq-head > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mt-pq-head > span:not(.mt-pq-mark) { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mt-pq-head > em { font-style: normal; font-weight: 400; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
 .mt-pq-thread {
   display: flex; width: 100%; align-items: center; gap: 7px; min-height: 26px; padding: 2px 6px; border-radius: 5px;
