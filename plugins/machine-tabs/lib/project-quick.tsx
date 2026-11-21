@@ -69,7 +69,9 @@ export const PROJECT_QUICK_CSS = `
   font-size: 12.5px; text-align: left; color: inherit; background: transparent; border: 0; cursor: pointer; outline: none;
 }
 .mt-pq-thread:hover, .mt-pq-thread:focus-visible { background: var(--state-hover); }
-.mt-pq-thread[data-child] { padding-left: 16px; }
+/* The status column stays put; a child thread indents its title only. */
+.mt-pq-thread[data-child] > .mt-pq-title { padding-left: 12px; }
+.mt-pq-thread[data-unread] > .mt-pq-title { font-weight: 600; }
 .mt-pq-thread > .mt-pq-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mt-pq-thread > .mt-pq-meta { flex-shrink: 0; font-size: 10.5px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
 /* Status marks as bb's sidebar draws them: same icons, one 16px cell so titles line up. */
@@ -80,7 +82,8 @@ export const PROJECT_QUICK_CSS = `
 .mt-pq-st[data-k="input"], .mt-pq-st[data-k="clock"] { color: color-mix(in oklab, var(--muted-foreground) 75%, transparent); }
 .mt-pq-st[data-k="working"] { color: color-mix(in oklab, var(--muted-foreground) 50%, transparent); }
 .mt-pq-st[data-k="working"] > svg { animation: mt-pq-spin 1s linear infinite; }
-.mt-pq-st[data-k="unread"]::before { content: ""; width: 5px; height: 5px; border-radius: 999px; background: color-mix(in oklab, var(--muted-foreground) 60%, transparent); }
+.mt-pq-st[data-k="unread"]::before { content: ""; width: 7px; height: 7px; border-radius: 999px; background: var(--sidebar-ring, #3b82f6); }
+.mt-pq-st[data-k="idle"] { color: color-mix(in oklab, var(--muted-foreground) 55%, transparent); }
 @keyframes mt-pq-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .mt-pq-st[data-k="working"] > svg { animation: none; } }
 @media (hover: none) { .mt-pq-panel { width: min(288px, calc(100vw - 16px)); } }
@@ -91,7 +94,7 @@ const CLOSE_DELAY = 260;
 
 /** bb's icon for a thread state (summary counts, filter chips). */
 const STATE_ICON: Record<QuickState, string | null> = {
-  input: "CircleQuestion", error: "CircleX", working: "Loading", unread: null, idle: null,
+  input: "CircleQuestion", error: "CircleX", working: "Loading", unread: null, idle: "CircleCheck",
 };
 
 function StateMark({ state, small = false }: { state: QuickState; small?: boolean }) {
@@ -116,7 +119,7 @@ function ThreadMark({ thread }: { thread: QuickThread }) {
   const state = threadState(thread);
   const [kind, icon] = byIndicator[indicator]
     ?? (state === "input" ? ["input", "CircleQuestion"] : state === "error" ? ["error", "CircleX"]
-      : state === "working" ? ["working", "Loading"] : [state, ""]);
+      : state === "working" ? ["working", "Loading"] : state === "idle" ? ["idle", "CircleCheck"] : [state, ""]);
   return (
     <span className="mt-pq-st" data-k={kind} title={STATE_LABEL[state]} aria-hidden="true">
       {icon ? <Icon name={icon} /> : null}
@@ -417,6 +420,7 @@ export function ProjectQuickMenu<P extends QuickProject>({
               type="button"
               className="mt-pq-thread"
               data-child={thread.parentThreadId ? "" : undefined}
+              data-unread={state === "unread" ? "" : undefined}
               title={`${thread.displayTitle}\n${STATE_LABEL[state]}${thread.host ? ` · ${thread.host.name}` : ""}`}
               onClick={() => chooseThread(thread)}
             >

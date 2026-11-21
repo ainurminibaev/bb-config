@@ -13,8 +13,8 @@ export const STATE_LABEL: Record<QuickState, string> = {
   input: "Ждёт ответа",
   error: "Ошибка",
   working: "Работает",
-  unread: "Готов, не прочитан",
-  idle: "Остановлен",
+  unread: "Завершён, не прочитан",
+  idle: "Завершён",
 };
 
 export type QuickThread = {
