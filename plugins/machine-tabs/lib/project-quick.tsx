@@ -7,6 +7,7 @@ import {
   type QuickState, type QuickThread,
 } from "./project-quick-model";
 import { textMatches } from "./text-match";
+import { usePortalScopeProps } from "./portal-scope";
 
 export const PROJECT_QUICK_CSS = `
 /* Lives inside the sidebar search field beside the funnel; out of sight until the field is hovered. */
@@ -46,7 +47,11 @@ export const PROJECT_QUICK_CSS = `
   display: flex; min-width: 0; flex: 1; align-items: center; gap: 7px; min-height: 26px; padding: 2px 4px 2px 6px;
   font-size: 12.5px; text-align: left; color: inherit; background: transparent; border: 0; cursor: pointer; outline: none;
 }
-.mt-pq-mark { display: inline-flex; width: 16px; flex-shrink: 0; align-items: center; justify-content: center; }
+.mt-pq-mark { display: inline-flex; width: 18px; height: 18px; flex-shrink: 0; align-items: center; justify-content: center; overflow: hidden; }
+.mt-pq-mark > span { width: 18px !important; height: 18px !important; margin: 0 !important; display: inline-flex; align-items: center; justify-content: center;
+  overflow: hidden; border-radius: 5px; font-size: 9px; font-weight: 600; line-height: 1; }
+.mt-pq-mark img { width: 100%; height: 100%; object-fit: contain; opacity: .8; filter: grayscale(1); }
+.mt-pq-mark svg { width: 12px; height: 12px; }
 .mt-pq-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mt-pq-counts { display: inline-flex; flex-shrink: 0; align-items: center; gap: 5px; font-size: 10.5px; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
 .mt-pq-count { display: inline-flex; align-items: center; gap: 2px; }
@@ -158,6 +163,7 @@ export function ProjectQuickMenu<P extends QuickProject>({
   const closeTimer = useRef<number | undefined>(undefined);
   const flyTimer = useRef<number | undefined>(undefined);
   const [now, setNow] = useState(() => Date.now());
+  const scope = usePortalScopeProps();
 
   const summaries = useMemo(() => summarizeProjects(projects, threads), [projects, threads]);
   const counts = useMemo(() => filterCounts(summaries), [summaries]);
@@ -247,7 +253,7 @@ export function ProjectQuickMenu<P extends QuickProject>({
       className="mt-pq-panel"
       role="dialog"
       aria-label="Проекты"
-      data-bb-portaled-overlay=""
+      {...scope}
       style={{ left: place.left, top: place.top, maxHeight: place.maxHeight }}
       onPointerEnter={enter}
       onPointerLeave={leave}
@@ -351,7 +357,7 @@ export function ProjectQuickMenu<P extends QuickProject>({
       className="mt-pq-fly"
       role="dialog"
       aria-label={`Треды: ${flySummary.project.name}`}
-      data-bb-portaled-overlay=""
+      {...scope}
       style={{ left: flyPlace.left, top: flyPlace.top, maxHeight: flyPlace.maxHeight }}
       onPointerEnter={enter}
       onPointerLeave={leave}
@@ -390,7 +396,6 @@ export function ProjectQuickMenu<P extends QuickProject>({
         type="button"
         className="mt-pq-button"
         aria-label="Проекты: быстрый переход"
-        title="Проекты"
         aria-haspopup="dialog"
         aria-expanded={open}
         onPointerEnter={enter}
