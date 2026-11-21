@@ -75,6 +75,16 @@ During BB startup, Custom waits for the built-in Thread List automatically.
 The waiting message clears when the list is ready. If BB reports Thread List
 is disabled or failed, check it in Settings → Plugins.
 
+## Project menu
+
+A folder button inside the "Поиск тредов" field, beside the funnel, appears on
+hover. Hovering it opens a compact project list (search, quick filters by thread
+state, projects ordered by latest thread activity with state counts). Clicking a
+project scrolls the sidebar to its group and flashes it; the arrow on a row shows
+the project's threads, and clicking one opens it and flashes its row. There is no
+CLI or setting for it. If a click does not scroll, the list is not grouped by
+project (rows need `data-sidebar-project-id`); the menu then opens the project.
+
 ## Project images
 
 A thread row and a project header show the project's mark: two letters, or

@@ -1,0 +1,10 @@
+{
+  "id": "plugin-machine-tabs-project-menu",
+  "title": "Machine Tabs 0.2.5: меню проектов в поле поиска",
+  "component": "machine-tabs",
+  "where": "server",
+  "kind": "local-plugin",
+  "plugin": "machine-tabs",
+  "rerun": "Проверяет установленную версию machine-tabs; при совпадении ничего не делает.",
+  "rollback": "Установить machine-tabs 0.2.4 из прошлого релиза; кнопка меню проектов пропадёт, остальное без изменений."
+}

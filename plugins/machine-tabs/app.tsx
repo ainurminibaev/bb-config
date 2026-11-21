@@ -21,6 +21,7 @@ import {
   experimental_Icon as BbIcon,
   experimental_useSidebarThreads,
   experimental_ThreadRowMetadata as ThreadRowMetadata,
+  useBbNavigate,
   useRealtime,
   useRpc,
   useSdk,
@@ -38,6 +39,9 @@ import { textMatches } from "./lib/text-match";
 import { installSidebarView } from "./lib/sidebar-view";
 import { waitForThreadListBundle } from "./lib/thread-list-bundle";
 import { SearchExtras, SearchSettings, type SearchOptions } from "./lib/thread-search";
+import { PROJECT_QUICK_CSS, ProjectQuickMenu } from "./lib/project-quick";
+import { REVEAL_CSS, revealProject, revealThread } from "./lib/sidebar-reveal";
+import type { QuickThread } from "./lib/project-quick-model";
 
 const TABS_CHANGED = "machine-tabs-changed";
 const ICONS_CHANGED = "machine-tabs-icons-changed";
@@ -1454,6 +1458,39 @@ function MachineThreadList(props: PluginThreadListProps) {
       }));
   }, [outer, shown, selectedId, projects, machines, dayField]);
 
+  const navigate = useBbNavigate();
+  /**
+   * Make the project's group reachable in the list: its machine tab, no search
+   * or filter that hides it, then scroll there and flash it. Without project
+   * groups in the list, open the project instead.
+   */
+  const showProject = useCallback((projectId: string) => {
+    if (revealProject(projectId)) return;
+    const onTab = selectedId === null || live.some((thread) => thread.projectId === projectId && thread.host?.id === selectedId);
+    if (!onTab) select(null);
+    setQuery("");
+    if (projectFilter !== "all" && projectFilter !== projectId) setProjectFilter("all");
+    if (topicFilter !== "all") setTopicFilter("all");
+    let tries = 6;
+    const retry = () => {
+      if (revealProject(projectId)) return;
+      if (--tries > 0) window.setTimeout(retry, 120);
+      else navigate.toProject(projectId);
+    };
+    window.setTimeout(retry, 60);
+  }, [selectedId, live, select, projectFilter, topicFilter, navigate]);
+  const openThread = useCallback((thread: QuickThread) => {
+    navigate.toThread(thread.id);
+    const onTab = selectedId === null || thread.host?.id === selectedId;
+    if (!onTab) select(null);
+    if (matchIds !== null && !matchIds.has(thread.id)) {
+      setQuery("");
+      setTopicFilter("all");
+      setProjectFilter("all");
+    }
+    window.setTimeout(() => revealThread(thread.id, thread.projectId), 120);
+  }, [navigate, selectedId, select, matchIds]);
+
   const hideEmpty =
     selectedId !== null || byDay || outer !== "none" || matchIds !== null;
 
@@ -1520,14 +1557,14 @@ function MachineThreadList(props: PluginThreadListProps) {
           }}
           placeholder="Поиск тредов"
           aria-label="Поиск тредов"
-          className="h-7 w-full rounded-md border border-transparent bg-state-hover pl-7 pr-[4.25rem] text-xs text-sidebar-foreground outline-none placeholder:text-muted-foreground focus:border-sidebar-ring [&::-webkit-search-cancel-button]:hidden"
+          className="h-7 w-full rounded-md border border-transparent bg-state-hover pl-7 pr-[5.5rem] text-xs text-sidebar-foreground outline-none placeholder:text-muted-foreground focus:border-sidebar-ring [&::-webkit-search-cancel-button]:hidden"
         />
         {query === "" ? null : (
           <button
             type="button"
             aria-label="Clear filter"
             onClick={() => setQuery("")}
-            className="absolute right-[3.75rem] top-1 flex size-5 items-center justify-center rounded text-muted-foreground hover:text-sidebar-foreground"
+            className="absolute right-[5rem] top-1 flex size-5 items-center justify-center rounded text-muted-foreground hover:text-sidebar-foreground"
           >
             <BbIcon name="X" className="size-3.5" />
           </button>
@@ -1551,8 +1588,21 @@ function MachineThreadList(props: PluginThreadListProps) {
             <path d="M3 5h18l-7 8.5V19l-4 2v-7.5L3 5Z" />
           </svg>
         </button>
+        {/* Projects menu: hidden like the funnel until the field is hovered. */}
+        <ProjectQuickMenu
+          projects={projects}
+          threads={threads as readonly QuickThread[]}
+          mark={(projectId) => {
+            const badge = projectBadges.get(projectId);
+            return badge ? <ProjectBadgeMark badge={badge} header /> : null;
+          }}
+          onProject={showProject}
+          onThread={openThread}
+        />
         <SearchSettings options={searchOptions} onChange={setSearchOptions} />
       </div>
+      <style>{PROJECT_QUICK_CSS}</style>
+      <style>{REVEAL_CSS}</style>
       {filtersOpen || filtering ? (
         <div id="machine-tabs-filters" ref={filterAreaRef} onPointerEnter={keepFilters}
           onPointerLeave={filtering ? undefined : leaveFilters}
