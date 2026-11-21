@@ -1168,6 +1168,15 @@ const HIDE_EMPTY_GROUPS = `
 [data-machine-tabs-list] [data-sidebar-rename-row] > span:has(> a[data-sidebar-thread-id]) button[aria-expanded][data-sidebar-rename-anchor] {
   margin-left: auto;
 }
+/* The same column for bb's "thread of another project" folder mark: a short
+   title no longer pulls it to the middle of the row. An expander before it keeps
+   the auto margin, so the mark follows right after the arrow. */
+[data-machine-tabs-list] [data-sidebar-rename-row] > span:has(> a[data-sidebar-thread-id]) [data-sidebar-thread-cross-project] {
+  margin-left: auto;
+}
+[data-machine-tabs-list] [data-sidebar-rename-row] > span:has(> a[data-sidebar-thread-id]):has(button[aria-expanded][data-sidebar-rename-anchor]) [data-sidebar-thread-cross-project] {
+  margin-left: 0;
+}
 /* One mark per row: the agent's icon sits small in the top right corner of
    the project mark instead of beside it. The icon itself is the subject of
    :has() (it comes right before the title); a bare \`span:has()\` here made
