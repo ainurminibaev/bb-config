@@ -5,13 +5,11 @@
  * with `data-sidebar-thread-id`.
  */
 
+/** The same amber flash as Project Catalog's "Показать в боковой панели". */
 export const REVEAL_CSS = `
-@keyframes mt-reveal-flash {
-  0%, 100% { box-shadow: inset 0 0 0 0 transparent; background-color: transparent; }
-  15%, 60% { box-shadow: inset 0 0 0 1.5px var(--sidebar-ring, #3b82f6); background-color: color-mix(in oklab, var(--sidebar-ring, #3b82f6) 14%, transparent); }
-}
-.mt-reveal-flash { animation: mt-reveal-flash 2.2s ease-out 1; border-radius: 6px; }
-@media (prefers-reduced-motion: reduce) { .mt-reveal-flash { animation-duration: 3s; } }
+@keyframes mt-reveal-flash { 0%, 60% { background-color: color-mix(in srgb, #f59e0b 22%, transparent); } 100% { background-color: transparent; } }
+.mt-reveal-flash { animation: mt-reveal-flash 2.2s ease-out; border-radius: 8px; }
+@media (prefers-reduced-motion: reduce) { .mt-reveal-flash { animation: none; outline: 2px solid #f59e0b; } }
 `;
 
 /** The main list, not the "Last 5" block above it. */
@@ -74,7 +72,7 @@ export function revealProject(projectId: string): boolean {
   if (!group) return false;
   expand(group);
   scrollIntoSidebar(group, "start");
-  flash(group.querySelector<HTMLElement>('[data-sidebar="group-label"]') ?? group);
+  flash(group);
   return true;
 }
 
