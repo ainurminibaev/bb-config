@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { experimental_Icon as Icon } from "@get-bb/plugin-sdk/app";
 import {
   QUICK_FILTERS, QUICK_STATES, STATE_LABEL, ago, filterCounts, passesFilter, projectThreads,
-  summarizeProjects, threadState, type ProjectSummary, type QuickFilter, type QuickProject,
+  summarizeProjects, threadState, threadTree, type ProjectSummary, type QuickFilter, type QuickProject,
   type QuickState, type QuickThread,
 } from "./project-quick-model";
 import { textMatches } from "./text-match";
@@ -70,7 +70,14 @@ export const PROJECT_QUICK_CSS = `
 }
 .mt-pq-thread:hover, .mt-pq-thread:focus-visible { background: var(--state-hover); }
 /* The status column stays put; a child thread indents its title only. */
-.mt-pq-thread[data-child] > .mt-pq-title { padding-left: 12px; }
+.mt-pq-trow { display: flex; align-items: center; border-radius: 5px; }
+.mt-pq-trow:hover { background: var(--state-hover); }
+.mt-pq-trow > .mt-pq-thread:hover, .mt-pq-trow > .mt-pq-thread:focus-visible { background: transparent; }
+.mt-pq-fold {
+  display: flex; height: 22px; width: 18px; flex-shrink: 0; align-items: center; justify-content: center;
+  color: var(--muted-foreground); background: transparent; border: 0; border-radius: 4px; cursor: pointer;
+}
+button.mt-pq-fold:hover { color: var(--popover-foreground); background: var(--state-active); }
 .mt-pq-thread[data-unread] > .mt-pq-title { font-weight: 600; }
 .mt-pq-thread > .mt-pq-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mt-pq-thread > .mt-pq-meta { flex-shrink: 0; font-size: 10.5px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
@@ -90,6 +97,7 @@ export const PROJECT_QUICK_CSS = `
 `;
 
 const OPEN_DELAY = 140;
+const FIELD_DELAY = 650;
 const CLOSE_DELAY = 260;
 
 /** bb's icon for a thread state (summary counts, filter chips). */
@@ -155,6 +163,13 @@ function Counts({ summary }: { summary: ProjectSummary }) {
 
 type Place = { left: number; top: number; maxHeight: number };
 
+/** Under the search field, from `left` (the button, or the pointer over the field), never over the field itself. */
+function placeBelow(field: DOMRect, left: number, width: number, wanted: number): Place {
+  const top = field.bottom + 4;
+  const maxHeight = Math.max(160, Math.min(wanted, window.innerHeight - top - 8));
+  return { left: Math.max(8, Math.min(left, window.innerWidth - width - 8)), top, maxHeight };
+}
+
 function placeBeside(anchor: DOMRect, width: number, gap: number, wanted: number): Place {
   const room = window.innerWidth;
   const height = window.innerHeight;
@@ -172,7 +187,13 @@ export function ProjectQuickMenu<P extends QuickProject>({
   mark,
   onProject,
   onThread,
+  field,
+  searchQuery = "",
 }: {
+  /** The sidebar search row: the menu opens under it, and a long rest on it opens the menu too. */
+  field?: { readonly current: HTMLElement | null };
+  /** What is typed in "Поиск тредов": narrows projects to those whose name or threads match. */
+  searchQuery?: string;
   projects: readonly P[];
   threads: readonly QuickThread[];
   /** The project's badge, as the sidebar draws it. */
@@ -196,17 +217,31 @@ export function ProjectQuickMenu<P extends QuickProject>({
   const closeTimer = useRef<number | undefined>(undefined);
   const flyTimer = useRef<number | undefined>(undefined);
   const flyCloseTimer = useRef<number | undefined>(undefined);
+  const fieldTimer = useRef<number | undefined>(undefined);
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [now, setNow] = useState(() => Date.now());
   const scope = usePortalScopeProps();
 
   const summaries = useMemo(() => summarizeProjects(projects, threads), [projects, threads]);
   const counts = useMemo(() => filterCounts(summaries), [summaries]);
+  const outer = useMemo(() => needlesFor(searchQuery), [searchQuery]);
+  /** Threads that answer the sidebar search, per project; null without a search. */
+  const searchHits = useMemo(() => {
+    if (!outer) return null;
+    const hits = new Map<string, Set<string>>();
+    for (const summary of summaries) {
+      const nameHit = textMatches(projectLabel(summary.project), outer);
+      const ids = new Set(summary.threads.filter((thread) => nameHit || textMatches(thread.displayTitle, outer)).map((thread) => thread.id));
+      if (nameHit || ids.size > 0) hits.set(summary.project.id, ids);
+    }
+    return hits;
+  }, [summaries, outer]);
   const rows = useMemo(() => {
-    const typed = query.trim().toLowerCase();
-    const needles = [...new Set([typed, swap(typed, EN, RU), swap(typed, RU, EN)])];
+    const needles = needlesFor(query);
     return summaries.filter((summary) => passesFilter(summary, filter) &&
-      (typed === "" || textMatches(summary.project.isPersonal ? "Без проекта No project" : summary.project.name, needles)));
-  }, [summaries, query, filter]);
+      (!needles || textMatches(projectLabel(summary.project), needles)) &&
+      (!searchHits || searchHits.has(summary.project.id)));
+  }, [summaries, query, filter, searchHits]);
   const flySummary = fly ? summaries.find((summary) => summary.project.id === fly.projectId) ?? null : null;
 
   const close = useCallback(() => {
@@ -220,19 +255,28 @@ export function ProjectQuickMenu<P extends QuickProject>({
     setCursor(0);
   }, []);
 
-  const show = useCallback(() => {
+  const anchorLeft = useRef<number | null>(null);
+  const placeNow = useCallback(() => {
     if (!button.current) return;
+    const fieldRect = (field?.current ?? button.current).getBoundingClientRect();
+    const left = anchorLeft.current ?? button.current.getBoundingClientRect().left;
+    setPlace(placeBelow(fieldRect, left, 288, 460));
+  }, [field]);
+  /** Open under the button, or under the pointer when it rested on the search field. */
+  const show = useCallback((pointerX?: number) => {
+    anchorLeft.current = pointerX === undefined ? null : pointerX - 24;
     setNow(Date.now());
-    setPlace(placeBeside(button.current.getBoundingClientRect(), 288, 6, 460));
+    placeNow();
     setOpen(true);
-  }, []);
+  }, [placeNow]);
 
   // Hover: open after a short rest, close a moment after the pointer leaves button, menu and side list.
   const enter = useCallback(() => {
     window.clearTimeout(closeTimer.current);
+    window.clearTimeout(fieldTimer.current);
     if (!open) {
       window.clearTimeout(openTimer.current);
-      openTimer.current = window.setTimeout(show, OPEN_DELAY);
+      openTimer.current = window.setTimeout(() => show(), OPEN_DELAY);
     }
   }, [open, show]);
   const leave = useCallback(() => {
@@ -247,25 +291,54 @@ export function ProjectQuickMenu<P extends QuickProject>({
 
   useLayoutEffect(() => {
     if (!open || !button.current) return;
-    const update = () => button.current && setPlace(placeBeside(button.current.getBoundingClientRect(), 288, 6, 460));
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
-  }, [open]);
+    window.addEventListener("resize", placeNow);
+    return () => window.removeEventListener("resize", placeNow);
+  }, [open, placeNow]);
+
+  // A long rest on the search field opens the menu under the pointer; leaving closes it like the button does.
+  useEffect(() => {
+    const node = field?.current;
+    if (!node) return;
+    let x = 0;
+    const move = (event: PointerEvent) => { x = event.clientX; };
+    const enterField = (event: PointerEvent) => {
+      x = event.clientX;
+      window.clearTimeout(closeTimer.current);
+      if (open || event.pointerType !== "mouse") return;
+      window.clearTimeout(fieldTimer.current);
+      fieldTimer.current = window.setTimeout(() => show(x), FIELD_DELAY);
+    };
+    const leaveField = () => { window.clearTimeout(fieldTimer.current); if (open) leave(); };
+    const typing = () => window.clearTimeout(fieldTimer.current);
+    node.addEventListener("pointerenter", enterField);
+    node.addEventListener("pointermove", move);
+    node.addEventListener("pointerleave", leaveField);
+    node.addEventListener("keydown", typing);
+    return () => {
+      window.clearTimeout(fieldTimer.current);
+      node.removeEventListener("pointerenter", enterField);
+      node.removeEventListener("pointermove", move);
+      node.removeEventListener("pointerleave", leaveField);
+      node.removeEventListener("keydown", typing);
+    };
+  }, [field, open, show, leave]);
 
   useEffect(() => {
     if (!open) return;
     const outside = (event: MouseEvent) => {
       const target = event.target as Node;
-      if (button.current?.contains(target) || panel.current?.contains(target) || flyPanel.current?.contains(target)) return;
+      if (button.current?.contains(target) || field?.current?.contains(target) ||
+        panel.current?.contains(target) || flyPanel.current?.contains(target)) return;
       close();
     };
     const key = (event: KeyboardEvent) => { if (event.key === "Escape") { event.stopPropagation(); close(); button.current?.focus(); } };
     document.addEventListener("mousedown", outside, true);
     document.addEventListener("keydown", key, true);
     return () => { document.removeEventListener("mousedown", outside, true); document.removeEventListener("keydown", key, true); };
-  }, [open, close]);
+  }, [open, close, field]);
 
-  useEffect(() => { setCursor(0); }, [query, filter]);
+  useEffect(() => { setCursor(0); }, [query, filter, searchQuery]);
+  useEffect(() => { setExpanded(new Set()); }, [fly?.projectId]);
   useEffect(() => {
     list.current?.querySelector<HTMLElement>(`[data-pq-index="${cursor}"]`)?.scrollIntoView({ block: "nearest" });
   }, [cursor]);
@@ -392,6 +465,59 @@ export function ProjectQuickMenu<P extends QuickProject>({
     </div>
   ) : null;
 
+  const threadRow = (thread: QuickThread, depth: number, kids: number) => {
+    const state = threadState(thread);
+    const open = expanded.has(thread.id);
+    return (
+      <div key={thread.id} className="mt-pq-trow">
+        <button
+          type="button"
+          className="mt-pq-thread"
+          data-unread={state === "unread" ? "" : undefined}
+          title={`${thread.displayTitle}\n${STATE_LABEL[state]}${thread.host ? ` · ${thread.host.name}` : ""}`}
+          onClick={() => chooseThread(thread)}
+        >
+          <ThreadMark thread={thread} />
+          <span className="mt-pq-title" style={depth ? { paddingLeft: depth * 12 } : undefined}>{thread.displayTitle}</span>
+          <span className="mt-pq-meta">{ago(thread.updatedAt ?? thread.createdAt ?? 0, now)}</span>
+        </button>
+        {kids > 0 ? (
+          <button
+            type="button"
+            className="mt-pq-fold"
+            aria-expanded={open}
+            aria-label={open ? "Скрыть подтреды" : `Показать подтреды: ${kids}`}
+            title={open ? "Скрыть подтреды" : `Подтреды: ${kids}`}
+            onClick={() => setExpanded((now) => {
+              const next = new Set(now);
+              if (next.has(thread.id)) next.delete(thread.id); else next.add(thread.id);
+              return next;
+            })}
+          >
+            <Icon name={open ? "ChevronDown" : "ChevronRight"} className="size-3.5" />
+          </button>
+        ) : <span className="mt-pq-fold" aria-hidden="true" />}
+      </div>
+    );
+  };
+  /** Folded like bb's list: roots, children behind their parent's arrow. A filter or search lists matches flat. */
+  const renderThreads = (summary: ProjectSummary) => {
+    const hits = searchHits?.get(summary.project.id);
+    if (filter !== "all" || hits) {
+      const list = projectThreads(summary, filter).filter((thread) => !hits || hits.has(thread.id));
+      return list.length ? list.map((thread) => threadRow(thread, 0, 0)) : <p className="mt-pq-none">Нет подходящих тредов.</p>;
+    }
+    const { roots, children } = threadTree(summary.threads);
+    const out: ReactNode[] = [];
+    const walk = (thread: QuickThread, depth: number) => {
+      const kids = children.get(thread.id) ?? [];
+      out.push(threadRow(thread, depth, kids.length));
+      if (expanded.has(thread.id)) for (const kid of kids) walk(kid, depth + 1);
+    };
+    for (const root of roots) walk(root, 0);
+    return out;
+  };
+
   const flyPlace = fly && flySummary && panel.current
     ? placeBeside(new DOMRect(panel.current.getBoundingClientRect().left, fly.anchor.top, panel.current.getBoundingClientRect().width, fly.anchor.height), 300, 4, 420)
     : null;
@@ -412,24 +538,7 @@ export function ProjectQuickMenu<P extends QuickProject>({
         <em>{flySummary.threads.length}</em>
       </div>
       <div className="mt-pq-list">
-        {projectThreads(flySummary, filter).map((thread) => {
-          const state = threadState(thread);
-          return (
-            <button
-              key={thread.id}
-              type="button"
-              className="mt-pq-thread"
-              data-child={thread.parentThreadId ? "" : undefined}
-              data-unread={state === "unread" ? "" : undefined}
-              title={`${thread.displayTitle}\n${STATE_LABEL[state]}${thread.host ? ` · ${thread.host.name}` : ""}`}
-              onClick={() => chooseThread(thread)}
-            >
-              <ThreadMark thread={thread} />
-              <span className="mt-pq-title">{thread.displayTitle}</span>
-              <span className="mt-pq-meta">{ago(thread.updatedAt ?? thread.createdAt ?? 0, now)}</span>
-            </button>
-          );
-        })}
+        {renderThreads(flySummary)}
       </div>
     </div>
   ) : null;
@@ -449,6 +558,7 @@ export function ProjectQuickMenu<P extends QuickProject>({
           window.clearTimeout(openTimer.current);
           if (open && pinned) { close(); return; }
           if (!open) show();
+          else { anchorLeft.current = null; placeNow(); }
           setPinned(true);
           window.setTimeout(() => input.current?.focus(), 0);
         }}
@@ -466,4 +576,13 @@ const RU = "ёйцукенгшщзхъфывапролджэячсмитьбю";
 /** The same keys in the other keyboard layout: "ифкщ" finds "bb-config". */
 function swap(text: string, from: string, to: string): string {
   return [...text].map((ch) => { const at = from.indexOf(ch); return at < 0 ? ch : to[at]!; }).join("");
+}
+
+function needlesFor(text: string): string[] | null {
+  const typed = text.trim().toLowerCase();
+  return typed === "" ? null : [...new Set([typed, swap(typed, EN, RU), swap(typed, RU, EN)])];
+}
+
+function projectLabel(project: QuickProject): string {
+  return project.isPersonal ? "Без проекта No project" : project.name;
 }

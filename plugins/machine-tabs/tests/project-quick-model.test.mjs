@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ago, filterCounts, passesFilter, projectThreads, summarizeProjects, threadState } from '../lib/project-quick-model.ts';
+import { threadTree, ago, filterCounts, passesFilter, projectThreads, summarizeProjects, threadState } from '../lib/project-quick-model.ts';
 
 const projects = [
   { id: 'a', name: 'Alpha', isPersonal: false },
@@ -53,4 +53,15 @@ test('short relative time', () => {
   assert.equal(ago(now - 3 * 3_600_000, now), '3 ч');
   assert.equal(ago(now - 2 * 86_400_000, now), '2 д');
   assert.equal(ago(0, now), '');
+});
+
+test('subthreads fold under their parent; orphans of other projects stay roots', () => {
+  const threads = [t('c1', 'a', 30, { parentThreadId: 'p' }), t('p', 'a', 20), t('x', 'a', 10, { parentThreadId: 'elsewhere' })];
+  const { roots, children } = threadTree(threads);
+  assert.deepEqual(roots.map(thread => thread.id), ['p', 'x']);
+  assert.deepEqual(children.get('p').map(thread => thread.id), ['c1']);
+});
+
+test('a message waiting to send is not counted as working', () => {
+  assert.equal(threadState(t('x', 'a', 1, { indicator: 'queued-waiting' })), 'idle');
 });

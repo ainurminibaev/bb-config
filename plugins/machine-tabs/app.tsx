@@ -1218,6 +1218,11 @@ function MachineThreadList(props: PluginThreadListProps) {
     if (node) filterArea.current.add(node);
     for (const known of filterArea.current) if (!known.isConnected) filterArea.current.delete(known);
   }, []);
+  const searchRow = useRef<HTMLDivElement | null>(null);
+  const searchRowRef = useCallback((node: HTMLDivElement | null) => {
+    searchRow.current = node;
+    filterAreaRef(node);
+  }, [filterAreaRef]);
   useEffect(() => {
     if (!filtersOpen || filtering) { keepFilters(); return; }
     const outside = (event: MouseEvent) => {
@@ -1542,7 +1547,7 @@ function MachineThreadList(props: PluginThreadListProps) {
           />
         </div>
       )}
-      <div ref={filterAreaRef} onPointerEnter={keepFilters} onPointerLeave={filtering ? undefined : leaveFilters}
+      <div ref={searchRowRef} onPointerEnter={keepFilters} onPointerLeave={filtering ? undefined : leaveFilters}
         className="machine-tabs-search sticky top-0 z-[100] bg-sidebar px-2 pb-1.5 pt-0.5">
         <BbIcon
           name="Search"
@@ -1598,6 +1603,8 @@ function MachineThreadList(props: PluginThreadListProps) {
           }}
           onProject={showProject}
           onThread={openThread}
+          field={searchRow}
+          searchQuery={query}
         />
         <SearchSettings options={searchOptions} onChange={setSearchOptions} />
       </div>

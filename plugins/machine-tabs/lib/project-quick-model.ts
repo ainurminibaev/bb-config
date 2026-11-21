@@ -39,7 +39,7 @@ export type QuickProject = { id: string; name: string; isPersonal: boolean };
 
 const BUSY = new Set(["active", "starting", "stopping", "pending", "provisioning", "waiting-for-host"]);
 const BUSY_INDICATORS = new Set([
-  "runtime", "background-agent", "background-command", "workflow", "working-draft", "queued-waiting",
+  "runtime", "background-agent", "background-command", "workflow", "working-draft",
 ]);
 
 export function threadState(thread: QuickThread): QuickState {
@@ -141,4 +141,23 @@ export function ago(timestamp: number, now: number): string {
   const days = Math.round(hours / 24);
   if (days < 7) return `${days} д`;
   return new Date(timestamp).toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+}
+
+/**
+ * Threads as bb's list nests them: roots (no parent among these threads), and
+ * each thread's children, all latest first. Input is expected latest first.
+ */
+export function threadTree(threads: readonly QuickThread[]): { roots: QuickThread[]; children: Map<string, QuickThread[]> } {
+  const ids = new Set(threads.map((thread) => thread.id));
+  const roots: QuickThread[] = [];
+  const children = new Map<string, QuickThread[]>();
+  for (const thread of threads) {
+    const parent = thread.parentThreadId;
+    if (parent && ids.has(parent) && parent !== thread.id) {
+      const list = children.get(parent);
+      if (list) list.push(thread);
+      else children.set(parent, [thread]);
+    } else roots.push(thread);
+  }
+  return { roots, children };
 }
