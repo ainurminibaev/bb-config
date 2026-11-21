@@ -497,13 +497,6 @@
     "source": "path:plugins/fresh-thread-hint"
   },
   {
-    "id": "low-priority",
-    "version": "0.1.0",
-    "enabled": false,
-    "name": "Low Priority",
-    "source": "path:plugins/low-priority"
-  },
-  {
     "id": "thread-list",
     "version": "0.1.0",
     "enabled": true,
