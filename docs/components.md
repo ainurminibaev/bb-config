@@ -16,6 +16,7 @@ KodaForge 0.7.0, ChatGPT Realtime 0.1.0; более новая даёт пред
 | `voice-mode-keeper` | свой плагин | `plugins/voice-mode-keeper` | сохраняет исправления `inbox`, `tokenomics`, `kodaforge` | — |
 | `codex-realtime` | каталог BB | `codex-realtime@bb-community` (gpambrozio/bb-plugins), от 0.1.0 | для `voice-mode` | личный вход Codex через ChatGPT на сервере |
 | `voice-mode` | **собственный форк** | `git:…/ainurminibaev/bb-plugin-voice-mode@^0.2.0`, от 0.2.8 | зависит от `codex-realtime`; мост Codex Live (`scripts/voice_mode_bridge.py`) | подписка ChatGPT; микрофон в клиенте |
+| `git-thread-provenance` | свой плагин | `plugins/git-thread-provenance` | связь Git-действий с тредом BB | — |
 | `handoff` | каталог BB | `handoff@bb-community`, от 0.7.0 | для `handoff-button` | — |
 | `handoff-button` | свой плагин | `plugins/handoff-button` | зависит от `handoff` | — |
 | `inbox` (Needs You) | каталог BB | `inbox@bb-community`, от 0.2.0 | исправление `plugins/inbox-compat` накладывает Keeper | — |
