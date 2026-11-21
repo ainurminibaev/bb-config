@@ -34,6 +34,10 @@
     "install": "bb plugin install git:https://github.com/ainurminibaev/bb-personal-assistant.git@^0.2.0 --yes",
     "note": "Platform workshop; full setup with workdir via setup.py from the release"
   },
+  "pr-issues": {
+    "home": "bb-config",
+    "note": "Собственный плагин: страница PR и Issues"
+  },
   "proj": {
     "home": "project",
     "project": "demo",

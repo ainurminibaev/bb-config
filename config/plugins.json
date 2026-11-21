@@ -357,6 +357,13 @@
     "source": "builtin:plugin-api-tester"
   },
   {
+    "id": "pr-issues",
+    "version": "0.1.0",
+    "enabled": true,
+    "name": "PR и Issues",
+    "source": "path:plugins/pr-issues"
+  },
+  {
     "id": "project-catalog",
     "version": "0.7.0",
     "enabled": true,
