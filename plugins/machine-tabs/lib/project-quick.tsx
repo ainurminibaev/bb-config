@@ -39,7 +39,7 @@ export const PROJECT_QUICK_CSS = `
 .mt-pq-chip[data-on] { color: var(--popover-foreground); background: var(--state-active); border-color: transparent; font-weight: 500; }
 .mt-pq-chip:disabled { opacity: .45; cursor: default; }
 .mt-pq-chip > b { font-weight: 400; font-variant-numeric: tabular-nums; opacity: .75; }
-.mt-pq-list { overflow-y: auto; padding: 3px; overscroll-behavior: contain; }
+.mt-pq-list { overflow-y: auto; overflow-x: hidden; padding: 3px; overscroll-behavior: contain; }
 .mt-pq-row { display: flex; align-items: center; border-radius: 5px; }
 .mt-pq-row[data-current] { background: var(--state-hover); }
 .mt-pq-row[data-empty] .mt-pq-name { color: var(--muted-foreground); }
@@ -70,7 +70,8 @@ export const PROJECT_QUICK_CSS = `
 }
 .mt-pq-thread:hover, .mt-pq-thread:focus-visible { background: var(--state-hover); }
 /* The status column stays put; a child thread indents its title only. */
-.mt-pq-trow { display: flex; align-items: center; border-radius: 5px; }
+.mt-pq-trow { display: flex; min-width: 0; align-items: center; border-radius: 5px; }
+.mt-pq-trow > .mt-pq-thread { width: auto; min-width: 0; flex: 1; padding-right: 2px; }
 .mt-pq-trow:hover { background: var(--state-hover); }
 .mt-pq-trow > .mt-pq-thread:hover, .mt-pq-trow > .mt-pq-thread:focus-visible { background: transparent; }
 .mt-pq-fold {
