@@ -285,9 +285,11 @@ export function ProjectQuickMenu<P extends QuickProject>({
     window.clearTimeout(closeTimer.current);
     closeTimer.current = window.setTimeout(() => {
       if (document.activeElement && panel.current?.contains(document.activeElement) && query !== "") return;
+      // Enter/leave events can arrive out of order between the field and the portaled menu; trust :hover.
+      if ([button.current, field?.current, panel.current, flyPanel.current].some((node) => node?.matches(":hover"))) return;
       close();
     }, CLOSE_DELAY);
-  }, [pinned, close, query]);
+  }, [pinned, close, query, field]);
 
   useLayoutEffect(() => {
     if (!open || !button.current) return;
@@ -346,7 +348,10 @@ export function ProjectQuickMenu<P extends QuickProject>({
   /** The thread list closes a moment after the pointer leaves it and its project row. */
   const closeFlySoon = useCallback(() => {
     window.clearTimeout(flyCloseTimer.current);
-    flyCloseTimer.current = window.setTimeout(() => setFly(null), 260);
+    flyCloseTimer.current = window.setTimeout(() => {
+      if (flyPanel.current?.matches(":hover")) return;
+      setFly((now) => (now && list.current?.querySelector(".mt-pq-row:hover")?.getAttribute("data-pq-id") === now.projectId ? now : null));
+    }, 260);
   }, []);
   const openFly = useCallback((projectId: string, anchor: HTMLElement, delay: number) => {
     window.clearTimeout(flyTimer.current);
@@ -422,6 +427,7 @@ export function ProjectQuickMenu<P extends QuickProject>({
               key={id}
               className="mt-pq-row"
               data-pq-index={index}
+              data-pq-id={id}
               data-current={index === cursor || fly?.projectId === id ? "" : undefined}
               data-empty={summary.threads.length === 0 ? "" : undefined}
               onPointerEnter={(event) => {
