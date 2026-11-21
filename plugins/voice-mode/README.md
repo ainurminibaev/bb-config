@@ -1,3 +1,5 @@
+**English** · [Русский](README.ru.md)
+
 # Voice Mode customizations
 
 Reviewed source edits for upstream Voice Mode 0.1.15. This directory is a

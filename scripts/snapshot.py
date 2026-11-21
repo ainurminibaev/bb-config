@@ -7,7 +7,8 @@ from voice_source import is_voice_fork
 import shutil
 import subprocess
 from pathlib import Path
-from plugin_scope import externally_managed
+from plugin_scope import outside, unknown
+from updates import prepared_plugin_source
 
 import platform_compat as compat
 
@@ -39,8 +40,10 @@ def public_settings(config):
 
 def collect():
     """Finish all reads before modifying the repo. No transcripts or auth files."""
-    excluded = externally_managed(ROOT)
-    plugins = [p for p in bb('plugin', 'list')['plugins'] if p['id'] not in excluded]
+    excluded = outside(ROOT)
+    listed = bb('plugin', 'list')['plugins']
+    collect.homeless = unknown((p['id'] for p in listed), ROOT)
+    plugins = [p for p in listed if p['id'] not in excluded]
     calls = {
         'settings': ('settings', 'show'),
         'ui': ('settings', 'ui', 'list'),
@@ -120,7 +123,10 @@ def write_snapshot(values, root=ROOT):
 
 
 def copy_sources(plugins):
-    sources = [p for p in plugins if p['source'].startswith('path:')]
+    sources = [p for p in plugins if p['source'].startswith('path:')
+               and not prepared_plugin_source(ROOT, p['id'], p)]
+    if not sources:
+        return
     missing = [p['id'] for p in sources if not Path(p['rootDir']).is_dir()]
     if missing:
         raise RuntimeError('Plugin sources are on another machine: ' + ', '.join(missing) +
@@ -147,6 +153,11 @@ def main():
     try:
         values, plugins = collect()
         changed = changed_files(values)
+        homeless = getattr(collect, 'homeless', [])
+        if homeless:
+            print('Plugins without a home (ask the user once: bb-config, project or ignore):')
+            print('  ' + ', '.join(homeless))
+            print('Record: python3 scripts/plugin_scope.py set <id> bb-config|project|ignore ...')
         if args.check:
             if changed:
                 print('BB customised: save these settings in bb-config:')
@@ -155,7 +166,7 @@ def main():
                 print('Run: python3 scripts/snapshot.py --settings-only (private .local/config/).')
                 return 1
             print('BB settings and installed plugins match the private .local/config/ snapshot.')
-            return 0
+            return 1 if homeless else 0
         if not args.settings_only:
             copy_sources(plugins)
         write_snapshot(values)

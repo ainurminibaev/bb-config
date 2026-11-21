@@ -1,20 +1,17 @@
+**English** · [Русский](README.ru.md)
+
 # Web BB Button
 
-Кнопка-глобус «Открыть BB в браузере» в левой вертикальной навигации перед «Ещё».
+A globe button "Open BB in the browser" in the left navigation rail, before "More".
 
-При установке нужен публичный адрес BB: задайте поле «Публичный адрес BB»
-(`webUrl`) в стандартных настройках установленного плагина. Если на сервере
-задан `BB_APP_URL`, он используется при пустом `webUrl`.
-Без корректного адреса плагин получает штатный статус «Требуется настройка»
-с инструкцией. После сохранения настройки BB повторяет загрузку плагина.
-Перехода на главную страницу или чужой адрес по умолчанию нет.
+It needs your public BB address: set **Публичный адрес BB** (`webUrl`) in the
+plugin settings. With an empty `webUrl`, `BB_APP_URL` of the server is used.
+Without a valid address the plugin reports BB's standard "needs configuration"
+status with instructions. There is no default destination.
 
-Адреса с логином, паролем или протоколом кроме HTTP(S) отклоняются.
-Личные значения хранятся в настройках BB и `.local/config/`, вне публичного кода.
-Кнопка использует серверное перенаправление на сохранённый адрес.
+Addresses with a login, password or a scheme other than HTTP(S) are refused. The
+button uses a server-side redirect to the saved address; personal values stay
+in BB settings. Disabling or reloading the plugin removes its observer and link.
+After BB updates check the `data-nav-rail-item` selector.
 
-При отключении или перезагрузке плагина observer и ссылка удаляются.
-При навигации Top list кнопка не показывается. После обновлений BB проверьте
-совместимость селектора `data-nav-rail-item`.
-
-Проверка из корня: `node --test plugins/web-bb-button/*.test.ts`.
+Part of the [bb-config](../../README.md) set: `python3 scripts/updates.py apply` from the repository root installs it with everything else. Check: `node --test plugins/web-bb-button/*.test.ts`.

@@ -9,7 +9,7 @@ import { z } from "zod";
 
 const State = z.enum(["idle", "checking", "ready", "attention"]);
 /** A catalog plugin whose small source fix is kept across updates (patch_keeper.py). */
-const Kept = z.object({ plugin: z.string(), name: z.string(), state: State, message: z.string(), version: z.string() });
+const Kept = z.object({ plugin: z.string(), name: z.string(), state: State.or(z.literal("retired")), message: z.string(), version: z.string() });
 const Status = z.object({ state: State, message: z.string(), version: z.string(), kept: z.array(Kept).default([]) });
 export type KeeperStatus = z.infer<typeof Status>;
 export const rpcContract = defineRpcContract({ status: { input: z.null(), output: Status } });
@@ -55,11 +55,13 @@ function workerPath() {
 }
 
 /** Runs patch_keeper.py; one JSON status line per kept plugin. */
-async function runPatchKeeper(cliPath: string, serverUrl: string, signal: AbortSignal): Promise<z.infer<typeof Kept>[]> {
+async function runPatchKeeper(cliPath: string, serverUrl: string, forceRules: string, noticeThread: string, signal: AbortSignal): Promise<z.infer<typeof Kept>[]> {
   const script = resolve(dirname(fileURLToPath(import.meta.url)), "../patch_keeper.py");
   const path = existsSync(script) ? script : resolve(dirname(fileURLToPath(import.meta.url)), "patch_keeper.py");
   return new Promise((resolveResult, reject) => {
-    const child = startWorker([path], cliPath, { BB_SERVER_URL: serverUrl });
+    const child = startWorker([path], cliPath, {
+      BB_SERVER_URL: serverUrl, BB_KEEPER_FORCE_RULES: forceRules, BB_KEEPER_NOTICE_THREAD: noticeThread,
+    });
     let output = "";
     const stop = () => stopWorker(child.pid, "SIGTERM");
     const timeout = setTimeout(stop, 300_000);
@@ -111,6 +113,10 @@ export default async function keeper(bb: BbPluginApi) {
   const settings = bb.settings.define({
     cliPath: { type: "string", label: "BB CLI executable", default: process.env.BB_CLI ?? "",
       description: "Absolute path to the official bb CLI on this server; set during installation." },
+    forceRules: { type: "string", label: "Автоотключённые правила, которым разрешено работать", default: "",
+      description: "ID через запятую, например tokenomics. Пока ID в этом списке, правило работает без автоотключения." },
+    retirementNoticeThread: { type: "string", label: "Тред для уведомлений об автоотключении", default: "",
+      description: "ID треда BB. Пустое значение сохраняет результат только в статусе Keeper." },
     pythonPath: { type: "string", label: "Python interpreter (3.11+)", default: "",
       description: "Runs the keeper scripts. Empty: python3 from the server's PATH (python on Windows). On Windows give the full path when python on PATH is the Microsoft Store stub." },
   });
@@ -123,6 +129,7 @@ export default async function keeper(bb: BbPluginApi) {
   let kept: z.infer<typeof Kept>[] = status.kept ?? [];
   let keptObserved = "";
   let keptCheckedAt = 0;
+  let keptOptions = "";
   const publish = async (incoming: KeeperStatus) => {
     const next = { ...incoming, kept };
     if (JSON.stringify(next) === JSON.stringify(status)) return;
@@ -191,14 +198,16 @@ export default async function keeper(bb: BbPluginApi) {
           const busy = jobs.some((job) => KEPT_PLUGINS.includes(job.pluginId) && (job.state === "queued" || job.state === "running"));
           const signature = plugins.filter((p) => KEPT_PLUGINS.includes(p.id))
             .map((p) => `${p.id}|${p.enabled}|${p.rootDir}|${p.version}|${p.app?.bundle?.hash ?? ""}`).join(";");
-          const { cliPath, pythonPath } = await settings.get();
+          const { cliPath, pythonPath, forceRules, retirementNoticeThread } = await settings.get();
+          const options = JSON.stringify([forceRules, retirementNoticeThread]);
           runtime.python = pythonPath.trim();
           if (!busy && cliPath && existsSync(cliPath)
-            && (signature !== keptObserved || Date.now() - keptCheckedAt > KEPT_RECHECK_MS)) {
-            const rows = await runPatchKeeper(cliPath, bb.server.loopbackBaseUrl, signal);
+            && (signature !== keptObserved || options !== keptOptions || Date.now() - keptCheckedAt > KEPT_RECHECK_MS)) {
+            const rows = await runPatchKeeper(cliPath, bb.server.loopbackBaseUrl, forceRules, retirementNoticeThread, signal);
             keptCheckedAt = Date.now();
             if (rows.length) {
               kept = rows;
+              keptOptions = options;
               // Reapplying rebuilds and reloads: take the new bundle hash next time.
               const { plugins: after } = await bb.sdk.plugins.list();
               keptObserved = after.filter((p) => KEPT_PLUGINS.includes(p.id))

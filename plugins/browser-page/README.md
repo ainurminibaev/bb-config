@@ -1,3 +1,5 @@
+**English** · [Русский](README.ru.md)
+
 # Browser Page (id `browser-page`)
 
 bb's Browser Automation plugin drives pages through DevBrowser, which has no

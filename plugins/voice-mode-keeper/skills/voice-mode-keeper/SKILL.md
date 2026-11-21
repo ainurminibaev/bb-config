@@ -15,8 +15,9 @@ versions are compatible. Every new release is attempted (anchors may move or be
 reformatted but must be unique); failed validation keeps the release unmodified
 and requires adapting the patch. The status also lists `kept`: Needs You, KodaForge and
 Tokenomics fixes re-applied by `patch_keeper.py` with a staged build and rollback.
-Tokenomics uses a unique anchor and a checksum-verified installed version, and
-keeps releases with the fix already present. Test with
+Tokenomics uses a unique anchor in the installed catalog copy; releases with
+the fix already present are left alone and a missing or ambiguous anchor
+raises a clear status warning. Test with
 `python3 plugins/voice-mode-keeper/test_patch_keeper.py`.
 
 Source and recovery: `plugins/voice-mode/auto_update.py`, `changes.json` and
@@ -47,3 +48,15 @@ KodaForge workspace tab actions are staged after the base catalog fixes.
 Verify the live source with `python3 scripts/kodaforge_workspace_tabs.py --check`.
 Right-click a workspace tab to keep only that tab or close all workspaces.
 Close all appears only in the tab context menu.
+
+Keeper can retire a rule once the exact catalog release contains the complete
+fix. Its status becomes `retired`. Set `forceRules` to the plugin ID (or a
+comma-separated list) to re-enable it. If `retirementNoticeThread` is set
+in BB, Keeper queues one notice per retired rule. Ambiguous delivery is
+recorded in the status to avoid duplicate messages.
+
+Before notifying, Keeper runs the private settings snapshot and its drift
+check. It records the upstream version in the rule registry and
+`docs/customizations.md`, with a local-only commit. If either file has local
+edits, Keeper leaves a patch in `.local/plugin-patches/kept/` and reports it
+in the notice.

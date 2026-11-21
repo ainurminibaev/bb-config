@@ -1,26 +1,33 @@
+**English** · [Русский](README.ru.md)
+
 # Config Updates
 
-Плагин BB: сообщает о новых стабильных релизах этого репозитория и запускает их
-применение агентом.
+A BB plugin that reports new stable releases of the bb-config repository and
+installs them with one button.
 
-- Проверяет опубликованные GitHub Releases `vX.Y.Z` каждые шесть часов и по
-  запросу. Draft, prerelease и коммиты `main` не учитываются.
-- Показывает версию, описание и кнопку «Обновить с ИИ» в карточке над нижним
-  рядом боковой панели и в настройках плагина; сам ничего не ставит.
-- Кнопка открывает экран нового треда с готовым заданием, закреплёнными тегом
-  и коммитом, проектом и машиной сервера; модель вы выбираете сами. Агент
-  применяет шаги релиза через `scripts/updates.py` и ведёт локальный журнал.
-- Ошибка сети показывается как ошибка проверки.
-- Релиз, которому на вашей установке нечего делать, принимается сам, без
-  агента; значок в нижнем ряду виден только при доступном обновлении.
-- После полностью применённого релиза тред обновления сам уходит в архив
-  (настройка плагина, по умолчанию включена).
+- Checks published GitHub Releases `vX.Y.Z` every six hours and on request.
+  Drafts, prereleases and `main` commits do not count; a network error is shown
+  as a failed check, never as "no updates".
+- **Update** opens a window with the release's new components — name, a link to
+  the code, a description and a checkbox (on by default). An unticked component
+  is not installed and is not offered again.
+- The plugin then runs `scripts/updates.py apply` itself, without an agent: it
+  installs missing components of the set, updates older ones (including forks
+  and catalog plugins), keeps your settings, secrets and disabled plugins, and
+  writes a local journal. The run survives a restart of the plugin.
+- The result lists what was installed and updated and what you have to do
+  yourself: personal sign-ins, plugin settings, actions on other machines.
+- **Ask AI** appears only when something did not work: it opens BB's new-thread
+  screen with the task prepared.
+- External plugins newer than the version the release was tested with are shown
+  as a warning, without blocking their updates.
 
-## Установка
+## Install
 
-Нужны BB 0.49+, Node.js 22+, npm, Python 3 и git на машине сервера BB. Плагин
-ставится из checkout репозитория: рядом с ним должен быть `scripts/updates.py`.
-Checkout должен быть подключён к BB как проект — в нём создаётся тред обновления.
+Usually installed with the whole set: `python3 scripts/updates.py apply` in a
+bb-config checkout on the BB server machine (see the repository README). Alone:
+BB 0.49+, Node.js 22+, npm, Python 3.11+ and git on the server; the checkout
+must be a BB project.
 
 ```sh
 npm --prefix plugins/config-updates ci --include=dev
@@ -29,7 +36,6 @@ bb plugin install path:"$PWD/plugins/config-updates"
 bb config-updates check
 ```
 
-Обновление плагина: сборка и `bb plugin reload config-updates`.
-Проверки: `npm test`, `npm run typecheck`.
-
-Порядок применения и публикации релизов — [docs/updates.md](../../docs/updates.md).
+The button needs the bb CLI path: `BB_CLI` of the server by default, otherwise
+the plugin setting. Procedure: [docs/updates.md](../../docs/updates.md).
+Checks: `npm test`, `npm run typecheck`.

@@ -1,14 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFakePluginHost, makePluginAgentConfigurationContext } from "@get-bb/plugin-sdk/testing";
-import plugin from "./server.ts";
+import plugin, { CHECK_VERSION } from "./server.ts";
 import { imageType, MAX_BYTES } from "./policy.ts";
 
 const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M0 0L20 20"/></svg>';
 function setup(options: { offline?: boolean; refreshFails?: boolean } = {}) {
   const files = new Map<string, string>([["/checkout/download.svg", svg]]);
   let writes = 0;
-  const { bb, harness } = createFakePluginHost({ pluginId: "project-logo", sdk: {
+  const { bb, harness } = createFakePluginHost({ pluginId: "project-logo", agentSkillIds: ["project-logo"], sdk: {
     projects: { get: async () => ({ id: "p", name: "changan-update", kind: "standard", sources: [
       { type: "local_path", hostId: "remote-host", path: "/checkout", isDefault: true },
     ] }) },
@@ -101,6 +101,20 @@ test("legacy checked threads retry contextual generation", async () => {
   await s.harness.behavior.callAgentTool("project_logo_install", { svg, sourceUrl: "generated from project context" }, { threadId: "t", projectId: "p" });
   assert.equal(s.files.get("/checkout/.bb/icon.svg"), svg);
   assert.equal(s.harness.inspection.sdk.callsTo("threads.updatePluginMetadata").length, 1);
+  await s.harness.lifecycle.dispose();
+});
+
+test("the skill stays available after the automatic check, without tools", async () => {
+  const s = setup(); await plugin(s.bb);
+  const checked = await s.harness.behavior.resolveAgentConfiguration(makePluginAgentConfigurationContext({
+    project: { kind: "standard" }, pluginMetadata: { checked: true, checkVersion: CHECK_VERSION },
+  }));
+  assert.deepEqual(checked, { tools: [], skills: ["project-logo"], instructions: null });
+  const fresh = await s.harness.behavior.resolveAgentConfiguration(makePluginAgentConfigurationContext({
+    project: { kind: "standard" }, pluginMetadata: {},
+  }));
+  assert.deepEqual(fresh.skills, ["project-logo"]);
+  assert.match(JSON.stringify(fresh.tools), /project_logo_install/);
   await s.harness.lifecycle.dispose();
 });
 

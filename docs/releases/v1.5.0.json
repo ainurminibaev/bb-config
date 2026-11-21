@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "version": "v1.5.0",
+  "title": "Обновление кнопкой, выбор компонентов, README на двух языках",
+  "steps": [
+    {
+      "id": "bundle",
+      "title": "Полный набор компонентов bb-config",
+      "component": "bb-config",
+      "where": "server",
+      "kind": "bundle",
+      "rerun": "Безопасно: установленное и актуальное только проверяется; повтор доделывает остаток после сбоя.",
+      "rollback": "Компонент, который не нужен, исключите командой python3 scripts/bundle.py exclude <id> и удалите штатно (bb plugin remove <id>); прежнюю версию собственного плагина ставит предыдущий релиз."
+    },
+    {
+      "id": "plugin-config-updates-button",
+      "title": "Config Updates 0.3.0: «Обновить» без агента, выбор новых компонентов",
+      "component": "config-updates",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "config-updates",
+      "rerun": "Проверяет версию и источник плагина; совпадающая сборка не пересобирается.",
+      "rollback": "Поставить Config Updates из каталога предыдущего релиза в .local/updates/releases/<коммит>/plugins/config-updates."
+    }
+  ]
+}

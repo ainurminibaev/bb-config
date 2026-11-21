@@ -12,8 +12,9 @@ function setup(options: { releases?: unknown; installed?: string | null; offline
   const state = { offline: options.offline ?? false, releases: options.releases ?? [release("v1.0.0"), release("v1.1.0")],
     spawned: [] as Record<string, any>[], archived: false, network: 0,
     archivedIds: [] as string[], acceptCalls: [] as string[], acceptable: false, how: undefined as string | undefined,
-    hidden: [] as string[], revision: 0, local: options.local ?? {} as Partial<LocalStatus>, installed: options.installed ?? null };
+    local: options.local ?? {} as Partial<LocalStatus>, installed: options.installed ?? null };
   io.root = () => "/srv/config";
+  io.projectRoot = (root) => root;
   io.origin = async () => "https://github.com/acme/config.git\n";
   io.local = async () => ({ installed: state.installed ? { release: state.installed, commit: SHA, how: state.how } : null, partial: null, run: null, ...state.local });
   io.releases = async () => { state.network += 1; if (state.offline) throw new Error("GitHub недоступен: timeout"); return state.releases; };
@@ -28,13 +29,7 @@ function setup(options: { releases?: unknown; installed?: string | null; offline
     projects: { list: async () => [{ id: "proj", name: "config", kind: "standard", sources: options.sources ?? [
       { type: "local_path", hostId: "host_mac", path: "/work/other/config", isDefault: true },
       { type: "local_path", hostId: "host_server", path: "/srv/config/", isDefault: false }] }] },
-    system: { config: async () => ({ primaryHostId: "host_server" }),
-      uiPreferences: {
-        list: async () => ({ preferences: { "sidebar.hiddenFooterItems": { value: state.hidden, revision: state.revision } } }),
-        set: async ({ value, expectedRevision }: { value: string[]; expectedRevision: number }) => {
-          assert.equal(expectedRevision, state.revision); state.hidden = value; state.revision += 1; return {};
-        },
-      } },
+    system: { config: async () => ({ primaryHostId: "host_server" }) },
     plugins: { list: async () => ({ plugins: [] }) },
     threads: {
       spawn: async (args: Record<string, any>) => { state.spawned.push(args); return { id: `thr_${state.spawned.length}` }; },
@@ -121,7 +116,7 @@ test("start spawns one agent thread on the server checkout with the pinned relea
   const spawn = s.state.spawned[0]!;
   assert.equal(spawn.projectId, "proj");
   assert.deepEqual(spawn.environment, { type: "host", hostId: "host_server", workspace: { type: "unmanaged", path: "/srv/config" } });
-  assert.match(spawn.prompt, new RegExp(`fetch v1\\.1\\.0 --commit ${SHA}`));
+  assert.match(spawn.prompt, new RegExp(`apply v1\\.1\\.0 --commit ${SHA}`));
   assert.doesNotMatch(spawn.prompt, /origin\/main|git pull/);
   assert.deepEqual(await cliStart(s), { threadId: "thr_1", existing: true, tag: "v1.1.0" });
   s.state.local = { partial: { release: "v1.1.0", remaining: [{ step: "v1.1.0/x", machine: "server" }] },
@@ -143,6 +138,26 @@ test("an open run of another thread is joined, and a missing project is explaine
   for (const each of [s, none, current]) await each.harness.lifecycle.dispose();
 });
 
+test("a release-installed updater keeps the original project and reports changed dependencies", async () => {
+  const issue = "integration: addon: installed 2.0.0; requires <2.0.0";
+  const s = setup({ installed: "v1.0.0", local: { dependencyIssues: [issue] } });
+  const runner = `/srv/config/.local/updates/releases/${SHA}`;
+  io.root = () => runner;
+  io.projectRoot = (root) => { assert.equal(root, runner); return "/srv/config"; };
+  await plugin(s.bb);
+  try {
+    const checked = await s.rpc("check");
+    assert.deepEqual(checked.dependencyIssues, [issue]);
+    await cliStart(s);
+    const spawn = s.state.spawned[0]!;
+    assert.equal(spawn.environment.workspace.path, "/srv/config");
+    assert.ok(spawn.prompt.includes(runner));
+    assert.match(spawn.prompt, /--repository acme\/config/);
+  } finally {
+    await s.harness.lifecycle.dispose();
+  }
+});
+
 test("the schedule checks, and the prompt carries missed releases and a partial run", async () => {
   const s = setup({ installed: "v1.0.0" }); await plugin(s.bb);
   const before = s.state.network;
@@ -161,7 +176,8 @@ test("the button hands the task to the new-thread screen and spawns nothing", as
   const plan = await s.rpc("compose");
   assert.equal(s.state.spawned.length, 0);
   assert.deepEqual([plan.tag, plan.threadId, plan.projectId, plan.hostId], ["v1.1.0", null, "proj", "host_server"]);
-  assert.match(plan.prompt, new RegExp(`begin v1\\.1\\.0 --commit ${SHA}`));
+  assert.match(plan.prompt, new RegExp(`apply v1\\.1\\.0 --commit ${SHA}`));
+  assert.match(plan.prompt, /attention/);
   s.state.local = { run: { release: "v1.1.0", owner: "thr_running", startedAt: "x" } };
   assert.deepEqual(await s.rpc("compose"), { tag: "v1.1.0", threadId: "thr_running", projectId: null, hostId: null, prompt: null });
   await s.harness.lifecycle.dispose();
@@ -188,23 +204,18 @@ test("the thread named by the journal is archived once, only after a complete up
   await s.harness.lifecycle.dispose();
 });
 
-test("a release with nothing to apply is accepted at check time; the footer icon shows only when needed", async () => {
-  const s = setup({ installed: "v1.0.0" }); s.state.hidden = ["builtin:mobile"]; await plugin(s.bb);
+test("a release with nothing to apply is accepted at check time and clears the available release", async () => {
+  const s = setup({ installed: "v1.0.0" }); await plugin(s.bb);
   let status: UpdateStatus = await s.rpc("check");
   assert.deepEqual(s.state.acceptCalls, ["v1.1.0"]);
   assert.deepEqual(status.pending.map((r) => r.tag), ["v1.1.0"]); // has to be applied: the agent path stays
-  assert.deepEqual(s.state.hidden, ["builtin:mobile"]); // update available: icon on the row
   s.state.acceptable = true;
   status = await s.rpc("check");
   assert.equal(status.installed, "v1.1.0"); assert.equal(status.installedAuto, true); assert.deepEqual(status.pending, []);
-  assert.deepEqual(s.state.hidden, ["builtin:mobile", "plugin:config-updates/updates"]); // nothing to do: into the More menu
-  const revision = s.state.revision;
-  await s.rpc("check");
-  assert.equal(s.state.revision, revision); // no needless writes
   assert.equal(s.state.spawned.length, 0);
   s.state.releases = [release("v1.2.0")]; s.state.acceptable = false;
-  await s.rpc("check");
-  assert.deepEqual(s.state.hidden, ["builtin:mobile"]);
+  status = await s.rpc("check");
+  assert.deepEqual(status.pending.map((r) => r.tag), ["v1.2.0"]);
   await s.harness.lifecycle.dispose();
 });
 
@@ -220,4 +231,23 @@ test("the checkout matches its project source however the path is written", () =
   assert.equal(samePath("/srv/config", "/srv/other"), false);
   // Windows: bb may store forward slashes or another case than realpath returns.
   assert.equal(samePath("d:/Work/BB-Config/", "D:\\Work\\bb-config"), process.platform === "win32");
+});
+
+test("the button's run result: installed and updated components, attention, failure answer on stderr", async () => {
+  const { summarize, scriptAnswer } = await import("./server.ts");
+  const answer = { steps: [
+    { step: "v1.5.0/bundle", status: "verified", how: "applied", detail: "converged; installed: voice-mode, handoff; updated: machine-tabs; attention: 2" },
+    { step: "v1.3.1/voice-mode-routes-0-2-8", status: "verified", how: "existing" }],
+    attention: [{ component: "codex-realtime", type: "auth", text: "codex login", new: true }], remaining: [] };
+  const job = summarize("v1.5.0", 1, 0, answer, null);
+  assert.equal(job.state, "done");
+  assert.deepEqual([job.installed, job.updated], [["voice-mode", "handoff"], ["machine-tabs"]]);
+  assert.deepEqual(job.steps, { applied: 1, existing: 1, other: 0 });
+  assert.deepEqual(job.attention, [{ component: "codex-realtime", type: "auth", text: "codex login" }]);
+  const failed = scriptAnswer({ code: 2, stdout: "", stderr: JSON.stringify({ steps: [], remaining: [{ step: "x" }] }) });
+  assert.equal(failed.code, 2);
+  const partial = summarize("v1.5.0", 1, failed.code, failed.answer, null);
+  assert.deepEqual([partial.state, partial.remaining, partial.error], ["failed", 1, null]);
+  const broken = scriptAnswer({ code: 1, stdout: "", stderr: "Traceback" });
+  assert.equal(summarize("v1.5.0", 1, broken.code, broken.answer, "Traceback").error, "Traceback");
 });

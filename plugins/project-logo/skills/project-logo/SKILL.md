@@ -1,6 +1,6 @@
 ---
 name: project-logo
-description: Automatically select or create a shared contextual project icon using the project name and first user message.
+description: Добавить, поставить или заменить логотип/иконку проекта, сессии или треда в боковой панели BB; automatically select or create a shared contextual project icon using the project name and first user message.
 ---
 # Project Logo
 At the start of each unchecked standard-project thread, call `project_logo_status`.
@@ -37,6 +37,26 @@ The default source on another machine is not contacted. If there is no source
 on the thread machine, the operation fails without writing. The shared icon
 lives in the project source root, not a temporary thread worktree. CLI without
 a matching project thread keeps the project's default source selection.
+## Explicit user request (any time, also after the automatic check)
+- «Логотип треду/сессии/проекту», «иконка рядом с названием» mean the shared
+  project icon in the sidebar (Machine Tabs) for the project and all its
+  threads. A single thread has no own icon; if that is what the user wants,
+  clarify the desired behaviour.
+- Resolve project, root and machine through BB (`bb status --json`,
+  `bb project show <id> --json`: `sources[].path`, `hostId`); never guess a
+  home directory or use another project's cwd.
+- Source: the user's file or the project's own mark; for an original project a
+  simple original SVG without text. Never invent or imitate a third-party brand.
+  Prefer a mark without lettering for the small icon; keep SVG vector.
+- The `project_logo_*` tools exist only in an unchecked thread; otherwise use
+  the CLI below. It never replaces an existing icon: to replace one, write
+  `.bb/icon.svg` or `.bb/icon.png` (max 256 KiB) in the source root on that
+  machine (`bb file`/`bb terminal` with explicit `--host`/`--machine`), keeping
+  higher-priority files unless removal is needed.
+- Verify with `bb machine-tabs icons` (project marked `*`); if Machine Tabs is
+  not installed, report it instead of installing. Check `git diff`; commit or
+  push only on request.
+
 Manual CLI:
 ```sh
 bb project-logo status <project-id>

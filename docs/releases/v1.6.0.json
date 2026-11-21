@@ -1,0 +1,141 @@
+{
+  "schemaVersion": 1,
+  "version": "v1.6.0",
+  "title": "Дома плагинов, Shared Guides, Browser Relay и Codex Delegation Watch",
+  "steps": [
+    {
+      "id": "bundle",
+      "title": "Полный набор компонентов bb-config",
+      "component": "bb-config",
+      "where": "server",
+      "kind": "bundle",
+      "rerun": "Безопасно: установленное и актуальное только проверяется; повтор доделывает остаток после сбоя.",
+      "rollback": "Компонент, который не нужен, исключите командой python3 scripts/bundle.py exclude <id> и удалите штатно (bb plugin remove <id>); прежнюю версию собственного плагина ставит предыдущий релиз."
+    },
+    {
+      "id": "browser-relay",
+      "title": "Browser Relay: Chrome пользователя для агентов с любой машины без повторных «Allow remote debugging?»",
+      "component": "browser-relay",
+      "where": "server",
+      "kind": "command",
+      "introduces": true,
+      "apply": [
+        "{python}",
+        "scripts/browser_relay.py",
+        "--apply"
+      ],
+      "verify": [
+        "{python}",
+        "scripts/browser_relay.py",
+        "--check"
+      ],
+      "rerun": "Безопасно: установка плагина и перенос службы идемпотентны; работающая служба Browser Relay не перезапускается.",
+      "rollback": "bb browser-relay service remove --machine <Mac> (возвращает прежнюю запись chrome-devtools в ~/.codex/config.toml), затем bb plugin uninstall browser-relay."
+    },
+    {
+      "id": "claude-md-guard",
+      "title": "Claude Code: CLAUDE.md — только импорт @AGENTS.md, правила пишутся в AGENTS.md",
+      "component": "claude-md-guard",
+      "where": "executors",
+      "kind": "command",
+      "introduces": true,
+      "apply": [
+        "{python}",
+        "scripts/claude_md_guard.py",
+        "--apply"
+      ],
+      "verify": [
+        "{python}",
+        "scripts/claude_md_guard.py",
+        "--check"
+      ],
+      "rerun": "Безопасно: запись хука заменяется, другие хуки и настройки ~/.claude/settings.json сохраняются.",
+      "rollback": "python3 scripts/claude_md_guard.py --remove"
+    },
+    {
+      "id": "plugin-config-updates-description",
+      "title": "Config Updates 0.3.1: описание плагина про кнопку «Обновить»",
+      "component": "config-updates",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "config-updates",
+      "rerun": "Проверяет версию и источник плагина; совпадающая сборка не пересобирается.",
+      "rollback": "Поставить Config Updates из каталога предыдущего релиза."
+    },
+    {
+      "id": "plugin-homes",
+      "title": "Общие инструкции: дома плагинов (спросить один раз) и блок «совместимость агентов»",
+      "component": "bb-config-tracking",
+      "where": "server",
+      "kind": "command",
+      "introduces": true,
+      "apply": [
+        "{python}",
+        "scripts/setup_tracking.py",
+        "--refresh"
+      ],
+      "verify": [
+        "{python}",
+        "scripts/setup_tracking.py",
+        "--check"
+      ],
+      "rerun": "Безопасно: обновляются только блоки bb-config (bb-config tracking, agent compatibility) и только если напоминание уже включено; текст длиннее лимита 4096 не записывается.",
+      "rollback": "Вернуть прежний текст блока: python3 scripts/setup_tracking.py --refresh из checkout предыдущего релиза.",
+      "after": [
+        "plugin-shared-guides"
+      ]
+    },
+    {
+      "id": "plugin-keeper-record-retirement",
+      "title": "Сохранение отключённых правил Plugin Keeper",
+      "component": "voice-mode-keeper",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "voice-mode-keeper",
+      "rerun": "Повтор читает сохранённый результат и не дублирует коммит или уведомление.",
+      "rollback": "Вернуть прежнюю сборку Keeper. Записи отражают проверенные версии апстрима."
+    },
+    {
+      "id": "plugin-keeper-tokenomics",
+      "title": "Plugin Keeper для Tokenomics",
+      "component": "voice-mode-keeper",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "voice-mode-keeper",
+      "rerun": "Повтор проверяет версию Keeper. Исправленный Tokenomics остаётся без изменения.",
+      "rollback": "Восстановить прежнюю сборку Keeper. Его проверка не меняет состояние включения Tokenomics."
+    },
+    {
+      "id": "plugin-keeper-upstream-retirement",
+      "title": "Автоотключение исправлений Plugin Keeper",
+      "component": "voice-mode-keeper",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "voice-mode-keeper",
+      "rerun": "Keeper выводит статус уже отключённого правила без повторной отправки уведомления.",
+      "rollback": "Добавить идентификатор правила в forceRules, чтобы вернуть его проверку."
+    },
+    {
+      "id": "plugin-project-logo-skill",
+      "title": "Project Logo 0.2.2: навык виден агентам, в том числе для явной просьбы поставить или заменить логотип",
+      "component": "project-logo",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "project-logo",
+      "introduces": false,
+      "rerun": "Безопасно: при совпадении версии и источника шаг только проверяется.",
+      "rollback": "Установить project-logo 0.2.1 из предыдущего релиза bb-config."
+    },
+    {
+      "id": "plugin-shared-guides",
+      "title": "Shared Guides 0.1.0: навыки к коротким общим инструкциям (bb-config, перенос треда, совместимость агентов)",
+      "component": "shared-guides",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "shared-guides",
+      "introduces": true,
+      "rerun": "Безопасно: при совпадении версии и источника шаг только проверяется.",
+      "rollback": "bb plugin remove shared-guides. Короткие блоки инструкций останутся, но ссылки на навыки перестанут работать."
+    }
+  ]
+}

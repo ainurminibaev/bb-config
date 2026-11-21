@@ -127,11 +127,25 @@
     "source": "path:plugins/browser-page"
   },
   {
+    "id": "browser-relay",
+    "version": "0.1.0",
+    "enabled": true,
+    "name": "Browser Relay",
+    "source": "git:https://github.com/ainurminibaev/bb-plugin-browser-relay.git@semver:>=0.1.0 <1.0.0"
+  },
+  {
     "id": "code-open",
     "version": "0.4.0",
     "enabled": true,
     "name": "Code Open",
     "source": "path:plugins/code-open"
+  },
+  {
+    "id": "codex-delegation-watch",
+    "version": "0.2.0",
+    "enabled": true,
+    "name": "Codex Delegation Watch",
+    "source": "path:plugins/codex-delegation-watch"
   },
   {
     "id": "codex-project-trust",
@@ -249,6 +263,14 @@
     "source": "builtin:keep-awake"
   },
   {
+    "id": "knowledge-base",
+    "version": "0.2.8",
+    "enabled": true,
+    "name": "Knowledge Base",
+    "source": "git:https://github.com/ainurminibaev/bb-personal-assistant.git@semver:^0.2.0-rc.1",
+    "subdirectory": "plugins/knowledge-base"
+  },
+  {
     "id": "kodaforge",
     "version": "0.7.0",
     "enabled": true,
@@ -270,6 +292,20 @@
     "name": "Limits",
     "source": "git:https://github.com/artwist-polyakov/bb-plugins.git@semver:limits/:^1.0.0",
     "installSource": "limits@bb-community"
+  },
+  {
+    "id": "local-transcribe",
+    "version": "0.2.4",
+    "enabled": true,
+    "name": "Local Transcribe",
+    "source": "path:plugins/local-transcribe"
+  },
+  {
+    "id": "mac-computer-use",
+    "version": "0.4.1",
+    "enabled": true,
+    "name": "Mac Computer Use",
+    "source": "git:https://github.com/ainurminibaev/bb-plugin-mac-computer-use.git@semver:>=0.4.0 <1.0.0"
   },
   {
     "id": "machine-tabs",
@@ -419,11 +455,32 @@
     "source": "builtin:secrets"
   },
   {
+    "id": "shared-guides",
+    "version": "0.1.0",
+    "enabled": true,
+    "name": "Shared Guides",
+    "source": "path:plugins/shared-guides"
+  },
+  {
     "id": "side-chat",
     "version": "0.1.0",
     "enabled": true,
     "name": "Side chat",
     "source": "builtin:side-chat"
+  },
+  {
+    "id": "subthread-autocollapse",
+    "version": "0.1.0",
+    "enabled": true,
+    "name": "Subthread Autocollapse",
+    "source": "path:plugins/subthread-autocollapse"
+  },
+  {
+    "id": "thread-account-usage",
+    "version": "0.1.0",
+    "enabled": true,
+    "name": "Thread Account Usage",
+    "source": "path:plugins/thread-account-usage"
   },
   {
     "id": "limit-guard",
@@ -445,20 +502,6 @@
     "enabled": false,
     "name": "Low Priority",
     "source": "path:plugins/low-priority"
-  },
-  {
-    "id": "subthread-autocollapse",
-    "version": "0.1.0",
-    "enabled": true,
-    "name": "Subthread Autocollapse",
-    "source": "path:plugins/subthread-autocollapse"
-  },
-  {
-    "id": "thread-account-usage",
-    "version": "0.1.0",
-    "enabled": true,
-    "name": "Thread Account Usage",
-    "source": "path:plugins/thread-account-usage"
   },
   {
     "id": "thread-list",
@@ -500,7 +543,7 @@
   },
   {
     "id": "voice-mode-keeper",
-    "version": "0.2.5",
+    "version": "0.2.10",
     "enabled": true,
     "name": "Plugin Keeper",
     "source": "path:plugins/voice-mode-keeper"
@@ -518,12 +561,5 @@
     "enabled": true,
     "name": "Workflows",
     "source": "builtin:workflows"
-  },
-  {
-    "id": "local-transcribe",
-    "version": "0.2.4",
-    "enabled": true,
-    "name": "Local Transcribe",
-    "source": "path:plugins/local-transcribe"
   }
 ]

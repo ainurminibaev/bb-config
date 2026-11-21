@@ -1,3 +1,5 @@
+**English** · [Русский](README.ru.md)
+
 # Plugin Keeper (id `voice-mode-keeper`)
 
 Automatically preserves the managed Voice Mode catalog installation's personal
@@ -27,10 +29,11 @@ is a tested compatibility layer, not a guarantee about every future version.
 
 It also checks three catalog plugins with `patch_keeper.py` after startup,
 after an update and every 10 minutes. Needs You and KodaForge can use patch
-files with `patch --fuzz=2`. Tokenomics uses a single source anchor and version
-and checksum checks on the installed catalog copy. A fixed release needs no
-changes. The keeper builds the staged copy against installed dependencies
-before reloading it. A failed start restores the previous files and bundle.
+files with `patch --fuzz=2`. Tokenomics uses a unique source anchor in its installed catalog copy.
+If the release already returns a JSON null, it is left as is. With a missing
+or ambiguous anchor, the keeper reports that it could not apply the change.
+After editing a staged copy, it builds using the installed dependencies and
+reloads; a failed start restores the original files and bundle.
 Tests: `python3 plugins/voice-mode-keeper/test_patch_keeper.py`.
 KodaForge shows Close all only in the workspace tab context menu.
 
@@ -45,3 +48,15 @@ On a different server, configure the path to its official CLI once:
 The current server's path is stored only in the private settings snapshot.
 This is needed because a BB service's PATH need not include the CLI. It is
 unrelated to the voice provider's authorization; no credentials are accessed.
+
+Keeper can retire a rule once the exact catalog release contains the complete
+fix. Its status becomes `retired`. Set `forceRules` to the plugin ID (or a
+comma-separated list) to re-enable it. If `retirementNoticeThread` is set
+in BB, Keeper queues one notice per retired rule. Ambiguous delivery is
+recorded in the status to avoid duplicate messages.
+
+Before notifying, Keeper runs the private settings snapshot and its drift
+check. It records the upstream version in the rule registry and
+`docs/customizations.md`, with a local-only commit. If either file has local
+edits, Keeper leaves a patch in `.local/plugin-patches/kept/` and reports it
+in the notice.

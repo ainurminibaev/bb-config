@@ -99,9 +99,12 @@ export default function projectLogo(bb: BbPluginApi) {
       return JSON.stringify(result);
     },
   });
-  bb.agents.configure(ctx => ctx.project.kind !== "standard" || (ctx.pluginMetadata.checked === true && ctx.pluginMetadata.checkVersion === CHECK_VERSION) ? { tools: [], skills: [] } : {
-    tools: ["project_logo_status", "project_logo_install"], skills: [], instructions,
-  });
+  // The skill stays available after the automatic check: explicit "add/replace
+  // the project logo" requests use it with the bb project-logo CLI.
+  bb.agents.configure(ctx => ctx.project.kind !== "standard" ? { tools: [], skills: [] }
+    : ctx.pluginMetadata.checked === true && ctx.pluginMetadata.checkVersion === CHECK_VERSION
+      ? { tools: [], skills: ["project-logo"] }
+      : { tools: ["project_logo_status", "project_logo_install"], skills: ["project-logo"], instructions });
   bb.cli.register({ name: "project-logo", summary: "Inspect or install a project's shared logo",
     commands: [
       { name: "status", summary: "Check icon and source", usage: "status <project-id>" },
