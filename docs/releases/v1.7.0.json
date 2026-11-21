@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "version": "v1.7.0",
+  "title": "Git Thread Provenance 0.1.0",
+  "steps": [
+    {
+      "id": "bundle",
+      "title": "Полный набор компонентов bb-config",
+      "component": "bb-config",
+      "where": "server",
+      "kind": "bundle",
+      "rerun": "Безопасно: установленное и актуальное только проверяется; повтор доделывает остаток после сбоя.",
+      "rollback": "Компонент, который не нужен, исключите командой python3 scripts/bundle.py exclude <id> и удалите штатно (bb plugin remove <id>); прежнюю версию собственного плагина ставит предыдущий релиз."
+    },
+    {
+      "id": "plugin-git-thread-provenance",
+      "title": "Git Thread Provenance 0.1.0",
+      "component": "git-thread-provenance",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "git-thread-provenance",
+      "introduces": true,
+      "rerun": "При совпадении установленной версии шаг проверяет её состояние.",
+      "rollback": "Выполнить bb plugin disable git-thread-provenance. Отключение действует при следующем запуске сессии провайдера."
+    }
+  ]
+}
