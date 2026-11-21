@@ -79,11 +79,13 @@ is disabled or failed, check it in Settings → Plugins.
 
 A folder button inside the "Поиск тредов" field, beside the funnel, appears on
 hover. Hovering it opens a compact project list (search, quick filters by thread
-state, projects ordered by latest thread activity with state counts). Clicking a
-project scrolls the sidebar to its group and flashes it; the arrow on a row shows
-the project's threads, and clicking one opens it and flashes its row. There is no
+state, projects ordered by latest thread activity with state counts, bb's own status icons). Clicking a
+project scrolls the sidebar to its group and flashes it; the arrow on a row, or a
+long rest on it, shows the project's threads, and clicking one opens it and flashes its row. There is no
 CLI or setting for it. If a click does not scroll, the list is not grouped by
 project (rows need `data-sidebar-project-id`); the menu then opens the project.
+
+The search row stays pinned at the top of the sidebar while the list scrolls.
 
 ## Project images
 
