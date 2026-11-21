@@ -427,7 +427,7 @@
   },
   {
     "id": "limit-guard",
-    "version": "0.7.1",
+    "version": "0.8.0",
     "enabled": true,
     "name": "Limit Guard",
     "source": "path:plugins/limit-guard"

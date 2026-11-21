@@ -6,6 +6,8 @@ import type { PriorityView, rpcContract } from './contract';
 import './app.css';
 
 type Mode = PriorityView['mode'];
+type Rule = { enabled: boolean; low: number; high: number; nearMinutes: number };
+type Custom = Partial<Record<'short' | 'long' | 'model', Rule>>;
 type Marks = Record<string, { mode: 'low' | 'background'; holding: boolean; title: string }> | undefined;
 const OPEN = 'limit-guard:open-priority';
 const CHANGED = 'limit-guard:priority-changed';
@@ -39,15 +41,43 @@ function usePriority(threadId: string | null) {
     return () => { window.clearInterval(timer); window.removeEventListener(CHANGED, load); };
   }, [load]);
   useRealtime('priority', (payload: unknown) => { if (!threadId || (payload as { threadId?: string } | null)?.threadId === threadId) load(); });
-  const set = useCallback(async (mode: Mode) => {
+  const set = useCallback(async (mode: Mode, custom?: Custom | null) => {
     if (!threadId) return;
-    setView(await rpc.call('setPriority', { threadId, mode }));
+    setView(await rpc.call('setPriority', { threadId, mode, ...(custom !== undefined ? { custom } : {}) }));
     window.dispatchEvent(new Event(CHANGED));
   }, [rpc, threadId]);
   return { view, set };
 }
 
-function Panel({ view, onPick, anchor, onClose }: { view: PriorityView; onPick: (mode: Mode) => void; anchor: DOMRect; onClose: () => void }) {
+/** The thread's own thresholds: rows keep what the panel shows; edited or already-own rows are saved as own. */
+function OwnThresholds({ view, onSave }: { view: PriorityView; onSave: (custom: Custom | null) => void }) {
+  const [rows, setRows] = useState(() => view.policies.map(p => ({ ...p, dirty: false })));
+  useEffect(() => { setRows(view.policies.map(p => ({ ...p, dirty: false }))); }, [view.policies]);
+  const edit = (i: number, patch: Partial<Rule>) => setRows(list => list.map((r, j) => (j === i ? { ...r, ...patch, dirty: true } : r)));
+  const num = (v: string, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(Number(v) || 0)));
+  const save = () => {
+    const custom: Custom = {};
+    for (const r of rows) if (r.dirty || r.custom) custom[r.key] = { enabled: r.enabled, low: Math.min(r.low, r.high), high: Math.max(r.low, r.high), nearMinutes: r.nearMinutes };
+    onSave(Object.keys(custom).length ? custom : null);
+  };
+  const anyOwn = rows.some(r => r.custom);
+  return <details className="lg-own" open={anyOwn}>
+    <summary>Свои пороги треда{anyOwn ? ' · заданы' : ''}</summary>
+    <div className="lg-own-head"><span/><span>после сброса</span><span>перед сбросом</span><span>за, мин</span></div>
+    {rows.map((r, i) => <div key={r.key} className="lg-own-row" data-off={!r.enabled}>
+      <label title={r.label}><input type="checkbox" checked={r.enabled} onChange={e => edit(i, { enabled: e.target.checked })}/>{r.label.replace(' окно', '')}{r.custom ? ' ·' : ''}</label>
+      <input type="number" min={1} max={100} value={r.low} disabled={!r.enabled} onChange={e => edit(i, { low: num(e.target.value, 1, 100) })} aria-label={`${r.label}: порог после сброса, %`}/>
+      <input type="number" min={1} max={100} value={r.high} disabled={!r.enabled} onChange={e => edit(i, { high: num(e.target.value, 1, 100) })} aria-label={`${r.label}: порог перед сбросом, %`}/>
+      <input type="number" min={0} max={10080} value={r.nearMinutes} disabled={!r.enabled} onChange={e => edit(i, { nearMinutes: num(e.target.value, 0, 10080) })} aria-label={`${r.label}: за сколько минут до сброса`}/>
+    </div>)}
+    <div className="lg-own-actions">
+      <button type="button" onClick={save} disabled={!rows.some(r => r.dirty)}>Сохранить</button>
+      <button type="button" onClick={() => onSave(null)} disabled={!anyOwn}>Общие</button>
+    </div>
+  </details>;
+}
+
+function Panel({ view, onPick, onCustom, anchor, onClose }: { view: PriorityView; onPick: (mode: Mode) => void; onCustom: (custom: Custom | null) => void; anchor: DOMRect; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const away = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
@@ -55,7 +85,7 @@ function Panel({ view, onPick, anchor, onClose }: { view: PriorityView; onPick: 
     document.addEventListener('mousedown', away); document.addEventListener('keydown', key);
     return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', key); };
   }, [onClose]);
-  const left = Math.max(8, Math.min(anchor.right - 300, window.innerWidth - 308));
+  const left = Math.max(8, Math.min(anchor.right - 320, window.innerWidth - 328));
   const bottom = Math.max(8, window.innerHeight - anchor.top + 6);
   return createPortal(<div ref={ref} className="lg-panel" role="dialog" aria-label="Приоритет треда" style={{ left, bottom }}>
     <div className="lg-panel-title">Приоритет треда</div>
@@ -65,6 +95,7 @@ function Panel({ view, onPick, anchor, onClose }: { view: PriorityView; onPick: 
     </div>
     <p className="lg-panel-text">{view.text}</p>
     {view.rules.length > 0 && <ul className="lg-rules">{view.rules.map(rule => <li key={rule}>{rule}</li>)}</ul>}
+    {view.mode !== 'normal' && !view.from && <OwnThresholds view={view} onSave={onCustom}/>}
     <p className="lg-panel-note">Пороги по умолчанию — в настройках Limit Guard. Подтреды получают режим родителя.</p>
   </div>, document.body);
 }
@@ -90,7 +121,7 @@ function ComposerChip() {
       onClick={() => (anchor ? setAnchor(null) : open())}>
       <Glyph paused={view.holding}/>{label && <span>{label}</span>}
     </button>
-    {anchor && <Panel view={view} anchor={anchor} onClose={() => setAnchor(null)} onPick={mode => { void set(mode); }}/>}
+    {anchor && <Panel view={view} anchor={anchor} onClose={() => setAnchor(null)} onPick={mode => { void set(mode); }} onCustom={custom => { void set(view.mode, custom); }}/>}
   </>;
 }
 

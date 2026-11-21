@@ -336,11 +336,21 @@ export default function plugin(bb: BbPluginApi) {
       mode: p.mode, from: p.from, holding: waiting, unknown: !d.hold && d.unknown, text,
       window: d.hold ? d.label : d.closest?.label ?? null, used: d.hold ? d.used : d.closest?.used ?? null,
       threshold: d.hold ? d.threshold : d.closest?.threshold ?? null, rules: rulesText(p.mode, p.custom),
+      policies: (['short', 'long', 'model'] as const).map(k => {
+        const m = mergePolicies(policies, p.custom)[k];
+        return { key: k, label: POLICY_LABEL[k], enabled: m.enabled, low: m.low, high: m.high, nearMinutes: m.nearMinutes, custom: Boolean(p.custom?.[k]) };
+      }),
     };
   }
   bb.rpc.register(rpcContract, {
     priority: ({ threadId }) => priorityView(threadId),
-    setPriority: async ({ threadId, mode }) => { await setMode(threadId, mode); bb.realtime.publish('priority', { threadId }); return priorityView(threadId); },
+    setPriority: async ({ threadId, mode, custom }) => {
+      // The panel sends the whole set it shows, so replace rather than merge.
+      if (custom !== undefined) { await modesReady; customs.delete(threadId); }
+      await setMode(threadId, mode, custom === undefined ? undefined : custom ?? null);
+      bb.realtime.publish('priority', { threadId });
+      return priorityView(threadId);
+    },
     marks: async ({ threadIds }) => {
       await modesReady;
       const out: Record<string, { mode: 'low' | 'background'; holding: boolean; title: string }> = {};

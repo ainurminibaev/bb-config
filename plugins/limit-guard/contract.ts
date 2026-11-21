@@ -48,12 +48,22 @@ const priorityView = z.object({
   used: z.number().nullable(),
   threshold: z.number().nullable(),
   rules: z.array(z.string()),
+  /** Effective rule per window, and whether it is this thread's own. */
+  policies: z.array(z.object({ key: z.enum(['short', 'long', 'model']), label: z.string(), enabled: z.boolean(), low: z.number(), high: z.number(), nearMinutes: z.number(), custom: z.boolean() })),
 });
 export type PriorityView = z.infer<typeof priorityView>;
+const policyInput = z.object({ enabled: z.boolean(), low: z.number().min(1).max(100), high: z.number().min(1).max(100), nearMinutes: z.number().min(0).max(10080) }).strict();
 
 export const rpcContract = defineRpcContract({
   priority: { input: z.object({ threadId: z.string().min(1) }).strict(), output: priorityView },
-  setPriority: { input: z.object({ threadId: z.string().min(1), mode: z.enum(['normal', 'low', 'background']) }).strict(), output: priorityView },
+  setPriority: {
+    input: z.object({
+      threadId: z.string().min(1), mode: z.enum(['normal', 'low', 'background']),
+      /** Omitted: keep the thread's own thresholds. Null: back to the plugin settings. */
+      custom: z.object({ short: policyInput.optional(), long: policyInput.optional(), model: policyInput.optional() }).strict().nullable().optional(),
+    }).strict(),
+    output: priorityView,
+  },
   /** Sidebar marks for many threads at once: only threads that are not normal. */
   marks: { input: z.object({ threadIds: z.array(z.string()).max(500) }).strict(), output: z.record(z.string(), z.object({ mode: z.enum(['low', 'background']), holding: z.boolean(), title: z.string() })) },
 });
