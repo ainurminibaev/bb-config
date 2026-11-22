@@ -167,3 +167,10 @@ test('the push check sees a secret in an earlier local snapshot even after the f
   // Work already on origin is not uploaded again and is not scanned.
   assert.deepEqual(await scanOutgoing(a, g(a, 'rev-parse', 'HEAD').trim(), signal), []);
 });
+test('an unscanned history tail blocks the push check', async () => {
+  const { a } = repo('long');
+  for (let i = 0; i < 201; i++) { writeFileSync(join(a, 'f.txt'), `${i}\n`); g(a, 'commit', '-qam', `c${i}`); }
+  const hits = await scanOutgoing(a, g(a, 'rev-parse', 'HEAD').trim(), signal);
+  assert.equal(hits.length, 1);
+  assert.match(hits[0], /не проверена/);
+});

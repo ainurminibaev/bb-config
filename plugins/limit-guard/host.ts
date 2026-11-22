@@ -104,10 +104,15 @@ async function scanSecrets(path: string, files: string[]) {
  */
 export async function scanOutgoing(path: string, commit: string, signal: AbortSignal) {
   const hits = new Set<string>();
-  const list = await git(['rev-list', '--max-count=200', commit, '--not', '--remotes=origin'], { cwd: path, signal });
-  for (const sha of list.out.split('\n').filter(Boolean)) {
-    const changed = (await git(['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', '-m', '--root', sha], { cwd: path, signal })).out.split('\0').filter(Boolean);
-    for (const file of [...new Set(changed)].slice(0, 5000)) {
+  const list = await git(['rev-list', '--max-count=201', commit, '--not', '--remotes=origin'], { cwd: path, signal });
+  if (!list.ok) return ['(не удалось перечислить коммиты для проверки)'];
+  const shas = list.out.split('\n').filter(Boolean);
+  // What was not scanned is not sent: an unscanned tail blocks the push instead of slipping through.
+  if (shas.length > 200) return ['(больше 200 неотправленных коммитов — история не проверена)'];
+  for (const sha of shas) {
+    const changed = [...new Set((await git(['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', '-m', '--root', sha], { cwd: path, signal })).out.split('\0').filter(Boolean))];
+    if (changed.length > 5000) return ['(больше 5000 файлов в одном коммите — история не проверена)'];
+    for (const file of changed) {
       if (hits.has(file)) continue;
       const blob = await git(['cat-file', '-p', `${sha}:${file}`], { cwd: path, signal });
       // A deleted path has no blob in this commit; its name alone may still look like a secret.
