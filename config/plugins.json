@@ -456,7 +456,7 @@
   },
   {
     "id": "push-button",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "enabled": true,
     "name": "Push Button",
     "source": "path:plugins/push-button"
@@ -498,7 +498,7 @@
   },
   {
     "id": "subthread-autocollapse",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "enabled": true,
     "name": "Subthread Autocollapse",
     "source": "path:plugins/subthread-autocollapse"
