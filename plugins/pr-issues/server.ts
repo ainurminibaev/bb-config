@@ -1,6 +1,6 @@
 import { PluginCliError, cliCommand, defineCli, type BbPluginApi } from '@get-bb/plugin-sdk';
 import { rpcContract, type Board, type ItemViewDto } from './contract';
-import { clip, diffEvents, relevant, firstSeen, githubRepo, parseRepos, sortViews, view, type FeedEvent, type Item, type Mute, type Seen } from './core';
+import { clip, diffEvents, parseSince, recentEnough, relevant, firstSeen, githubRepo, parseRepos, sortViews, view, type FeedEvent, type Item, type Mute, type Seen } from './core';
 import { act, fetchAll, ghRunner, type Action, type Runner } from './github';
 
 const STALE_MS = 5 * 60 * 1000;
@@ -19,18 +19,23 @@ export function createServer(bb: BbPluginApi, run: Runner) {
   let lastError: string | null = null;
   let extraRepos: string[] = [];
   let ignoreRepos: string[] = [];
+  let since = parseSince('2025-01-01');
 
   const settings = bb.settings.define({
     extraRepos: {
       type: 'string', label: 'Дополнительные репозитории', default: '', experimental_multiline: true,
       description: 'owner/repo или ссылки GitHub через запятую или с новой строки: открытые PR и issue этих репозиториев попадут на страницу, даже если проекта в BB нет.',
     },
+    since: {
+      type: 'string', label: 'Показывать начиная с даты', default: '2025-01-01',
+      description: 'ГГГГ-ММ-ДД. Записи, которые не менялись с этой даты, не загружаются и не показываются. Пусто — без ограничения.',
+    },
     ignoreRepos: {
       type: 'string', label: 'Не показывать репозитории', default: '', experimental_multiline: true,
       description: 'owner/repo через запятую: записи из них не показываются нигде.',
     },
   });
-  const applySettings = (v: { extraRepos: string; ignoreRepos: string }) => { extraRepos = parseRepos(v.extraRepos); ignoreRepos = parseRepos(v.ignoreRepos); };
+  const applySettings = (v: { extraRepos: string; ignoreRepos: string; since: string }) => { extraRepos = parseRepos(v.extraRepos); ignoreRepos = parseRepos(v.ignoreRepos); since = parseSince(v.since); };
   void settings.get().then(applySettings).catch(() => undefined);
   settings.onChange(next => { applySettings(next); bb.realtime.publish('changed', {}); });
 
@@ -57,7 +62,7 @@ export function createServer(bb: BbPluginApi, run: Runner) {
     const projects = await projectRepos();
     const repos = [...new Set([...projects.keys(), ...extraRepos])].filter(repo => !ignoreRepos.includes(repo));
     const now = Date.now();
-    const result = await fetchAll(run, repos, now);
+    const result = await fetchAll(run, repos, now, since);
     const nextItems: Record<string, Item> = {};
     const fresh: FeedEvent[] = [];
     for (const item of result.items) {
@@ -89,11 +94,11 @@ export function createServer(bb: BbPluginApi, run: Runner) {
     const projects = await projectRepos().catch(() => new Map<string, { id: string; name: string }[]>());
     const me = stored.me ?? '';
     const items: ItemViewDto[] = sortViews(Object.values(stored.items)
-      .filter(item => relevant(item) && !ignoreRepos.includes(item.repo.toLowerCase()))
-      .map(item => view(item, me, seen[item.key], mutes[item.key])))
+      .filter(item => relevant(item) && recentEnough(item, since) && !ignoreRepos.includes(item.repo.toLowerCase()))
+      .map(item => view(item, me, seen[item.key], mutes[item.key], Date.now())))
       .map(item => ({ ...item, projects: projects.get(item.repo.toLowerCase()) ?? [] }));
     return {
-      me: stored.me, items, events: events.filter(event => !ignoreRepos.includes(event.repo.toLowerCase())).slice(0, 200),
+      me: stored.me, items, events: events.filter(event => event.at >= since && !ignoreRepos.includes(event.repo.toLowerCase())).slice(0, 200), since: since || null,
       fetchedAt: stored.fetchedAt, fetching: Boolean(fetching), error: lastError, warnings: stored.warnings,
       repos: [...new Set([...projects.keys(), ...extraRepos])].sort(),
     };

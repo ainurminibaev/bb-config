@@ -125,23 +125,50 @@ function Details({ item, rpc, onClose }: { item: ItemViewDto; rpc: Rpc; onClose:
   </div>;
 }
 
+/** PR and issue look different at a glance: colour strip, chip and glyph. */
+const KIND_STYLE = {
+  pr: { chip: 'bg-violet-500/15 text-violet-700 dark:text-violet-300', strip: 'bg-violet-500', text: 'PR' },
+  issue: { chip: 'bg-amber-500/15 text-amber-700 dark:text-amber-300', strip: 'bg-amber-500', text: 'Issue' },
+} as const;
+
+function KindChip({ kind }: { kind: 'pr' | 'issue' }) {
+  const style = KIND_STYLE[kind];
+  return <span className={`inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${style.chip}`}>
+    <Icon name={kind === 'pr' ? 'PullRequest' : 'Issue'} className="size-3"/>{style.text}</span>;
+}
+
 function Row({ item, open, onToggle, rpc }: { item: ItemViewDto; open: boolean; onToggle: () => void; rpc: Rpc }) {
-  return <li className={`overflow-hidden rounded-lg border ${open ? 'border-ring/40' : 'border-transparent hover:border-border'}`}>
-    <button type="button" onClick={onToggle} className="flex w-full cursor-pointer items-start gap-2.5 px-3 py-2.5 text-left hover:bg-muted/40">
-      <Icon name={glyph(item)} className={`mt-0.5 size-4 shrink-0 ${TONE_TEXT[item.tone]}`}/>
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-2">
-          {item.unread && <span className="size-2 shrink-0 rounded-full bg-sky-500" title="Есть новое"/>}
-          <span className={`truncate ${item.unread ? 'font-semibold' : 'font-medium'}`}>{item.title}</span>
+  const dismissable = item.notice || (item.state === 'open' && !item.muted);
+  const dismiss = async () => {
+    try {
+      await rpc.call('mute', { key: item.key, muted: true });
+      if (item.unread) await rpc.call('mark_seen', { keys: [item.key] });
+      toast(item.notice ? 'Уведомление скинуто' : 'Скинуто до нового ответа', { action: { label: 'Вернуть', onClick: () => void rpc.call('mute', { key: item.key, muted: false }) } });
+    } catch (reason) { toast.error(String((reason as Error).message ?? reason)); }
+  };
+  return <li className={`group relative overflow-hidden rounded-lg border ${open ? 'border-ring/40' : 'border-border/60 hover:border-border'}`}>
+    <span className={`absolute inset-y-0 left-0 w-1 ${KIND_STYLE[item.kind].strip}`} aria-hidden/>
+    <div className="flex items-start">
+      <button type="button" onClick={onToggle} className="flex min-w-0 flex-1 cursor-pointer items-start gap-2.5 py-2.5 pl-4 pr-2 text-left hover:bg-muted/40">
+        <Icon name={glyph(item)} className={`mt-0.5 size-4 shrink-0 ${TONE_TEXT[item.tone]}`}/>
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-2">
+            <KindChip kind={item.kind}/>
+            {item.unread && <span className="size-2 shrink-0 rounded-full bg-sky-500" title="Есть новое"/>}
+            <span className={`truncate ${item.unread ? 'font-semibold' : 'font-medium'}`}>{item.title}</span>
+          </span>
+          <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            <span className="font-mono">{item.repo}#{item.number}</span>
+            <Pill tone={item.tone}>{item.status}</Pill>
+            {item.reason !== item.status && <span className={item.bucket === 'action' ? 'font-medium text-foreground' : ''}>{item.reason}</span>}
+          </span>
         </span>
-        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-          <span className="font-mono">{item.repo}#{item.number}</span>
-          <Pill tone={item.tone}>{item.status}</Pill>
-          <span className={item.bucket === 'action' ? 'text-foreground' : ''}>{item.reason}</span>
-        </span>
-      </span>
-      <span className="shrink-0 text-xs text-muted-foreground" title={new Date(item.updatedAt).toLocaleString('ru-RU')}>{ago(item.bucket === 'done' ? item.closedAt ?? item.updatedAt : item.updatedAt)}</span>
-    </button>
+        <span className="shrink-0 pt-0.5 text-xs text-muted-foreground" title={new Date(item.updatedAt).toLocaleString('ru-RU')}>{ago(item.state !== 'open' ? item.closedAt ?? item.updatedAt : item.updatedAt)}</span>
+      </button>
+      {dismissable && <button type="button" onClick={() => void dismiss()} title={item.notice ? 'Прочитано — скинуть' : 'Скинуть до нового ответа'} aria-label="Скинуть"
+        className="m-1.5 flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-60 hover:bg-muted hover:text-foreground hover:opacity-100 group-hover:opacity-100">
+        <Icon name="X" className="size-4"/></button>}
+    </div>
     {open && <Details item={item} rpc={rpc} onClose={onToggle}/>}
   </li>;
 }
@@ -152,7 +179,7 @@ function Feed({ events, onOpen }: { events: FeedEventDto[]; onOpen: (key: string
     <button type="button" onClick={() => onOpen(event.key)} className="flex w-full cursor-pointer items-start gap-2.5 rounded-md px-3 py-2 text-left hover:bg-muted/40">
       <span className={`mt-1.5 size-2 shrink-0 rounded-full ${TONE[event.tone]?.split(' ').find(c => c.startsWith('bg-')) ?? 'bg-muted'}`} style={{ opacity: 1 }}/>
       <span className="min-w-0 flex-1"><span className="block text-sm">{event.text}</span>
-        <span className="block truncate text-xs text-muted-foreground"><span className="font-mono">{event.repo}#{event.number}</span> · {event.title}</span></span>
+        <span className="flex items-center gap-1.5 truncate text-xs text-muted-foreground"><KindChip kind={event.kind}/><span className="font-mono">{event.repo}#{event.number}</span> · {event.title}</span></span>
       <span className="shrink-0 text-xs text-muted-foreground">{ago(event.at)}</span>
     </button></li>)}</ul>;
 }
@@ -175,14 +202,18 @@ function Page() {
   const [kind, setKind] = useState<KindFilter>('all');
   const [mineOnly, setMineOnly] = useState(false);
   const [query, setQuery] = useState('');
+  const [repo, setRepo] = useState('');
   const [openKey, setOpenKey] = useState('');
   const [help, setHelp] = useState(false);
   const items = data?.items ?? [];
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return items.filter(item => (kind === 'all' || item.kind === kind) && (!mineOnly || item.mine)
-      && (!needle || `${item.title} ${item.repo}#${item.number} ${item.author} ${item.status} ${item.reason}`.toLowerCase().includes(needle)));
-  }, [items, kind, mineOnly, query]);
+    const words = needle.split(/\s+/).filter(Boolean);
+    return items.filter(item => (kind === 'all' || item.kind === kind) && (!mineOnly || item.mine) && (!repo || item.repo === repo)
+      && words.every(word => `${item.title} ${item.repo}#${item.number} #${item.number} ${item.author} @${item.author} ${item.status} ${item.reason} ${item.labels.join(' ')} ${item.kind === 'pr' ? 'pr pull request пулреквест' : 'issue задача'}`.toLowerCase().includes(word)));
+  }, [items, kind, mineOnly, query, repo]);
+  const repos = useMemo(() => [...new Set(items.map(item => item.repo))].sort((a, b) => a.localeCompare(b)), [items]);
+  const kindCount = (k: KindFilter) => items.filter(item => (k === 'all' || item.kind === k) && (tab === 'feed' || item.bucket === tab)).length;
   const count = (b: Tab) => filtered.filter(item => item.bucket === b).length;
   const fresh = (b: Tab) => filtered.filter(item => item.bucket === b && item.unread).length;
   const visible = tab === 'feed' ? [] : filtered.filter(item => item.bucket === tab);
@@ -204,12 +235,17 @@ function Page() {
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-[12rem] flex-1">
           <Icon name="Search" className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"/>
-          <Input value={query} onChange={e => setQuery(e.target.value)} placeholder="Поиск по названию, репозиторию, автору" className="pl-8"/>
+          <Input value={query} onChange={e => setQuery(e.target.value)} placeholder="Поиск: название, репозиторий, #номер, @автор, метка" className="pl-8"/>
         </div>
         <div className="flex rounded-md border border-border p-0.5 text-xs">
           {([['all', 'Все'], ['pr', 'PR'], ['issue', 'Issues']] as [KindFilter, string][]).map(([value, text]) =>
-            <button key={value} type="button" onClick={() => setKind(value)} className={`cursor-pointer rounded px-2.5 py-1 ${kind === value ? 'bg-muted font-medium' : 'text-muted-foreground'}`}>{text}</button>)}
+            <button key={value} type="button" onClick={() => setKind(value)} className={`flex cursor-pointer items-center gap-1 rounded px-2.5 py-1 ${kind === value ? (value === 'all' ? 'bg-muted' : KIND_STYLE[value].chip) + ' font-medium' : 'text-muted-foreground'}`}>
+              {value !== 'all' && <Icon name={value === 'pr' ? 'PullRequest' : 'Issue'} className="size-3"/>}{text}<span className="tabular-nums opacity-60">{kindCount(value)}</span></button>)}
         </div>
+        <select value={repo} onChange={e => setRepo(e.target.value)} className="h-8 max-w-[14rem] rounded-md border border-input bg-background px-2 text-xs" aria-label="Репозиторий">
+          <option value="">Все репозитории</option>
+          {repos.map(name => <option key={name} value={name}>{name}</option>)}
+        </select>
         <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"><input type="checkbox" checked={mineOnly} onChange={e => setMineOnly(e.target.checked)}/>Только мои</label>
         <Button size="sm" variant="outline" disabled={data?.fetching} onClick={() => void rpc.call('refresh', null)}>
           <Icon name="RefreshCw" className={`mr-1 size-3.5 ${data?.fetching ? 'animate-spin' : ''}`}/>{data?.fetching ? 'Обновляю…' : 'Обновить'}</Button>
@@ -233,11 +269,11 @@ function Page() {
         {unreadHere.length > 1 && <div className="flex justify-end"><button type="button" className="cursor-pointer text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
           onClick={() => void rpc.call('mark_seen', { keys: unreadHere })}>Отметить все прочитанными ({unreadHere.length})</button></div>}
         {visible.length ? <ul className="space-y-1">{visible.map(item => <Row key={item.key} item={item} rpc={rpc} open={openKey === item.key} onToggle={() => toggle(item.key)}/>)}</ul>
-          : <p className="px-2 py-12 text-center text-sm text-muted-foreground">{tab === 'action' ? 'Сейчас от вас ничего не ждут 🎉' : 'Пусто'}</p>}
+          : <p className="px-2 py-12 text-center text-sm text-muted-foreground">{query || repo || kind !== 'all' || mineOnly ? 'По фильтру ничего не нашлось' : tab === 'action' ? 'Сейчас от вас ничего не ждут 🎉' : 'Пусто'}</p>}
       </>}
       {data && tab === 'feed' && <Feed events={data.events.filter(e => kind === 'all' || e.kind === kind)} onOpen={openFromFeed}/>}
       {data?.fetchedAt && <p className="pt-2 text-xs text-muted-foreground">
-        Обновлено {ago(data.fetchedAt)} · @{data.me} · обновляется каждые 10 минут. Ищутся ваши PR и issue на всём GitHub, запросы ревью, упоминания за 30 дней и открытые записи в репозиториях проектов BB ({data.repos.length}).
+        Обновлено {ago(data.fetchedAt)} · @{data.me} · обновляется каждые 10 минут{data.since ? ` · показано то, что менялось с ${new Date(data.since).toLocaleDateString('ru-RU')}` : ''}. Ищутся ваши PR и issue на всём GitHub, запросы ревью, упоминания за 30 дней и открытые записи в репозиториях проектов BB ({data.repos.length}).
         {data.warnings.length > 0 && <span className="block">Часть поиска не удалась: {data.warnings[0]}</span>}
       </p>}
     </div>

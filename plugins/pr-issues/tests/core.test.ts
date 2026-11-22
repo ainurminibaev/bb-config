@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { bucketOf, relevant, diffEvents, firstSeen, githubRepo, parseRepos, status, view, type Item } from '../core';
+import { bucketOf, recentEnough, parseSince, relevant, diffEvents, firstSeen, githubRepo, parseRepos, status, view, type Item } from '../core';
 import { act, plan, toItem } from '../github';
 
 const ME = 'me';
@@ -105,4 +105,22 @@ test('project-only items count only in repositories you maintain', () => {
   assert.equal(relevant(item({ author: 'bob', relations: ['project'] })), false);
   assert.equal(relevant(item({ author: 'bob', relations: ['project'], permission: 'ADMIN' })), true);
   assert.equal(relevant(item({ author: 'bob', relations: ['project', 'involved'] })), true);
+});
+
+test('a fresh outcome of yours is a notice under "your move" until dismissed', () => {
+  const now = 100 * 86_400_000;
+  const merged = item({ state: 'merged', closedAt: now - 86_400_000 });
+  const v = view(merged, ME, undefined, undefined, now);
+  assert.equal(v.bucket, 'action'); assert.equal(v.notice, true); assert.equal(v.reason, 'Ваш PR приняли 🎉');
+  assert.equal(view(merged, ME, undefined, { at: now }, now).bucket, 'done');
+  assert.equal(view(item({ state: 'closed', closedAt: now - 20 * 86_400_000 }), ME, undefined, undefined, now).bucket, 'done');
+  assert.equal(view(item({ kind: 'issue', state: 'closed', stateReason: 'NOT_PLANNED', closedAt: now }), ME, undefined, undefined, now).reason, 'Ваш issue отклонили: делать не будут');
+  assert.equal(view(item({ author: 'bob', state: 'closed', closedAt: now }), ME, undefined, undefined, now).bucket, 'done');
+});
+
+test('cut-off date hides items untouched since then', () => {
+  const since = parseSince('2025-01-01');
+  assert.equal(recentEnough(item({ updatedAt: Date.parse('2024-06-01') }), since), false);
+  assert.equal(recentEnough(item({ updatedAt: Date.parse('2025-03-01') }), since), true);
+  assert.equal(parseSince(''), 0);
 });

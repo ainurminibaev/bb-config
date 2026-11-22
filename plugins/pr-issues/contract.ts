@@ -10,7 +10,7 @@ const itemView = z.object({
   reviewDecision: z.string().nullable(), checks: z.string().nullable(), mergeable: z.string().nullable(), permission: z.string().nullable(),
   reviewRequestedFromMe: z.boolean(), assignedToMe: z.boolean(), changesRequestedAt: z.number().nullable(), lastMine: z.number().nullable(), lastOther: activity.nullable(),
   comments: z.number(), unresolvedThreads: z.number(), labels: z.array(z.string()), relations: z.array(z.enum(['authored', 'review', 'involved', 'project'])),
-  status: z.string(), tone, bucket: z.enum(['action', 'waiting', 'done']), reason: z.string(), unread: z.boolean(), muted: z.boolean(), mine: z.boolean(),
+  status: z.string(), tone, bucket: z.enum(['action', 'waiting', 'done']), reason: z.string(), unread: z.boolean(), muted: z.boolean(), mine: z.boolean(), notice: z.boolean(),
   projects: z.array(z.object({ id: z.string(), name: z.string() })),
 });
 export type ItemViewDto = z.infer<typeof itemView>;
@@ -25,6 +25,7 @@ const board = z.object({
   error: z.string().nullable(),
   warnings: z.array(z.string()),
   repos: z.array(z.string()),
+  since: z.number().nullable(),
 });
 export type Board = z.infer<typeof board>;
 const key = z.string().min(3).max(300);

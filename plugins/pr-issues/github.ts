@@ -93,11 +93,12 @@ export function toItem(node: Node, me: string, relation: Relation): Item | null 
 export interface FetchPlan { query: string; relation: Relation; pages: number }
 
 /** Every search the page needs: yours anywhere, review requests, mentions, and open items in your projects. */
-export function plan(projectRepos: string[], now: number): FetchPlan[] {
-  const since = new Date(now - 30 * 86_400_000).toISOString().slice(0, 10);
+export function plan(projectRepos: string[], now: number, from = 0): FetchPlan[] {
+  const since = new Date(Math.max(now - 30 * 86_400_000, from)).toISOString().slice(0, 10);
+  const window = from > 0 ? ` updated:>=${new Date(from).toISOString().slice(0, 10)}` : '';
   const out: FetchPlan[] = [
-    { query: 'is:pr author:@me sort:updated-desc', relation: 'authored', pages: 4 },
-    { query: 'is:issue author:@me sort:updated-desc', relation: 'authored', pages: 4 },
+    { query: `is:pr author:@me${window} sort:updated-desc`, relation: 'authored', pages: 4 },
+    { query: `is:issue author:@me${window} sort:updated-desc`, relation: 'authored', pages: 4 },
     { query: 'is:open review-requested:@me sort:updated-desc', relation: 'review', pages: 2 },
     { query: `involves:@me -author:@me updated:>=${since} sort:updated-desc`, relation: 'involved', pages: 2 },
   ];
@@ -112,11 +113,11 @@ export function plan(projectRepos: string[], now: number): FetchPlan[] {
 export interface FetchResult { me: string; items: Item[]; errors: string[] }
 
 /** Run all searches, merging duplicates (an item found by several searches keeps all its relations). */
-export async function fetchAll(run: Runner, projectRepos: string[], now: number): Promise<FetchResult> {
+export async function fetchAll(run: Runner, projectRepos: string[], now: number, from = 0): Promise<FetchResult> {
   const byKey = new Map<string, Item>();
   const errors: string[] = [];
   let me = '';
-  for (const step of plan(projectRepos, now)) {
+  for (const step of plan(projectRepos, now, from)) {
     let after: string | null = null;
     for (let page = 0; page < step.pages; page++) {
       let data: Node;

@@ -58,6 +58,8 @@ export interface ItemView extends Item {
   unread: boolean;
   muted: boolean;
   mine: boolean;
+  /** A recent outcome (merged, rejected, solved) shown under "your move" until you dismiss it. */
+  notice: boolean;
 }
 
 export interface FeedEvent { at: number; key: string; repo: string; number: number; kind: Kind; title: string; url: string; text: string; tone: Tone }
@@ -144,12 +146,42 @@ export function stillMuted(item: Item, mute: Mute | undefined): boolean {
   return true;
 }
 
-export function view(item: Item, me: string, seen: Seen | undefined, mute: Mute | undefined): ItemView {
+/** How long a merged or closed item of yours stays in "your move" as a notice to dismiss. */
+export const NOTICE_MS = 14 * 86_400_000;
+
+function noticeText(item: Item): string {
+  if (item.kind === 'pr') return item.state === 'merged' ? 'Ваш PR приняли 🎉' : 'Ваш PR закрыли без слияния';
+  if (item.stateReason === 'NOT_PLANNED') return 'Ваш issue отклонили: делать не будут';
+  if (item.stateReason === 'DUPLICATE') return 'Ваш issue закрыли как дубликат';
+  return 'Ваш issue решён и закрыт';
+}
+
+/**
+ * `mute` is the user's ×: on an open item it hides it until someone writes again;
+ * on a recent outcome it dismisses the notice.
+ */
+export function view(item: Item, me: string, seen: Seen | undefined, mute: Mute | undefined, now = Date.now()): ItemView {
   const st = status(item);
+  const mine = item.author.toLowerCase() === me.toLowerCase();
   let { bucket, reason } = bucketOf(item, me);
-  const muted = bucket !== 'done' && stillMuted(item, mute);
-  if (muted) { bucket = 'done'; reason = `Скрыт вами · ${reason}`; }
-  return { ...item, status: st.label, tone: st.tone, bucket, reason, unread: unread(item, seen, st.label), muted, mine: item.author.toLowerCase() === me.toLowerCase() };
+  let notice = false;
+  let muted = false;
+  if (bucket === 'done') {
+    const closed = item.closedAt ?? item.updatedAt;
+    if (mine && now - closed < NOTICE_MS && !(mute && mute.at >= closed)) { bucket = 'action'; reason = noticeText(item); notice = true; }
+  } else if (stillMuted(item, mute)) { muted = true; bucket = 'done'; reason = `Скинуто вами · ${reason}`; }
+  return { ...item, status: st.label, tone: st.tone, bucket, reason, unread: unread(item, seen, st.label), muted, mine, notice };
+}
+
+/** Items untouched since the cut-off date are not shown at all. */
+export function recentEnough(item: Item, since: number): boolean {
+  return Math.max(item.updatedAt, item.closedAt ?? 0) >= since;
+}
+
+/** "2025-01-01" → ms; empty or invalid → 0 (no cut-off). */
+export function parseSince(text: string): number {
+  const value = Date.parse(text.trim());
+  return Number.isFinite(value) ? value : 0;
 }
 
 /** Seen record for an item that appears for the first time. Before the first full sync everything counts as already seen. */
