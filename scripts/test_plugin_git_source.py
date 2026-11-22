@@ -42,13 +42,25 @@ class GitSourceTests(unittest.TestCase):
         fake = patch.object(migration, 'bb', side_effect=self.bb)
         self.addCleanup(fake.stop)
         fake.start()
+        # The build check fetches the tag from GitHub; here it is recorded only.
+        self.prebuilt = []
+        build = patch.object(migration, 'prebuild', side_effect=lambda *a: self.prebuilt.append(a))
+        self.addCleanup(build.stop)
+        build.start()
+        self.required = False
+        sleep = patch.object(migration.time, 'sleep', lambda s: None)
+        self.addCleanup(sleep.stop)
+        sleep.start()
 
     def bb(self, group, command, *args, **options):
         self.assertEqual(group, 'plugin')
         self.commands.append((command, *args))
         if command == 'list':
             rows = [{'id': self.plugin_id, 'source': self.source, 'rootDir': str(self.directory),
-                     'version': self.version, 'status': 'running'}] if self.source else []
+                     'version': self.version,
+                     # A required setting left at its default: BB waits for configuration.
+                     'status': 'needs-configuration' if self.required and self.values == self.defaults else 'running',
+                     }] if self.source else []
             return {'plugins': rows}
         if command == 'source':
             return {'requested': self.git, 'range': '^0.1.0', 'tagPrefix': f'{self.plugin_id}/',
@@ -138,7 +150,7 @@ class GitSourceTests(unittest.TestCase):
 
     def test_secret_schema_stops_before_writing_journal(self):
         self.schema['secret'] = {'type': 'string', 'secret': True}
-        with self.assertRaisesRegex(migration.MigrationError, 'Unsupported setting'):
+        with self.assertRaisesRegex(migration.SecretSetting, 'ask the owner'):
             self.apply(allow_remove=True)
         self.assertIsNone(self.record())
         self.assertNotIn('install', [command[0] for command in self.commands])
@@ -150,6 +162,26 @@ class GitSourceTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             migration.rollback(self.plugin_id, self.journal, self.record(), allow_remove=True)
         self.assertEqual(self.source, self.git)
+        self.assertNotIn(('remove', self.plugin_id), self.commands)
+
+
+    def test_required_setting_comes_back_before_the_running_check(self):
+        self.required = True
+        self.apply(allow_remove=True)
+        self.assertEqual((self.source, self.values), (self.git, self.initial))
+        self.assertEqual(self.record()['phase'], 'migrated')
+
+    def test_build_is_checked_before_removal(self):
+        self.apply(allow_remove=True)
+        self.assertEqual(self.prebuilt, [(self.plugin_id, '^0.1.0')])
+        build_at = next(i for i, c in enumerate(self.commands) if c[0] == 'remove')
+        self.assertGreater(build_at, 0)
+
+    def test_a_plugin_that_does_not_build_is_left_untouched(self):
+        migration.prebuild.side_effect = migration.NotApplicable('does not build')
+        with self.assertRaises(migration.NotApplicable):
+            self.apply(allow_remove=True)
+        self.assertEqual((self.source, self.values), (self.path, self.initial))
         self.assertNotIn(('remove', self.plugin_id), self.commands)
 
 

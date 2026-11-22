@@ -32,6 +32,10 @@ class NotApplicable(MigrationError):
     pass
 
 
+class SecretSetting(MigrationError):
+    """BB does not hand secret values out, so a removal would lose them."""
+
+
 def bb(*args, as_json=True, show=False):
     if show:
         print(f'$ bb {" ".join(args)}', flush=True)
@@ -63,7 +67,9 @@ def settings(plugin_id):
     if not config.get('ok'):
         raise MigrationError('BB did not return the settings schema')
     for key, field in config['schema'].items():
-        if field.get('secret') or field['type'] not in {'boolean', 'number', 'string', 'select'}:
+        if field.get('secret'):
+            raise SecretSetting(f'secret setting {key!r} cannot be saved and returned; ask the owner first')
+        if field['type'] not in {'boolean', 'number', 'string', 'select'}:
             raise MigrationError(f'Unsupported setting for migration: {key}')
     values = config['values']
     if values.keys() - config['schema'].keys() or any(type(value) not in (bool, int, float, str)
@@ -352,44 +358,87 @@ def check(plugin_id, journal, applicable=False):
     return 0 if applicable else 1
 
 
+def run_one(action, plugin_id, allow_remove):
+    journal = state_dir(ROOT) / 'plugin-git-source' / f'{plugin_id}.json'
+    try:
+        if action in {'applicable', 'check'}:
+            return check(plugin_id, journal, applicable=action == 'applicable')
+        journal.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with journal.with_suffix('.lock').open('a') as lock:
+            compat.lock(lock)
+            wait_for_install()
+            record = read(journal, plugin_id)
+            if action == 'apply':
+                apply(plugin_id, journal, record, allow_remove)
+            elif record:
+                rollback(plugin_id, journal, record, allow_remove)
+            else:
+                raise MigrationError('No recorded original source and settings')
+        return 0
+    except SecretSetting as error:
+        print(f'{plugin_id}: {error}', file=sys.stderr)
+        return 1 if action == 'applicable' else 4
+    except NotApplicable as error:
+        print(error, file=sys.stderr)
+        return 1 if action == 'applicable' else 2
+    except SourceConflict as error:
+        print(f'{plugin_id}: {error}. Rerun with --allow-remove only if removal is authorized.', file=sys.stderr)
+        return 3
+    except (MigrationError, OSError, ValueError, KeyError) as error:
+        print(f'{plugin_id}: {error}', file=sys.stderr)
+        # The release runner interprets a nonzero applicability check as
+        # "skip". Surface a real error from --apply instead of skipping it.
+        return 0 if action == 'applicable' else 2
+
+
+def skipped(plugin_id):
+    """A plugin this step leaves alone: not installed (excluded by the user) or
+    installed from a source the user chose (not a bb-config release folder)."""
+    row = plugin(plugin_id)
+    if row is None:
+        return read(state_dir(ROOT) / 'plugin-git-source' / f'{plugin_id}.json', plugin_id) is None
+    if row['source'].startswith(f'{REPOSITORY}@'):
+        return False
+    try:
+        release_path(plugin_id, row)
+        return False
+    except NotApplicable:
+        return True
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     for action in ('applicable', 'check', 'apply', 'rollback'):
         mode.add_argument(f'--{action}', dest='action', action='store_const', const=action)
     parser.add_argument('--allow-remove', action='store_true',
-                        help='allow BB to remove this plugin if a direct source change is refused')
-    parser.add_argument('id')
+                        help='allow BB to remove a plugin if a direct source change is refused')
+    parser.add_argument('ids', nargs='+', metavar='id')
     args = parser.parse_args()
-    if not PLUGIN_ID.fullmatch(args.id):
-        parser.error('expected a BB plugin id')
-    journal = state_dir(ROOT) / 'plugin-git-source' / f'{args.id}.json'
-    try:
-        if args.action in {'applicable', 'check'}:
-            return check(args.id, journal, applicable=args.action == 'applicable')
-        journal.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        with journal.with_suffix('.lock').open('a') as lock:
-            compat.lock(lock)
-            wait_for_install()
-            record = read(journal, args.id)
-            if args.action == 'apply':
-                apply(args.id, journal, record, args.allow_remove)
-            elif record:
-                rollback(args.id, journal, record, args.allow_remove)
-            else:
-                raise MigrationError('No recorded original source and settings')
-        return 0
-    except NotApplicable as error:
-        print(error, file=sys.stderr)
-        return 1 if args.action == 'applicable' else 2
-    except SourceConflict as error:
-        print(f'{args.id}: {error}. Rerun with --allow-remove only if removal is authorized.', file=sys.stderr)
-        return 3
-    except (MigrationError, OSError, ValueError, KeyError) as error:
-        print(f'{args.id}: {error}', file=sys.stderr)
-        # The release runner interprets a nonzero applicability check as
-        # "skip". Surface a real error from --apply instead of skipping it.
-        return 0 if args.action == 'applicable' else 2
+    for plugin_id in args.ids:
+        if not PLUGIN_ID.fullmatch(plugin_id):
+            parser.error(f'expected a BB plugin id, got {plugin_id!r}')
+    if len(args.ids) == 1:
+        return run_one(args.action, args.ids[0], args.allow_remove)
+    # Several plugins: one at a time, in order; stop at the first failure so a
+    # problem is looked at before the next plugin is removed.
+    codes = []
+    for plugin_id in args.ids:
+        if skipped(plugin_id):
+            print(f'{plugin_id}: not installed from a bb-config release — left as is')
+            continue
+        code = run_one(args.action, plugin_id, args.allow_remove)
+        codes.append(code)
+        if args.action == 'applicable' and code == 0:
+            return 0
+        if args.action in {'apply', 'rollback'} and code != 0:
+            if code == 4:
+                print('Остановлено: у плагина есть секретная настройка, которую шаг не может вернуть. '
+                      'Спросите владельца установки, прежде чем переводить этот плагин.', file=sys.stderr)
+            return code
+    if args.action == 'applicable':
+        return 1
+    return max(codes, default=0)
 
 
 if __name__ == '__main__':

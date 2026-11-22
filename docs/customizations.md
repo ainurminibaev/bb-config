@@ -2974,15 +2974,27 @@ Realtime 2.1 по подписке) и голос Codex Live `codexLiveVoice = "
   `bb plugin remove subthread-autocollapse`.
 - **Обновление для установивших:** шаг
   `docs/releases/next/plugin-subthread-autocollapse`.
-- **Проба Git-обновлений (BB 0.50.1):** `scripts/plugin_git_source.py
-  --check subthread-autocollapse` проверяет источник по полям `requested`,
-  `range`, `tagPrefix` и `subdirectory` команды `bb plugin source --json`.
-  `--apply` и `--rollback` используют приватный журнал в
-  `.local/updates/plugin-git-source/`. В BB 0.50.1 смена path на Git требует
-  удаления регистрации, на которое даёт согласие `--allow-remove`.
-  Сохраняйте исходную папку выпуска для отката. Проверка восстановления
-  нестандартных настроек, повторного запуска и отката:
-  `python3 -m unittest discover -s scripts -p test_plugin_git_source.py`.
+- **Обновления плагинов штатно через BB (22.11.2026, BB 0.50.1).** 12 плагинов
+  без секретов и расписаний (subthread-autocollapse, web-bb-button,
+  handoff-button, project-machine-setup, shared-guides, git-thread-provenance,
+  codex-goal-queue, fresh-thread-hint, project-open, code-open,
+  thread-account-usage, push-button) стоят из Git-источника
+  `git:https://github.com/ainurminibaev/bb-config.git@^X.Y.0 --subdirectory
+  plugins/<id> --tag-prefix <id>/`. Новая версия такого плагина — тег
+  `<id>/vX.Y.Z` на коммите main с той же версией в `package.json`; BB сам
+  показывает её (Settings → Updates, `bb plugin outdated`) и ставит
+  `bb plugin update <id>`; шаг `local-plugin` в выпуске для них не нужен.
+  Перевод — `scripts/plugin_git_source.py` (`--check/--apply/--rollback`,
+  несколько id подряд, остановка на первом сбое): сборка по тегу только с
+  рабочими зависимостями до удаления, приватный журнал настроек в
+  `.local/updates/plugin-git-source/`, remove → install (BB 0.50.1 не меняет
+  источник поверх установки), возврат и сверка настроек, `running`; секретная
+  настройка — остановка с просьбой спросить владельца. Для чужих установок —
+  шаг выпуска `plugins-git-source`. Набор (`config/bundle.json`) оставляет их
+  `local`: Git-установку он считает «другим источником» и не трогает. Плагины
+  с секретами, расписаниями и своими данными (limit-guard, project-catalog,
+  proxy-manager и др.) пока остаются в папке — после пробы на тестовом BB.
+  Тесты: `python3 -m unittest discover -s scripts -p test_plugin_git_source.py`.
 
 ## Настройки звонка Voice Mode 0.2.8
 
