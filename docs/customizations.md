@@ -2948,6 +2948,34 @@ Realtime 2.1 по подписке) и голос Codex Live `codexLiveVoice = "
 (удаляет и настройку `root`, база не меняется).
 Проверка: `bb kb search claude` и `kb_search` из треда другого проекта.
 
+## Subthread Error Mark 0.1.0
+
+Собственный плагин `plugins/subthread-error-mark/` (только интерфейс; серверный
+вход пустой, его требует bb). Ставит красный ⊗ в строке боковой панели у
+каждого незаархивированного подтреда со статусом `error`.
+
+- **Зачем:** встроенный Thread list (BB 0.50.1) рисует красный ⊗ только у
+  непрочитанного треда верхнего уровня (`parentThreadId === null && isUnread`),
+  а у родителя показывает сводку `↳ ⊗ N` по всем подтредам в `error`. Какие
+  подтреды скрываются за счётчиком, по списку было не понять.
+- **Опирается на:** слот `app.slots.experimental_threadRowMetadata` (SDK
+  0.6.157) и поля `PluginSidebarThread`: `parentThreadId`, `status`,
+  `isArchived`. Неизвестный статус или отсутствие полей — значка нет, список
+  работает как раньше. Тест `logic.test.ts`. Работает и в списке Machine Tabs
+  (он использует тот же бандл Thread list). Если BB начнёт сам показывать
+  ошибку у подтреда — плагин удалить.
+- **Ограничения:** значок держится, пока подтред в `error`: прочтение его не
+  снимает, снимает новый ход или архивация (так же считает и сводка у родителя).
+- **Установка/обновление:** `cd plugins/subthread-error-mark && npm ci &&
+  npm test && npm run typecheck && bb plugin build . && bb plugin install .
+  --yes` на сервере BB; запись есть в `config/plugins.json`, восстановление —
+  `python3 scripts/restore.py --plugins --apply`. Удаление:
+  `bb plugin remove subthread-error-mark`.
+- **Проверка:** открыть подтред в `error` — в его строке красный ⊗ с подсказкой
+  «Подтред завершился с ошибкой» (`[data-subthread-error-mark]` в DOM).
+- **Для установивших:** компонент набора `config/bundle.json` (`local`),
+  приходит шагом `bundle` ближайшего релиза.
+
 ## Subthread Autocollapse 0.1.0
 
 Собственный плагин `plugins/subthread-autocollapse/` (серверный, без UI).

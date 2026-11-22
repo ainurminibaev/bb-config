@@ -504,6 +504,13 @@
     "source": "path:plugins/subthread-autocollapse"
   },
   {
+    "id": "subthread-error-mark",
+    "version": "0.1.0",
+    "enabled": true,
+    "name": "Subthread Error Mark",
+    "source": "path:plugins/subthread-error-mark"
+  },
+  {
     "id": "thread-account-usage",
     "version": "0.1.1",
     "enabled": true,
