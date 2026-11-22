@@ -5,7 +5,7 @@
   "where": "server",
   "kind": "command",
   "after": [
-    "plugins-git-source"
+    "v1.13.0/plugins-git-source"
   ],
   "applies": [
     "{python}",
