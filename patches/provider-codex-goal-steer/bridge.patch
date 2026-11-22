@@ -1,0 +1,234 @@
+diff --git a/plugins/provider-codex/src/bridge/bridge.goal-controls.test.ts b/plugins/provider-codex/src/bridge/bridge.goal-controls.test.ts
+index 424d7aa12..1f1c6e99f 100644
+--- a/plugins/provider-codex/src/bridge/bridge.goal-controls.test.ts
++++ b/plugins/provider-codex/src/bridge/bridge.goal-controls.test.ts
+@@ -270,3 +270,164 @@ it("sends other /goal text to Codex as a normal prompt", async () => {
+     ),
+   ).toBe(false);
+ });
++
++async function startRunningTurn(providerThreadId: string) {
++  const started = await sendUserTurn(
++    providerThreadId,
++    2,
++    "creq_garunning2",
++    "/wait-for-interrupt",
++  );
++  expect(started.error).toBeUndefined();
++  await vi.waitFor(() =>
++    expect(acceptedTurnIdFor("creq_garunning2")).toBe("turn-fx-1"),
++  );
++}
++
++function steerRunningTurn(
++  providerThreadId: string,
++  requestId: number,
++  clientRequestId: string,
++  text: string,
++) {
++  harness.sendRequest(requestId, "turn/steer", {
++    threadId: THREAD_ID,
++    providerThreadId,
++    expectedTurnId: "turn-fx-1",
++    clientRequestId,
++    input: [{ type: "text", text, mentions: [] }],
++    options: FULL_ACCESS_SESSION_OPTIONS,
++  });
++  return harness.waitForResponse(requestId);
++}
++
++function requestsOf(method: string) {
++  return recordedRequests().filter((request) => request.method === method);
++}
++
++for (const status of ["blocked", "paused"]) {
++  it(`resumes a ${status} goal for /goal resume sent while a turn is running`, async () => {
++    const providerThreadId = await startThread(status, {
++      goalResumeStartsNoTurn: true,
++    });
++    await startRunningTurn(providerThreadId);
++
++    const response = await steerRunningTurn(
++      providerThreadId,
++      3,
++      "creq_gasteer22z",
++      "/goal resume",
++    );
++
++    expect(response.error).toBeUndefined();
++    expect(goalSetParams()).toEqual([
++      { threadId: providerThreadId, origin: "user", status: "active" },
++    ]);
++    expect(goalStatesSent().at(-1)).toBe("active");
++    expect(acceptedTurnIdFor("creq_gasteer22z")).toBe("turn-fx-1");
++    expect(requestsOf("turn/steer")).toEqual([]);
++    expect(requestsOf("turn/interrupt")).toEqual([]);
++    expect(requestsOf("turn/start")).toHaveLength(1);
++  });
++}
++
++it("accepts a repeated /goal resume during the turn without failing, steering or setting the goal again", async () => {
++  const providerThreadId = await startThread("blocked", {
++    goalResumeStartsNoTurn: true,
++  });
++  await startRunningTurn(providerThreadId);
++  await steerRunningTurn(providerThreadId, 3, "creq_gasteer22z", "/goal resume");
++
++  const repeated = await steerRunningTurn(
++    providerThreadId,
++    4,
++    "creq_gasteer33z",
++    "/goal resume",
++  );
++
++  expect(repeated.error).toBeUndefined();
++  expect(goalSetParams()).toHaveLength(1);
++  expect(acceptedTurnIdFor("creq_gasteer33z")).toBe("turn-fx-1");
++  expect(requestsOf("turn/steer")).toEqual([]);
++  expect(requestsOf("turn/start")).toHaveLength(1);
++});
++
++it("accepts /goal pause and /goal clear during the turn when there is nothing to change", async () => {
++  const providerThreadId = await startThread(null);
++  await startRunningTurn(providerThreadId);
++
++  for (const [requestId, clientRequestId, text] of [
++    [3, "creq_gasteer88z", "/goal pause"],
++    [4, "creq_gasteer99z", "/goal clear"],
++  ] as const) {
++    const response = await steerRunningTurn(
++      providerThreadId,
++      requestId,
++      clientRequestId,
++      text,
++    );
++    expect(response.error).toBeUndefined();
++    expect(acceptedTurnIdFor(clientRequestId)).toBe("turn-fx-1");
++  }
++
++  expect(goalSetParams()).toEqual([]);
++  expect(requestsOf("thread/goal/clear")).toEqual([]);
++  expect(requestsOf("turn/steer")).toEqual([]);
++});
++
++it("pauses an active goal for /goal pause sent while a turn is running", async () => {
++  const providerThreadId = await startThread("active");
++  await startRunningTurn(providerThreadId);
++
++  const response = await steerRunningTurn(
++    providerThreadId,
++    3,
++    "creq_gasteer44z",
++    "/goal pause",
++  );
++
++  expect(response.error).toBeUndefined();
++  expect(goalSetParams()).toEqual([
++    { threadId: providerThreadId, origin: "user", status: "paused" },
++  ]);
++  expect(requestsOf("turn/steer")).toEqual([]);
++  expect(requestsOf("turn/interrupt")).toEqual([]);
++});
++
++it("still steers ordinary messages, including natural-language goal requests, into the running turn", async () => {
++  const providerThreadId = await startThread("blocked", {
++    goalResumeStartsNoTurn: true,
++  });
++  await startRunningTurn(providerThreadId);
++
++  for (const [requestId, clientRequestId, text] of [
++    [3, "creq_gasteer55z", "Возобнови цель"],
++    [4, "creq_gasteer66z", "/goal resume and also fix the tests"],
++    [5, "creq_gasteer77z", "ordinary follow-up"],
++  ] as const) {
++    const response = await steerRunningTurn(
++      providerThreadId,
++      requestId,
++      clientRequestId,
++      text,
++    );
++    expect(response.error).toBeUndefined();
++    expect(acceptedTurnIdFor(clientRequestId)).toBe("turn-fx-1");
++  }
++
++  expect(
++    requestsOf("turn/steer").map((request) =>
++      z
++        .object({ input: z.array(z.object({ text: z.string() })) })
++        .parse(request.params)
++        .input.map((chunk) => chunk.text)
++        .join(""),
++    ),
++  ).toEqual([
++    "Возобнови цель",
++    "/goal resume and also fix the tests",
++    "ordinary follow-up",
++  ]);
++  expect(goalSetParams()).toEqual([]);
++  expect(goalStatesSent()).toEqual(["blocked"]);
++});
+diff --git a/plugins/provider-codex/src/bridge/bridge.ts b/plugins/provider-codex/src/bridge/bridge.ts
+index 81357a36b..ae1e7c659 100644
+--- a/plugins/provider-codex/src/bridge/bridge.ts
++++ b/plugins/provider-codex/src/bridge/bridge.ts
+@@ -2148,6 +2148,28 @@ async function handleTurnSteer(
+     return;
+   }
+   try {
++    const goalCommand = parseCodexGoalCommand(params.input);
++    if (goalCommand !== null) {
++      if (!session.openCodexTurnIds.has(params.expectedTurnId)) {
++        await handleTurnStart(id, params);
++        return;
++      }
++      await runCodexGoalCommand(
++        session.connection,
++        session.codexThreadId,
++        goalCommand,
++        "ignore",
++      );
++      sendThreadDeltas(session, [
++        {
++          kind: "input.accepted",
++          clientRequestId: params.clientRequestId,
++          providerTurnId: params.expectedTurnId,
++        },
++      ]);
++      sendResult(id, { threadId: params.threadId });
++      return;
++    }
+     const decoded = decodeCodexOptions(params.options);
+     const permissionSettings = toCodexPermissionSettings({
+       additionalWorkspaceWriteRoots: decoded.additionalWorkspaceWriteRoots,
+@@ -2334,6 +2356,7 @@ async function runCodexGoalCommand(
+   connection: CodexAppServerConnection,
+   codexThreadId: string,
+   command: CodexGoalCommand,
++  whenAlreadyInState: "reject" | "ignore" = "reject",
+ ): Promise<void> {
+   const { goal } = await connection.request({
+     method: "thread/goal/get",
+@@ -2344,6 +2367,7 @@ async function runCodexGoalCommand(
+     timeoutMs: CHILD_REQUEST_TIMEOUT_MS,
+   });
+   if (goal === null || goal === undefined) {
++    if (whenAlreadyInState === "ignore") return;
+     throw new Error(`This thread has no Goal to ${command}.`);
+   }
+   switch (command) {
+@@ -2357,6 +2381,7 @@ async function runCodexGoalCommand(
+       return;
+     case "pause":
+       if (goal.status !== "active") {
++        if (whenAlreadyInState === "ignore") return;
+         throw new Error(
+           "The Goal is not active, so there is nothing to pause.",
+         );
+@@ -2365,6 +2390,7 @@ async function runCodexGoalCommand(
+       return;
+     case "resume":
+       if (goal.status === "active" || goal.status === "complete") {
++        if (whenAlreadyInState === "ignore") return;
+         throw new Error(`The Goal is already ${goal.status}.`);
+       }
+       await setCodexGoalStatus(connection, codexThreadId, "active");

@@ -12,25 +12,9 @@ export function chatOpenKey(target: Target): string {
   return `kodaforge:side:${target.kind}:${target.id}:open`;
 }
 
-export type ThreadLike = {
-  environmentId: string | null;
-  updatedAt?: number | null;
-  archivedAt?: unknown;
-  deletedAt?: unknown;
-};
-
-/**
- * A project can live on several machines, and KodaForge's own project scope
- * always opens the default one. Follow the work instead: open the workspace of
- * the project's most recently updated live thread. Without threads, fall back
- * to the project's default checkout.
- */
-export function projectTarget(projectId: string, threads: readonly ThreadLike[]): Target {
-  const live = threads
-    .filter(thread => thread.environmentId && !thread.archivedAt && !thread.deletedAt)
-    .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
-  const environmentId = live[0]?.environmentId;
-  return environmentId ? { kind: 'environment', id: environmentId } : { kind: 'project', id: projectId };
+/** KodaForge resolves the project scope on its default source machine. */
+export function projectTarget(projectId: string): Target {
+  return { kind: 'project', id: projectId };
 }
 
 /** KodaForge keeps editor settings as one JSON object under this localStorage key. */

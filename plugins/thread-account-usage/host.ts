@@ -1,5 +1,8 @@
 import { experimental_defineHostEntry } from '@get-bb/plugin-sdk/host';
 import { spawn } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { hostContract } from './host-contract';
 
@@ -41,7 +44,19 @@ function readCodexResets(): Promise<{ email: string | null; count: number | null
         }
       } catch { /* Ignore non-JSON CLI log lines. */ }
     });
-    send({id:1,method:'initialize',params:{clientInfo:{name:'bb-thread-account-usage',version:'0.1.0'},capabilities:{experimentalApi:true,requestAttestation:false}}});
+    send({id:1,method:'initialize',params:{clientInfo:{name:'bb-thread-account-usage',version:'0.1.1'},capabilities:{experimentalApi:true,requestAttestation:false}}});
   });
 }
-export default experimental_defineHostEntry({ contract: hostContract, handlers: { codexResets: readCodexResets } });
+// Plan fields of the profile Claude Code refreshes in .claude.json (same path BB uses).
+async function readClaudeProfile(): Promise<{ email: string | null; organizationType: string | null; rateLimitTier: string | null }> {
+  const empty = { email: null, organizationType: null, rateLimitTier: null };
+  try {
+    const file = join(process.env.CLAUDE_CONFIG_DIR || homedir(), '.claude.json');
+    const account = JSON.parse(await readFile(file, 'utf8'))?.oauthAccount;
+    const text = (v: unknown) => typeof v === 'string' && v.length > 0 && v.length < 200 ? v : null;
+    if (!account || typeof account !== 'object') return empty;
+    return { email: text(account.emailAddress), organizationType: text(account.organizationType),
+      rateLimitTier: text(account.organizationRateLimitTier) ?? text(account.userRateLimitTier) };
+  } catch { return empty; }
+}
+export default experimental_defineHostEntry({ contract: hostContract, handlers: { codexResets: readCodexResets, claudeProfile: readClaudeProfile } });

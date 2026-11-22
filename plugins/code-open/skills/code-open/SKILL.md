@@ -24,10 +24,8 @@ Targets:
 
 - thread button: `thread/<threadId>`, so the editor opens that thread's
   workspace on its machine and the right-hand chat is that thread;
-- project button: the workspace of the project's most recently updated live
-  thread (`environment/<id>`), so a project that lives on several machines
-  opens where work actually happens. Without threads it falls back to
-  `project/<id>`, which KodaForge resolves to the project's default checkout.
+- project button: `project/<projectId>`. KodaForge resolves the default
+  source's checkout and machine (first source if none is marked default).
 
 While the editor is open the plugin collapses BB's thread list (windows 900 px
 and wider) and expands it again when the route leaves KodaForge. It only

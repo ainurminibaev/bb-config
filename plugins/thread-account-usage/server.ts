@@ -1,6 +1,6 @@
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
 import { rpcContract, type Account, type Snapshot } from './contract';
-import { classifyWindow, dedupeAccounts, riskyOverride } from './logic';
+import { claudeProfilePlan, classifyWindow, dedupeAccounts, riskyOverride } from './logic';
 import { hostContract } from './host-contract';
 const providers = [{ id: 'claude-code', name: 'Claude Code' }, { id: 'codex', name: 'Codex' }];
 const record = (v: unknown): Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
@@ -19,9 +19,10 @@ export default function plugin(bb: BbPluginApi) {
     if (running) return running;
     const job = (async () => {
       try {
-        const [raw, resets] = await Promise.all([
+        const [raw, resets, profile] = await Promise.all([
           bb.sdk.system.usageLimits({ hostId, refresh: true, signal: AbortSignal.timeout(20_000) }),
           hostClient.call('codexResets', null, { hostId, signal: AbortSignal.timeout(15_000) }).catch(() => ({ email: null, count: null })),
+          hostClient.call('claudeProfile', null, { hostId, signal: AbortSignal.timeout(5_000) }).catch(() => null),
         ]);
         const at = new Date().toISOString();
         const accounts = providers.map(provider => {
@@ -36,7 +37,8 @@ export default function plugin(bb: BbPluginApi) {
           return {
             key: `${provider.id}:${hostId}`, providerId: provider.id, providerName: provider.name,
             hostIds: [hostId], hostNames: [hostName], email: string(usage.accountEmail) ?? (!ok ? old?.email ?? null : null),
-            plan: string(usage.planLabel), status: ok ? 'ok' : windows.length ? 'stale' : 'unavailable',
+            plan: (provider.id === 'claude-code' && profile?.email && profile.email.toLowerCase() === string(usage.accountEmail)?.toLowerCase()
+              ? claudeProfilePlan(profile.organizationType, profile.rateLimitTier) : null) ?? string(usage.planLabel), status: ok ? 'ok' : windows.length ? 'stale' : 'unavailable',
             message: ok ? null : string(usage.message) ?? `Нет данных: ${String(usage.status ?? 'unknown')}`,
             fetchedAt: ok ? at : old?.fetchedAt ?? null, windows,
             resetCount: provider.id === 'codex' && resets.email?.toLowerCase() === string(usage.accountEmail)?.toLowerCase() ? resets.count : null,

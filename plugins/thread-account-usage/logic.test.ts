@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { accountExhausted, appliesToModel, classifyWindow, dedupeAccounts, riskyOverride, planLabel } from './logic.ts';
+import { accountExhausted, appliesToModel, classifyWindow, dedupeAccounts, riskyOverride, planLabel, claudeProfilePlan } from './logic.ts';
 import type { Account, QuotaWindow } from './contract.ts';
 const window = (label: string, kind: QuotaWindow['kind']): QuotaWindow => ({ label, kind, usedPercent: 100, resetsAt: null });
 test('model weekly quotas remain distinct from the account weekly quota', () => {
@@ -55,4 +55,17 @@ test('plan label with a static monthly price', () => {
   assert.equal(planLabel('codex', 'Plus'), 'Plus $20');
   assert.equal(planLabel('codex', 'Enterprise'), 'Enterprise');
   assert.equal(planLabel('codex', null), '');
+  assert.equal(planLabel('codex', 'Prolite'), 'Pro Lite $100');
+  assert.equal(planLabel('codex', 'Promax'), 'Pro Max $500');
+  assert.equal(planLabel('codex', 'Go'), 'Go $8');
+  assert.equal(planLabel('claude-code', 'Max 5x'), 'Max 5x $100');
+  assert.equal(planLabel('claude-code', 'Max'), 'Max');
+});
+
+test('Claude plan from the account profile', () => {
+  assert.equal(claudeProfilePlan('claude_max', 'default_claude_max_20x'), 'Max 20x');
+  assert.equal(claudeProfilePlan('claude_max', 'default_claude_max_5x'), 'Max 5x');
+  assert.equal(claudeProfilePlan('claude_max', null), 'Max');
+  assert.equal(claudeProfilePlan('claude_pro', 'default_claude_ai'), 'Pro');
+  assert.equal(claudeProfilePlan(null, null), null);
 });

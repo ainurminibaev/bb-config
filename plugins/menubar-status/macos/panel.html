@@ -305,17 +305,26 @@ function compactReset(iso) {
   if (m < 1440) return `↻${Math.floor(m / 60)}ч${m % 60 ? `\u202f${m % 60}м` : ""}`;
   return `↻${Math.floor(m / 1440)}д\u202f${Math.floor((m % 1440) / 60)}ч`;
 }
-/* Plan prices are a static table (USD per month), shown as a hint only. */
+/* Plan prices are a static table (USD per month), shown as a hint only.
+   Same table as planPrice in thread-account-usage/logic.ts. */
+function planKey(plan) { return String(plan || "").toLowerCase().replace(/[\s_-]/g, ""); }
+function planName(provider, plan) {
+  if (provider === "codex") return { prolite: "Pro Lite", promax: "Pro Max" }[planKey(plan)] || plan;
+  return plan;
+}
 function planPrice(provider, plan) {
-  const p = String(plan || "").toLowerCase();
+  const p = planKey(plan);
   if (!p) return "";
   if (/free/.test(p)) return "$0";
   if (provider === "claude-code") {
-    if (/max/.test(p)) return /20/.test(p) ? "$200" : /5/.test(p) ? "$100" : "";
-    if (/pro/.test(p)) return "$20";
+    if (/max/.test(p)) return /20x/.test(p) ? "$200" : /5x/.test(p) ? "$100" : "";
+    if (p === "pro") return "$20";
   } else if (provider === "codex") {
-    if (/pro/.test(p)) return "$200";
-    if (/plus/.test(p)) return "$20";
+    if (p === "prolite") return "$100";
+    if (p === "promax") return "$500";
+    if (p === "pro") return "$200";
+    if (p === "plus") return "$20";
+    if (p === "go") return "$8";
   }
   return "";
 }
@@ -351,9 +360,9 @@ function renderUsage(data) {
           `<b data-level="${level}" title="${esc(tip)}">${p}%</b><small>${compactReset(w.resetsAt)}</small>`;
       }).join(""));
     const price = planPrice(a.provider, a.plan);
-    const plan = a.plan ? `<span class="plan">${esc(a.plan)}${price ? ` ${price}` : ""}</span>` : "";
+    const plan = a.plan ? `<span class="plan">${esc(planName(a.provider, a.plan))}${price ? ` ${price}` : ""}</span>` : "";
     const resets = a.resets > 0 ? `<sup title="Доступно сбросов лимита: ${a.resets}">+${a.resets}</sup>` : "";
-    const tip = [name, a.plan && `${a.plan}${price ? ` (${price}/мес)` : ""}`, hosts.join(", "),
+    const tip = [name, a.plan && `${planName(a.provider, a.plan)}${price ? ` (${price}/мес)` : ""}`, hosts.join(", "),
       a.resets > 0 && `сбросов лимита: ${a.resets}`].filter(Boolean).join(" · ");
     return `<div class="acct" title="${esc(tip)}">
       <div class="who"><span class="g">${glyph}${resets}</span><span>${esc(where)}</span>${plan}</div><div class="wins">${rows}</div></div>`;

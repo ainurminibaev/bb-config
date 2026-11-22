@@ -1,0 +1,11 @@
+{
+  "id": "plugin-codex-goal-queue",
+  "title": "Codex Goal Queue 0.1.0: /goal resume в работающем треде Codex ждёт конца хода",
+  "component": "codex-goal-queue",
+  "where": "server",
+  "kind": "local-plugin",
+  "plugin": "codex-goal-queue",
+  "introduces": true,
+  "rerun": "Безопасно: при совпадении версии шаг только проверяется.",
+  "rollback": "bb plugin remove codex-goal-queue. Сообщения, которые плагин держал в очереди, BB после этого отправляет сам; настроек и данных у плагина нет."
+}

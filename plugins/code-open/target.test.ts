@@ -9,16 +9,11 @@ describe('forgePath', () => {
 });
 
 describe('projectTarget', () => {
-  it('opens the workspace of the most recently updated live thread', () => {
-    expect(projectTarget('proj', [
-      { environmentId: 'env_old', updatedAt: 1 },
-      { environmentId: 'env_new', updatedAt: 5 },
-      { environmentId: 'env_archived', updatedAt: 9, archivedAt: 9 },
-      { environmentId: null, updatedAt: 10 },
-    ])).toEqual({ kind: 'environment', id: 'env_new' });
-  });
-  it('falls back to the project checkout without threads', () => {
-    expect(projectTarget('proj', [])).toEqual({ kind: 'project', id: 'proj' });
+  it('links directly to the project and opens chat for that same scope', () => {
+    const target = projectTarget('project with spaces');
+    expect(forgePath(target)).toBe('/plugins/kodaforge/forge/project/project%20with%20spaces');
+    expect(chatOpenKey(target)).toBe('kodaforge:side:project:project with spaces:open');
+    expect(chatOpenKey({ kind: 'thread', id: 'thr_1' })).toBe('kodaforge:side:thread:thr_1:open');
   });
 });
 

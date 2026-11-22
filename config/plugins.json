@@ -135,7 +135,7 @@
   },
   {
     "id": "code-open",
-    "version": "0.4.0",
+    "version": "0.4.1",
     "enabled": true,
     "name": "Code Open",
     "source": "path:plugins/code-open"
@@ -146,6 +146,13 @@
     "enabled": true,
     "name": "Codex Delegation Watch",
     "source": "path:plugins/codex-delegation-watch"
+  },
+  {
+    "id": "codex-goal-queue",
+    "version": "0.1.0",
+    "enabled": true,
+    "name": "Codex Goal Queue",
+    "source": "path:plugins/codex-goal-queue"
   },
   {
     "id": "codex-project-trust",
@@ -184,6 +191,13 @@
     "source": "builtin:connect"
   },
   {
+    "id": "context-mode-rollout",
+    "version": "0.4.0",
+    "enabled": true,
+    "name": "Context Mode Rollout",
+    "source": "path:plugins/context-mode-rollout"
+  },
+  {
     "id": "custom-instructions",
     "version": "0.1.0",
     "enabled": true,
@@ -196,13 +210,6 @@
     "enabled": true,
     "name": "Drafts",
     "source": "builtin:drafts"
-  },
-  {
-    "id": "context-mode-rollout",
-    "version": "0.4.0",
-    "enabled": true,
-    "name": "Context Mode Rollout",
-    "source": "path:plugins/context-mode-rollout"
   },
   {
     "id": "environment-git-worktree",
@@ -323,14 +330,14 @@
   },
   {
     "id": "machine-tabs",
-    "version": "0.2.6",
+    "version": "0.2.7",
     "enabled": true,
     "name": "Machine Tabs",
     "source": "path:plugins/machine-tabs"
   },
   {
     "id": "menubar-status",
-    "version": "0.3.1",
+    "version": "0.3.2",
     "enabled": true,
     "name": "Menubar Status",
     "source": "path:plugins/menubar-status"
@@ -498,7 +505,7 @@
   },
   {
     "id": "thread-account-usage",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "enabled": true,
     "name": "Thread Account Usage",
     "source": "path:plugins/thread-account-usage"

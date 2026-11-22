@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+case "${BB_ORIGIN_PROBE_ID:?}" in *[!a-zA-Z0-9_-]*) exit 64;; esac
+dir=$(dirname "$0")
+export BB_ORIGIN_PROBE_RECEIPT="${BB_THREAD_STORAGE:?}/quota-probe-${BB_ORIGIN_PROBE_ID}"
+if [ -f "$BB_ORIGIN_PROBE_RECEIPT.return" ]; then
+  exec "$dir/probe-return.mjs" "$@"
+fi
+if [ -f "$BB_ORIGIN_PROBE_RECEIPT" ]; then
+  exec "$dir/claude-origin-relay.mjs" "$@"
+fi
+case "$BB_ORIGIN_PROBE_ID" in live-once-*) exec node "$dir/live-quota.mjs" "$@";; esac
+exec "$dir/../tests/quota-endpoint.mjs" "$@"

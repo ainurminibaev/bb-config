@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { definePluginApp, useSdk, useComposer, experimental_Icon as Icon, experimental_THREAD_ACTION_GROUPS as GROUPS } from '@get-bb/plugin-sdk/app';
-import { toast } from 'sonner';
+import { definePluginApp, useComposer, experimental_Icon as Icon, experimental_THREAD_ACTION_GROUPS as GROUPS } from '@get-bb/plugin-sdk/app';
 import { FORGE_PREFIX, FORGE_SETTINGS_KEY, RESTORE_FLAG, chatOpenKey, forgePath, projectTarget, withoutOverrides,
-  type Target, type ThreadLike } from './target';
+  type Target } from './target';
 
 /**
  * Opens KodaForge's own page at a workspace. No editor logic lives here: the
@@ -121,25 +120,16 @@ const CSS = `
 .code-open-button { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; border:0; border-radius:6px; background:transparent; color:var(--muted-foreground); cursor:pointer; }
 .code-open-button:hover { background:var(--state-hover); color:var(--foreground); }
 .code-open-button:focus-visible { outline:2px solid var(--ring); outline-offset:-2px; }
-.code-open-button:disabled { opacity:.4; cursor:wait; }
 [data-code-open="header"] .code-open-button { width:28px; height:28px; }
 `;
 
 function ProjectCodeButton({ id }: { id: string }) {
-  const sdk = useSdk();
-  const [busy, setBusy] = useState(false);
   const label = 'Открыть код проекта';
-  return <button type="button" className="code-open-button" title={label} aria-label={label} disabled={busy}
+  return <button type="button" className="code-open-button" title={label} aria-label={label}
     onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
     onClick={event => {
       event.stopPropagation(); event.preventDefault();
-      setBusy(true);
-      void (async () => {
-        const result: unknown = await sdk.threads.list({ projectId: id, limit: 200 });
-        const threads = (Array.isArray(result) ? result : (result as { threads?: unknown })?.threads ?? []) as ThreadLike[];
-        openCode(projectTarget(id, threads));
-      })().catch(error => toast.error(error instanceof Error ? error.message : String(error)))
-        .finally(() => setBusy(false));
+      openCode(projectTarget(id));
     }}><Icon name="Code" className="size-4" /></button>;
 }
 

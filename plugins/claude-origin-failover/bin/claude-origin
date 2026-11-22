@@ -1,0 +1,4 @@
+#!/bin/sh
+# Marker lives only in the CLI process and its descendants.
+export BB_ORIGIN_PROBE=origin-shim-v1
+exec claude "$@"
