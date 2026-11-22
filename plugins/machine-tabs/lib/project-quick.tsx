@@ -75,18 +75,19 @@ export const PROJECT_QUICK_CSS = `
 .mt-pq-trow:hover { background: var(--state-hover); }
 .mt-pq-trow > .mt-pq-thread:hover, .mt-pq-trow > .mt-pq-thread:focus-visible { background: transparent; }
 .mt-pq-fold {
-  display: flex; height: 22px; width: 18px; flex-shrink: 0; align-items: center; justify-content: center;
+  /* One width for every row (with or without subthreads, with or without a state), so times line up. */
+  display: flex; height: 22px; width: 40px; flex-shrink: 0; align-items: center; justify-content: flex-end; padding-right: 2px;
   color: var(--muted-foreground); background: transparent; border: 0; border-radius: 4px; cursor: pointer;
 }
 button.mt-pq-fold:hover { color: var(--popover-foreground); background: var(--state-active); }
 /* The fold button carries what its subthreads do: the top state and how many are in it. */
-.mt-pq-fold[data-inside] { width: auto; min-width: 18px; gap: 1px; padding: 0 3px; font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.mt-pq-fold[data-inside] { gap: 1px; font-size: 10.5px; font-variant-numeric: tabular-nums; }
 .mt-pq-count[data-nested] { opacity: .75; }
 .mt-pq-count[data-nested]::before { content: "↳"; margin-right: 1px; }
 .mt-pq-thread > .mt-pq-meta[data-running] { color: var(--popover-foreground); }
 .mt-pq-thread[data-unread] > .mt-pq-title { font-weight: 600; }
 .mt-pq-thread > .mt-pq-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mt-pq-thread > .mt-pq-meta { flex-shrink: 0; font-size: 10.5px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.mt-pq-thread > .mt-pq-meta { flex-shrink: 0; min-width: 44px; text-align: right; font-size: 10.5px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* Status marks as bb's sidebar draws them: same icons, one 16px cell so titles line up. */
 .mt-pq-st { display: inline-flex; width: 16px; height: 16px; flex-shrink: 0; align-items: center; justify-content: center; color: var(--muted-foreground); }
 .mt-pq-st[data-small] { width: 13px; height: 13px; }
