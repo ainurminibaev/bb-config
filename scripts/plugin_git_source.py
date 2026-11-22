@@ -63,7 +63,7 @@ def settings(plugin_id):
     if not config.get('ok'):
         raise MigrationError('BB did not return the settings schema')
     for key, field in config['schema'].items():
-        if field.get('secret') or field['type'] not in {'boolean', 'number', 'string'}:
+        if field.get('secret') or field['type'] not in {'boolean', 'number', 'string', 'select'}:
             raise MigrationError(f'Unsupported setting for migration: {key}')
     values = config['values']
     if values.keys() - config['schema'].keys() or any(type(value) not in (bool, int, float, str)
@@ -143,6 +143,22 @@ def verify_running(row):
         raise MigrationError(f'Plugin is {status}; expected running')
 
 
+def verify_present(row):
+    # A plugin with a required setting is "needs-configuration" until its settings are back.
+    if not row:
+        raise MigrationError('Plugin is missing after installation')
+
+
+def wait_running(plugin_id, seconds=60):
+    deadline = time.monotonic() + seconds
+    row = plugin(plugin_id)
+    while (not row or row['status'] != 'running') and time.monotonic() < deadline:
+        time.sleep(1)
+        row = plugin(plugin_id)
+    verify_running(row)
+    return row
+
+
 def restore_settings(plugin_id, expected):
     current = settings(plugin_id)
     for key in current.keys() - expected.keys():
@@ -153,7 +169,7 @@ def restore_settings(plugin_id, expected):
             bb('plugin', 'config', plugin_id, 'set', key, encoded)
     if settings(plugin_id) != expected:
         raise MigrationError('Settings verification failed')
-    verify_running(plugin(plugin_id))
+    wait_running(plugin_id)
 
 
 def wait_for_install():
@@ -164,6 +180,55 @@ def wait_for_install():
         if time.monotonic() >= deadline:
             raise MigrationError('BB still has a queued or running install; retry later')
         time.sleep(1)
+
+
+def newest_tag(plugin_id, version_range):
+    """Highest `<id>/vX.Y.Z` tag inside a caret range `^X.Y.0`, as BB would pick it."""
+    major, minor = (int(n) for n in re.fullmatch(r'\^(\d+)\.(\d+)\.0', version_range).groups())
+    url = REPOSITORY.removeprefix('git:')
+    out = subprocess.run(['git', 'ls-remote', '--tags', url, f'refs/tags/{plugin_id}/v*'],
+                         capture_output=True, text=True, timeout=60)
+    if out.returncode != 0:
+        raise MigrationError(f'Cannot list tags: {out.stderr.strip()[:200]}')
+    best = None
+    for line in out.stdout.splitlines():
+        m = re.search(rf'refs/tags/{re.escape(plugin_id)}/v(\d+)\.(\d+)\.(\d+)$', line)
+        if not m:
+            continue
+        v = tuple(int(n) for n in m.groups())
+        ok = v[0] == major and (v[1] > minor or v[1] == minor) if major > 0 else (v[0] == 0 and v[1] == minor)
+        if ok and (best is None or v > best):
+            best = v
+    if best is None:
+        raise MigrationError(f'No tag {plugin_id}/v* matches {version_range}')
+    return f'{plugin_id}/v{best[0]}.{best[1]}.{best[2]}'
+
+
+def prebuild(plugin_id, version_range):
+    """Build the tagged plugin with production dependencies only, as a Git install does,
+    before the running copy is removed: a plugin that would not build stays untouched."""
+    tag = newest_tag(plugin_id, version_range)
+    url = REPOSITORY.removeprefix('git:')
+    with tempfile.TemporaryDirectory() as tmp:
+        steps = [
+            ['git', 'clone', '-q', '--depth', '1', '--branch', tag, '--filter=blob:none', '--sparse', url, tmp],
+            ['git', '-C', tmp, 'sparse-checkout', 'set', f'plugins/{plugin_id}'],
+        ]
+        for cmd in steps:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if r.returncode != 0:
+                raise MigrationError(f'Cannot fetch {tag}: {r.stderr.strip()[:200]}')
+        root = Path(tmp) / 'plugins' / plugin_id
+        if (root / 'package-lock.json').exists():
+            r = subprocess.run(['npm', 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'],
+                               cwd=root, capture_output=True, text=True, timeout=600)
+            if r.returncode != 0:
+                raise MigrationError(f'{tag}: npm ci failed: {r.stderr.strip()[-200:]}')
+        r = subprocess.run(['bb', 'plugin', 'build', '.'], cwd=root, capture_output=True, text=True, timeout=600)
+        if r.returncode != 0:
+            err = next((l for l in (r.stdout + r.stderr).splitlines() if 'ERROR' in l), r.stderr.strip()[-200:])
+            raise NotApplicable(f'{tag} does not build from Git with production dependencies: {err.strip()[:200]}')
+    print(f'{plugin_id}: {tag} builds with production dependencies', flush=True)
 
 
 def install(plugin_id, desired, previous, allow_remove, *options):
@@ -199,7 +264,7 @@ def rollback(plugin_id, journal, record, allow_remove):
     if not row or row['source'] != record['path']:
         install(plugin_id, record['path'], row['source'] if row else None, allow_remove)
         row = plugin(plugin_id)
-    verify_running(row)
+    verify_present(row)
     if row['source'] != record['path'] or row['version'] != record['version']:
         raise MigrationError('The original path/version was not restored')
     restore_settings(plugin_id, record['settings'])
@@ -218,7 +283,6 @@ def apply(plugin_id, journal, record, allow_remove):
     if row and is_git(plugin_id, row['source'], record['target'] if record else None):
         if record and record['phase'] == 'applying':
             try:
-                verify_running(row)
                 restore_settings(plugin_id, record['settings'])
             except MigrationError:
                 rollback(plugin_id, journal, record, allow_remove)
@@ -245,12 +309,13 @@ def apply(plugin_id, journal, record, allow_remove):
     if new_record:
         save(journal, record)
         print(f'{plugin_id}: saved the original source and settings in {journal}', flush=True)
+    prebuild(plugin_id, record['target'].rsplit('@', 1)[1])
 
     try:
         install(plugin_id, record['target'], record['path'], allow_remove,
                 '--subdirectory', f'plugins/{plugin_id}', '--tag-prefix', f'{plugin_id}/')
         row = plugin(plugin_id)
-        verify_running(row)
+        verify_present(row)
         if not is_git(plugin_id, row['source'], record['target']):
             raise MigrationError('BB did not record the expected Git source, range and tag prefix')
         restore_settings(plugin_id, record['settings'])
