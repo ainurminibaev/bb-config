@@ -18,4 +18,6 @@ npm ci && npm run typecheck && npm test
 bb plugin build && bb plugin install . --yes
 ```
 
-Settings: `autoInstall` (default true), `version` (default `2.2.0`).
+Settings: `autoInstall` (default true), `version` (default `latest`: newest stable npm
+release at least `minAgeDays` old, default 2; or a pinned `X.Y.Z`), `minAgeDays`.
+A new target version rolls out to connected machines at once.

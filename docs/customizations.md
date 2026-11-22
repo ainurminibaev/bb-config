@@ -48,12 +48,13 @@ python3 scripts/codex_defaults.py --check --verify
 
 Context Mode подключается отдельно в пользовательском профиле каждой машины.
 Источник: [mksglu/context-mode](https://github.com/mksglu/context-mode), npm-пакет
-`context-mode`. Проверенная версия — `2.2.0`; настроены Codex CLI и Claude Code.
+`context-mode`. Версию выбирает плагин `context-mode-rollout` (по умолчанию
+актуальная с npm после выдержки; 22.11.2026 — `2.2.1`); настроены Codex CLI и Claude Code.
 Инвентаризация машин и результаты проверки хранятся только в `.local/docs/`.
 Это расширение CLI; его раскатку на машины выполняет собственный плагин BB
 `context-mode-rollout` (ниже).
 
-### Автоустановка: плагин Context Mode Rollout 0.1.0
+### Автоустановка и обновление: плагин Context Mode Rollout 0.2.0
 
 Собственный плагин `plugins/context-mode-rollout/` (дом — bb-config). Зачем
 плагин, а не шаг `restore.py`: восстановление запускают вручную на одной
@@ -66,16 +67,25 @@ Context Mode подключается отдельно в пользовател
   раза в 30 минут, остальные — раз в сутки, после ошибки — через час.
 - Host-часть: PATH из login shell (+ `~/.local/bin`, `~/.npm-global/bin`, на
   macOS Homebrew), ищет `claude` и `codex`; нет обоих — `no-cli`. Пакет
-  отсутствует или старее закреплённого — `npm install -g context-mode@<версия>`
+  отсутствует или старее целевой версии — `npm install -g context-mode@<версия>`
   без sudo, новее — не откатывает. Затем `setup --dry-run`; если есть изменения
   или агент не PASS — `setup --yes --agents <найденные>` и `doctor`. MCP пишет
   сам setup context-mode только в пользовательский профиль (Claude Code — плагин
   с Scope: user, Codex — `~/.codex/config.toml`), не в local scope.
-- Опирается на JSON `context-mode setup|doctor --json` версии 2.2.0 (поля
+- Целевая версия: настройка `version` = `latest` (по умолчанию) — сервер раз в
+  час читает `https://registry.npmjs.org/context-mode` и берёт самую новую
+  стабильную версию не выше тега `latest`, опубликованную не меньше
+  `minAgeDays` дней назад (по умолчанию 2: сломанный релиз обычно успевают
+  отозвать или исправить). Пререлизы (`next`) не берутся. Новая целевая версия
+  раскатывается на подключённые машины сразу, без ожидания суточной проверки.
+  npm недоступен — последняя известная цель, иначе 2.2.0. `version` = `X.Y.Z`
+  закрепляет версию.
+- Опирается на JSON `context-mode setup|doctor --json` версий 2.2.x (поля
   `agents[].id/status/changes`); разбор терпим к лишним полям, при непонятном
   выводе setup выполняется заново, итог проверяет `doctor`. Тест —
   `logic.test.ts`.
-- Настройки: `autoInstall` (по умолчанию true), `version` (2.2.0). Команды:
+- Настройки: `autoInstall` (по умолчанию true), `version` (`latest`),
+  `minAgeDays` (2). Команды:
   `bb context-mode-rollout status | check [--machine] [--verify] | apply [--machine]`.
   Навык: `plugins/context-mode-rollout/skills/`.
 - Не проверено: Windows и машина с npm, у которого глобальный каталог не
@@ -96,6 +106,8 @@ bb context-mode-rollout check      # сухой прогон на всех по�
 Проверено 22.11.2026: Tru и UA — `ok` (оба CLI PASS); «новая машина» —
 host-часть в изолированном HOME и npm-префиксе: сухой прогон `planned`,
 установка `installed` за 25 с с doctor PASS для обоих CLI, повтор — `ok`.
+0.2.0: сухой прогон показал цель 2.2.1 на Tru и UA, `apply` обновил обе машины
+2.2.0 → 2.2.1, doctor PASS для обоих CLI.
 
 Восстановление выполняется под тем пользователем, от которого BB запускает CLI,
 на каждой нужной машине, с Node.js, поддерживающим `node:sqlite`:

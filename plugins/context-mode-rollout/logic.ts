@@ -54,6 +54,20 @@ export function agentsNeedingSetup(wanted: readonly string[], dryRun: AgentState
   });
 }
 
+const STABLE_RE = /^\d+\.\d+\.\d+$/;
+
+/**
+ * Target for "latest": the highest stable release not above the npm `latest` tag that has been
+ * public for at least `minAgeMs` (a broken release is usually yanked or fixed within a day or two).
+ * Falls back to `latest` itself only when nothing is old enough. Prereleases are never chosen.
+ */
+export function pickVersion(latest: string | undefined, times: Record<string, string>, now: number, minAgeMs: number): string | null {
+  const stable = Object.keys(times).filter(v => STABLE_RE.test(v) && (!latest || compareVersions(v, latest) <= 0));
+  const old = stable.filter(v => now - Date.parse(times[v]!) >= minAgeMs);
+  const best = (list: string[]) => list.sort((a, b) => compareVersions(b, a))[0] ?? null;
+  return best(old) ?? (latest && STABLE_RE.test(latest) ? latest : best(stable));
+}
+
 export interface HostRecord {
   lastRunAt: number;
   ok: boolean;

@@ -5,9 +5,14 @@ description: "Check, dry-run or force the install of the context-mode extension 
 
 # Context Mode на всех машинах BB
 
-Плагин `context-mode-rollout` держит npm-пакет `context-mode` (закреплённая
-версия, по умолчанию 2.2.0) и его настройку в Claude Code и Codex CLI на каждой
-подключённой машине BB.
+Плагин `context-mode-rollout` держит npm-пакет `context-mode` и его настройку
+в Claude Code и Codex CLI на каждой подключённой машине BB и обновляет их.
+
+Целевая версия: при `version = latest` (по умолчанию) — самая новая стабильная
+версия с npm, опубликованная не меньше `minAgeDays` (2) дней назад; пререлизы
+не берутся. Как только релиз проходит выдержку, плагин раскатывает его на все
+подключённые машины. `bb context-mode-rollout status` показывает цель и её
+источник. Конкретная `X.Y.Z` в `version` закрепляет версию.
 
 ## Как работает
 
@@ -18,7 +23,7 @@ description: "Check, dry-run or force the install of the context-mode extension 
 - Host-часть работает на самой машине от пользователя, который запускает CLI:
   берёт PATH из login shell (на macOS добавляет Homebrew), находит `claude` и
   `codex`. Нет ни одного — ничего не делает (`no-cli`).
-- Пакет отсутствует или старее закреплённого → `npm install -g context-mode@X`
+- Пакет отсутствует или старее целевой версии → `npm install -g context-mode@X`
   (без sudo; если глобальный каталог npm не доступен на запись — ошибка в
   статусе, ручная установка). Более новую версию (после `ctx_upgrade`) не
   откатывает.
@@ -36,7 +41,9 @@ bb context-mode-rollout status            # последний результа�
 bb context-mode-rollout check [--machine <id|имя>] [--verify]  # сухой прогон
 bb context-mode-rollout apply [--machine <id|имя>]             # поставить/починить и doctor
 bb plugin config context-mode-rollout set autoInstall false    # выключить автоустановку
-bb plugin config context-mode-rollout set version 2.3.0        # сменить закреплённую версию
+bb plugin config context-mode-rollout set version 2.3.0        # закрепить версию
+bb plugin config context-mode-rollout unset version            # снова latest
+bb plugin config context-mode-rollout set minAgeDays 0         # без выдержки
 ```
 
 Состояния: `ok` — всё настроено; `installed` — только что поставлено;
