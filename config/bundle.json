@@ -235,6 +235,12 @@
    "description": "Следит за делегированными тредами Codex: цель задана первой, проверка каждые 5 минут."
   },
   {
+   "id": "codex-goal-queue",
+   "kind": "local",
+   "name": "Codex Goal Queue",
+   "description": "/goal resume в работающем треде Codex ставится в очередь до конца хода; pause и clear там отклоняются с объяснением."
+  },
+  {
    "id": "shared-guides",
    "kind": "local",
    "name": "Shared Guides",

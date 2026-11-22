@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "version": "v1.11.0",
+  "title": "Machine Tabs 0.2.7, Code Open 0.4.1, Menubar Status 0.3.2, Thread Account Usage 0.1.1, Codex Goal Queue 0.1.0",
+  "steps": [
+    {
+      "id": "bundle",
+      "title": "Полный набор компонентов bb-config",
+      "component": "bb-config",
+      "where": "server",
+      "kind": "bundle",
+      "rerun": "Безопасно: установленное и актуальное только проверяется; повтор доделывает остаток после сбоя.",
+      "rollback": "Компонент, который не нужен, исключите командой python3 scripts/bundle.py exclude <id> и удалите штатно (bb plugin remove <id>); прежнюю версию собственного плагина ставит предыдущий релиз."
+    },
+    {
+      "id": "code-open-project-root",
+      "title": "Code Open 0.4.1 открывает основной checkout проекта",
+      "component": "code-open",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "code-open",
+      "rerun": "Проверяет версию и источник установленного плагина.",
+      "rollback": "Вернуть предыдущую версию plugins/code-open, собрать её и перезагрузить code-open."
+    },
+    {
+      "id": "menubar-status-plan-prices",
+      "title": "Menubar Status 0.3.2: цены тарифов Pro Lite, Pro Max и Max в панели",
+      "component": "menubar-status",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "menubar-status",
+      "rerun": "Безопасно: при совпадении версии шаг только проверяется.",
+      "rollback": "Вернуть plugins/menubar-status к предыдущей версии, собрать и перезагрузить menubar-status; на Mac повторить zsh macos/install.sh из той версии."
+    },
+    {
+      "id": "plugin-codex-goal-queue",
+      "title": "Codex Goal Queue 0.1.0: /goal resume в работающем треде Codex ждёт конца хода",
+      "component": "codex-goal-queue",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "codex-goal-queue",
+      "introduces": true,
+      "rerun": "Безопасно: при совпадении версии шаг только проверяется.",
+      "rollback": "bb plugin remove codex-goal-queue. Сообщения, которые плагин держал в очереди, BB после этого отправляет сам; настроек и данных у плагина нет."
+    },
+    {
+      "id": "plugin-machine-tabs-pager-overlay",
+      "title": "Machine Tabs 0.2.7: строка «Показать ещё» ниже и мельче",
+      "component": "machine-tabs",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "machine-tabs",
+      "rerun": "Проверяет установленную версию machine-tabs; при совпадении ничего не делает.",
+      "rollback": "Установить machine-tabs 0.2.6 из релиза v1.10.0; строка «Показать ещё» снова будет высотой 24 px."
+    },
+    {
+      "id": "thread-account-usage-plan-labels",
+      "title": "Thread Account Usage 0.1.1 показывает фактический тариф",
+      "component": "thread-account-usage",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "thread-account-usage",
+      "rerun": "Проверяет версию и источник установленного плагина.",
+      "rollback": "Вернуть предыдущую версию plugins/thread-account-usage, собрать её и перезагрузить thread-account-usage."
+    }
+  ]
+}
