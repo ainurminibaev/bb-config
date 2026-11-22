@@ -1090,6 +1090,12 @@ const HIDE_EMPTY_GROUPS = `
   display: inline-flex; align-items: center; gap: 1px; opacity: .7;
   font-size: 10.5px; font-variant-numeric: tabular-nums;
 }
+/* With marks on the right, the title stretches across the row so they sit at its right edge,
+   next to bb's own status and actions, instead of right after a short title. */
+span:has(> .bb-thread-title > [data-machine-tabs-row-meta]:not(:empty)),
+.bb-thread-title:has(> [data-machine-tabs-row-meta]:not(:empty)) {
+  flex: 1 1 auto;
+}
 [data-machine-tabs-row-meta]:empty {
   display: none;
 }
