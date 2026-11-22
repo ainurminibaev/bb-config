@@ -72,7 +72,10 @@ def retirement(plugin_id, spec, plugin, status, state_dir, contains_fix, tell, s
     if version is None:
         return None
     change = spec.get('notice', spec['name'])
-    message = f'Сторож: правка {change} вошла в версию {version} от автора — правило отключено автоматически.'
+    # The version comes from the publisher's manifest and lands in an agent's thread: only a plain
+    # semantic version is quoted, anything else is not passed on as text.
+    shown = version if re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]{1,40})?', str(version)) else '(нестандартная версия)'
+    message = f'Сторож: правка {change} вошла в версию {shown} от автора — правило отключено автоматически.'
     if 'bbConfig' not in state:
         try:
             state['bbConfig'] = save(repo, state_dir, plugin_id, spec['name'], version, state['checkedRevision'])
