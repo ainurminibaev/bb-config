@@ -1,6 +1,6 @@
 {
   "id": "plugin-context-mode-rollout",
-  "title": "Context Mode Rollout 0.2.0: актуальный context-mode в Claude Code и Codex на всех машинах BB, включая новые",
+  "title": "Context Mode Rollout 0.3.0: актуальный context-mode в Claude Code и Codex на всех машинах BB, включая новые",
   "component": "context-mode-rollout",
   "where": "server",
   "kind": "local-plugin",

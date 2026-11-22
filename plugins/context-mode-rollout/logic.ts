@@ -62,10 +62,64 @@ const STABLE_RE = /^\d+\.\d+\.\d+$/;
  * Falls back to `latest` itself only when nothing is old enough. Prereleases are never chosen.
  */
 export function pickVersion(latest: string | undefined, times: Record<string, string>, now: number, minAgeMs: number): string | null {
+  return pickCandidates(latest, times, {}, now, minAgeMs, 1)[0]?.version ?? null;
+}
+
+/** A release a host may install, with its `engines.node` range (null = no requirement published). */
+export interface Candidate { version: string; node: string | null }
+
+/**
+ * Releases a host may install, newest first: stable, not above `latest`, past the quarantine.
+ * Several are offered so a host whose Node is too old for the newest one takes the newest it can run.
+ */
+export function pickCandidates(latest: string | undefined, times: Record<string, string>, engines: Record<string, string | null>, now: number, minAgeMs: number, limit = 10): Candidate[] {
   const stable = Object.keys(times).filter(v => STABLE_RE.test(v) && (!latest || compareVersions(v, latest) <= 0));
-  const old = stable.filter(v => now - Date.parse(times[v]!) >= minAgeMs);
-  const best = (list: string[]) => list.sort((a, b) => compareVersions(b, a))[0] ?? null;
-  return best(old) ?? (latest && STABLE_RE.test(latest) ? latest : best(stable));
+  let list = stable.filter(v => now - Date.parse(times[v]!) >= minAgeMs);
+  if (!list.length) list = latest && STABLE_RE.test(latest) ? [latest] : stable;
+  return list.sort((a, b) => compareVersions(b, a)).slice(0, limit).map(version => ({ version, node: engines[version] ?? null }));
+}
+
+const parse3 = (v: string): number[] | null => {
+  const m = /^v?(\d+)(?:\.(\d+|x|\*))?(?:\.(\d+|x|\*))?/.exec(v.trim());
+  return m ? [Number(m[1]), Number(m[2]) || 0, Number(m[3]) || 0] : null;
+};
+const cmp3 = (a: number[], b: number[]) => (a[0]! - b[0]!) || (a[1]! - b[1]!) || (a[2]! - b[2]!);
+
+/**
+ * Does Node `nodeVersion` satisfy an npm `engines.node` range? Handles `||`, space-separated
+ * comparators (>=, >, <=, <, =), `^`, `~`, bare and x-ranges. Anything else counts as NOT
+ * satisfied: an unreadable requirement must not replace a working install.
+ */
+export function satisfiesNode(nodeVersion: string, range: string | null): boolean {
+  if (range === null || range.trim() === '' || range.trim() === '*') return true;
+  const v = parse3(nodeVersion);
+  if (!v) return false;
+  return range.split('||').some(part => {
+    const tokens = part.trim().replace(/(>=|<=|>|<|=)\s+/g, '$1').split(/\s+/).filter(Boolean);
+    if (!tokens.length) return false;
+    return tokens.every(token => {
+      const m = /^(>=|<=|>|<|=|\^|~)?(v?\d+(?:\.(?:\d+|x|\*)){0,2})$/.exec(token);
+      if (!m) return false;
+      const op = m[1] ?? '';
+      const base = parse3(m[2]!)!;
+      const c = cmp3(v, base);
+      const parts = m[2]!.replace(/^v/, '').split('.').filter(p => /^\d+$/.test(p)).length;
+      switch (op) {
+        case '>=': return c >= 0;
+        case '>': return c > 0;
+        case '<=': return c <= 0;
+        case '<': return c < 0;
+        case '^': return c >= 0 && (base[0]! > 0 ? v[0] === base[0] : v[0] === 0 && v[1] === base[1]);
+        case '~': return c >= 0 && v[0] === base[0] && (parts < 2 || v[1] === base[1]);
+        default: return parts === 3 ? c === 0 : v[0] === base[0] && (parts < 2 || v[1] === base[1]);
+      }
+    });
+  });
+}
+
+/** The newest candidate this host's Node can run, or null. */
+export function chooseCandidate(candidates: Candidate[], nodeVersion: string): Candidate | null {
+  return candidates.find(c => satisfiesNode(nodeVersion, c.node)) ?? null;
 }
 
 export interface HostRecord {

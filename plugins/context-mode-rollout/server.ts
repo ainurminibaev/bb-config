@@ -1,18 +1,18 @@
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
 import { PluginCliError, cliCommand, defineCli } from '@get-bb/plugin-sdk';
 import { hostContract, type EnsureResult } from './contract.ts';
-import { VERSION_RE, pickVersion, shouldRun, type HostRecord } from './logic.ts';
+import { VERSION_RE, pickCandidates, shouldRun, type Candidate, type HostRecord } from './logic.ts';
 
 const TICK_MS = 2 * 60 * 1000;
 const CALL_TIMEOUT_MS = 30 * 60 * 1000;
 // Used only when the npm registry cannot be reached and nothing was resolved before.
-const FALLBACK_VERSION = '2.2.0';
+const FALLBACK: Candidate[] = [{ version: '2.2.1', node: '>=24.15.0' }];
 const REGISTRY_URL = 'https://registry.npmjs.org/context-mode';
 const REGISTRY_TTL_MS = 60 * 60 * 1000;
 const KEY = 'host:';
 const TARGET_KEY = 'target';
 
-interface Stored extends HostRecord { hostName: string; result: EnsureResult | null; error: string | null }
+interface Stored extends HostRecord { hostName: string; result: EnsureResult | null; error: string | null; /** Releases rolled back on this host. */ bad?: string[] }
 
 const errText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -33,30 +33,44 @@ export default function plugin(bb: BbPluginApi) {
     return { autoInstall: v.autoInstall !== false, version: VERSION_RE.test(raw) ? raw : 'latest', minAgeDays };
   };
 
-  interface Target { version: string; source: string; resolvedAt: number }
+  interface Target { version: string; candidates: Candidate[]; source: string; resolvedAt: number }
   let cached: (Target & { key: string }) | null = null;
 
-  /** The version to roll out now: the pinned one, or the npm release picked by pickVersion. */
+  /**
+   * What to roll out now. `candidates` are the allowed releases newest first with their
+   * engines.node: each host installs the newest one its own Node can run.
+   */
   async function target(): Promise<Target> {
     const { version, minAgeDays } = await config();
-    if (version !== 'latest') return { version, source: 'закреплена в настройках', resolvedAt: Date.now() };
-    const key = `latest:${minAgeDays}`;
+    const key = `${version}:${minAgeDays}`;
     if (cached?.key === key && Date.now() - cached.resolvedAt < REGISTRY_TTL_MS) return cached;
     try {
       const res = await fetch(REGISTRY_URL, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(20_000) });
       if (!res.ok) throw new Error(`npm registry HTTP ${res.status}`);
-      const data = (await res.json()) as { 'dist-tags'?: { latest?: unknown }; time?: Record<string, string> };
-      const latest = typeof data['dist-tags']?.latest === 'string' ? data['dist-tags'].latest : undefined;
-      const picked = pickVersion(latest, data.time ?? {}, Date.now(), minAgeDays * 24 * 60 * 60 * 1000);
-      if (!picked) throw new Error('в npm нет стабильных версий');
-      const t: Target = { version: picked, source: `npm latest ${latest ?? '?'}, выдержка ${minAgeDays} дн.`, resolvedAt: Date.now() };
+      const data = (await res.json()) as { 'dist-tags'?: { latest?: unknown }; time?: Record<string, string>; versions?: Record<string, { engines?: { node?: unknown } }> };
+      const engines: Record<string, string | null> = {};
+      for (const [v, meta] of Object.entries(data.versions ?? {})) engines[v] = typeof meta?.engines?.node === 'string' ? meta.engines.node : null;
+      let candidates: Candidate[];
+      let source: string;
+      if (version !== 'latest') {
+        if (!(version in engines)) throw new Error(`версии ${version} нет в npm`);
+        candidates = [{ version, node: engines[version] ?? null }];
+        source = 'закреплена в настройках';
+      } else {
+        const latest = typeof data['dist-tags']?.latest === 'string' ? data['dist-tags'].latest : undefined;
+        candidates = pickCandidates(latest, data.time ?? {}, engines, Date.now(), minAgeDays * 24 * 60 * 60 * 1000);
+        source = `npm latest ${latest ?? '?'}, выдержка ${minAgeDays} дн.`;
+      }
+      if (!candidates.length) throw new Error('в npm нет подходящих стабильных версий');
+      const t: Target = { version: candidates[0]!.version, candidates, source, resolvedAt: Date.now() };
       cached = { ...t, key };
       await kv.set(TARGET_KEY, t);
       return t;
     } catch (error) {
       const last = (await kv.get(TARGET_KEY)) as Target | undefined;
-      bb.log.warn(`npm registry: ${errText(error)}; беру ${last?.version ?? FALLBACK_VERSION}`);
-      return { version: last?.version ?? FALLBACK_VERSION, source: `npm недоступен (${errText(error)}), последняя известная`, resolvedAt: Date.now() };
+      const candidates = version !== 'latest' ? [{ version, node: null }] : last?.candidates?.length ? last.candidates : FALLBACK;
+      bb.log.warn(`npm registry: ${errText(error)}; беру ${candidates[0]!.version}`);
+      return { version: candidates[0]!.version, candidates, source: `npm недоступен (${errText(error)}), последняя известная`, resolvedAt: Date.now() };
     }
   }
 
@@ -64,14 +78,23 @@ export default function plugin(bb: BbPluginApi) {
     if (busy.has(hostId)) throw new PluginCliError(`на ${hostName} проверка уже идёт`, { code: 'busy' });
     busy.add(hostId);
     try {
-      const { version } = await target();
-      const result = await host.call('ensure', { version, apply, verify }, { hostId, timeoutMs: CALL_TIMEOUT_MS });
-      const stored: Stored = { hostName, lastRunAt: Date.now(), ok: result.state !== 'error', result, error: null };
+      const { candidates: all } = await target();
+      const prev = (await kv.get(KEY + hostId)) as Stored | undefined;
+      const bad = new Set(prev?.bad ?? []);
+      // Skip releases that broke this host before; a newer release is tried again.
+      const candidates = all.filter(c => !bad.has(c.version));
+      if (!candidates.length) throw new Error(`все доступные версии (${all.map(c => c.version).join(', ')}) уже откатывались на этой машине`);
+      const result = await host.call('ensure', { candidates, apply, verify }, { hostId, timeoutMs: CALL_TIMEOUT_MS });
+      if (result.failedVersion) bad.add(result.failedVersion);
+      // The server compares `offered` with the newest release; report the unfiltered one so a skipped bad release does not re-trigger.
+      result.offered = all[0]!.version;
+      const stored: Stored = { hostName, lastRunAt: Date.now(), ok: result.state !== 'error', result, error: null, bad: [...bad] };
       if (apply) await kv.set(KEY + hostId, stored);
       bb.log.info(`${hostName}: ${result.state} — ${result.message}`);
       return stored;
     } catch (error) {
-      const stored: Stored = { hostName, lastRunAt: Date.now(), ok: false, result: null, error: errText(error) };
+      const prev = (await kv.get(KEY + hostId).catch(() => undefined)) as Stored | undefined;
+      const stored: Stored = { hostName, lastRunAt: Date.now(), ok: false, result: null, error: errText(error), bad: prev?.bad ?? [] };
       if (apply) await kv.set(KEY + hostId, stored);
       bb.log.warn(`${hostName}: ${stored.error}`);
       return stored;
@@ -98,7 +121,7 @@ export default function plugin(bb: BbPluginApi) {
               const record = (await kv.get(KEY + h.id)) as Stored | undefined;
               const justConnected = !first && !online.has(h.id);
               // A new target version (release passed the quarantine) rolls out at once, not at the daily check.
-              const newTarget = record?.ok === true && record.result !== null && record.result.pinned !== version;
+              const newTarget = record?.ok === true && record.result !== null && record.result.offered !== version;
               if (newTarget || shouldRun(record, justConnected, Date.now())) void ensure(h.id, h.name, true, false).catch(() => undefined);
             }
           }
@@ -120,7 +143,8 @@ export default function plugin(bb: BbPluginApi) {
     if (!s.result) return `${s.hostName}: ошибка вызова (${when}) — ${s.error}`;
     const r = s.result;
     const agents = r.agents.map(a => `${a.id}=${a.status}`).join(' ');
-    return `${s.hostName}: ${r.state} (${when}) context-mode ${r.versionAfter ?? '—'} [${agents || r.clis.join(',') || 'нет CLI'}] — ${r.message}`;
+    const skipped = s.bad?.length ? ` (пропущены после отката: ${s.bad.join(', ')})` : '';
+    return `${s.hostName}: ${r.state} (${when}) context-mode ${r.versionAfter ?? '—'}, Node ${r.nodeVersion ?? '—'} [${agents || r.clis.join(',') || 'нет CLI'}] — ${r.message}${skipped}`;
   };
 
   const resolveHosts = async (machine: string | undefined) => {

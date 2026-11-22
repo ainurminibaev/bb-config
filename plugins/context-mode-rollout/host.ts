@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { experimental_defineHostEntry } from '@get-bb/plugin-sdk/host';
 import { hostContract, type EnsureResult } from './contract.ts';
-import { AGENTS, agentsNeedingSetup, packageIsCurrent, parseAgents, type AgentState } from './logic.ts';
+import { AGENTS, agentsNeedingSetup, chooseCandidate, packageIsCurrent, parseAgents, satisfiesNode, type AgentState } from './logic.ts';
 
 const WIN = process.platform === 'win32';
 const CLI_BIN: Record<string, string> = { 'claude-code': 'claude', codex: 'codex' };
@@ -56,12 +56,12 @@ const tail = (text: string) => text.trim().split('\n').slice(-3).join(' ').slice
 export default experimental_defineHostEntry({
   contract: hostContract,
   handlers: {
-    ensure: async ({ version, apply, verify }, ctx): Promise<EnsureResult> => {
+    ensure: async ({ candidates, apply, verify }, ctx): Promise<EnsureResult> => {
       const signal = ctx.signal;
       const env: NodeJS.ProcessEnv = { ...process.env, PATH: await loginPath(signal), NO_COLOR: '1', CI: '1' };
       const result: EnsureResult = {
-        platform: process.platform, state: 'ok', message: '', pinned: version,
-        versionBefore: null, versionAfter: null, clis: [], actions: [], agents: [],
+        platform: process.platform, state: 'ok', message: '', pinned: candidates[0]!.version, offered: candidates[0]!.version,
+        nodeVersion: null, failedVersion: null, versionBefore: null, versionAfter: null, clis: [], actions: [], agents: [],
       };
       const fail = (message: string): EnsureResult => ({ ...result, state: 'error', message });
 
@@ -77,18 +77,52 @@ export default experimental_defineHostEntry({
       result.versionBefore = await version_();
       result.versionAfter = result.versionBefore;
 
-      if (!packageIsCurrent(result.versionBefore, version)) {
-        const npm = await which('npm', env.PATH!);
-        if (!npm) return fail('npm не найден: нужен Node.js с node:sqlite (Node 22.5+)');
+      // context-mode runs on the `node` in PATH (bin shebang; setup records that binary for MCP).
+      const nodeBin = await which('node', env.PATH!);
+      const nodeRun = nodeBin ? await run(nodeBin, ['--version'], env, 30_000, signal) : null;
+      result.nodeVersion = nodeRun?.code === 0 ? nodeRun.stdout.trim() : null;
+      if (!result.nodeVersion) return fail('node не найден в PATH: context-mode нужен Node.js');
+      const chosen = chooseCandidate(candidates, result.nodeVersion);
+      if (!chosen) {
+        // Nothing this Node can run: keep whatever works now, never install an incompatible package.
+        const need = candidates.map(c => c.node).filter(Boolean)[0] ?? '?';
+        return fail(`Node ${result.nodeVersion} слишком старый для context-mode (нужен ${need}); ${result.versionBefore ? `текущая установка ${result.versionBefore} не тронута` : 'context-mode не ставлю'} — обновите Node`);
+      }
+      const version = chosen.version;
+      result.pinned = version;
+      const installedOk = result.versionBefore === null || satisfiesNode(result.nodeVersion, candidates.find(c => c.version === result.versionBefore)?.node ?? null);
+      const npm = await which('npm', env.PATH!);
+      const install = async (v: string) => {
+        const r = await run(npm!, ['install', '-g', `context-mode@${v}`, '--no-fund', '--no-audit', '--engine-strict'], env, 10 * 60_000, signal);
+        const prefix = await run(npm!, ['prefix', '-g'], env, 30_000, signal);
+        if (prefix.code === 0 && prefix.stdout.trim()) env.PATH = [...new Set([WIN ? prefix.stdout.trim() : join(prefix.stdout.trim(), 'bin'), ...env.PATH!.split(delimiter)])].join(delimiter);
+        return r;
+      };
+
+      // Install when missing or older than the chosen release, or when the installed release needs a newer Node than this host has.
+      if (!packageIsCurrent(result.versionBefore, version) || (result.versionBefore !== version && !installedOk)) {
+        if (!npm) return fail('npm не найден рядом с node: установить context-mode нечем');
         result.actions.push(`npm install -g context-mode@${version}`);
-        if (!apply) return { ...result, state: 'planned', message: `будет установлен context-mode ${version} и выполнен setup для ${result.clis.join(', ')}` };
-        const r = await run(npm, ['install', '-g', `context-mode@${version}`, '--no-fund', '--no-audit'], env, 10 * 60_000, signal);
-        if (r.code !== 0) return fail(`npm install не удался (без sudo не ставлю): ${tail(r.stderr || r.stdout)}`);
-        const prefix = await run(npm, ['prefix', '-g'], env, 30_000, signal);
-        if (prefix.code === 0 && prefix.stdout.trim()) env.PATH = [WIN ? prefix.stdout.trim() : join(prefix.stdout.trim(), 'bin'), env.PATH].join(delimiter);
+        if (!apply) return { ...result, state: 'planned', message: `будет установлен context-mode ${version} (Node ${result.nodeVersion}) и выполнен setup для ${result.clis.join(', ')}` };
+        const r = await install(version);
+        if (r.code !== 0) return fail(`npm install не удался (без sudo не ставлю; прежняя версия ${result.versionBefore ?? '—'} остаётся): ${tail(r.stderr || r.stdout)}`);
         result.versionAfter = await version_();
         if (!packageIsCurrent(result.versionAfter, version)) return fail(`после установки context-mode --version = ${result.versionAfter ?? 'нет'}`);
       }
+
+      /** After a failed upgrade put the previous working version back and set it up again. */
+      const rollback = async (why: string): Promise<EnsureResult> => {
+        const prev = result.versionBefore;
+        if (!apply || !prev || prev === result.versionAfter || !npm) return fail(why);
+        result.failedVersion = result.versionAfter;
+        result.actions.push(`откат: npm install -g context-mode@${prev}`);
+        const r = await install(prev);
+        const b = await which('context-mode', env.PATH!);
+        const s = r.code === 0 && b ? await run(b, ['setup', '--yes', '--no-input', '--agents', result.clis.join(','), '--json'], env, 15 * 60_000, signal) : null;
+        result.versionAfter = await version_();
+        const back = s?.code === 0 && result.versionAfter === prev;
+        return fail(`${why}; ${back ? `откатил на ${prev}, она работает` : `откат на ${prev} не удался — нужна ручная проверка`}`);
+      };
 
       const bin = (await which('context-mode', env.PATH!))!;
       const agentsArg = result.clis.join(',');
@@ -103,7 +137,7 @@ export default experimental_defineHostEntry({
         const r = await run(bin, ['setup', '--yes', '--no-input', '--agents', todo.join(','), '--json'], env, 15 * 60_000, signal);
         const agents = parseAgents(r.stdout);
         if (agents) result.agents = [...result.agents.filter(a => !todo.includes(a.id)), ...agents];
-        if (r.code !== 0) return fail(`context-mode setup завершился с кодом ${r.code}: ${tail(r.stderr || r.stdout)}`);
+        if (r.code !== 0) return rollback(`context-mode setup завершился с кодом ${r.code}: ${tail(r.stderr || r.stdout)}`);
         result.state = 'installed';
       }
 
@@ -112,12 +146,13 @@ export default experimental_defineHostEntry({
         const agents = parseAgents(r.stdout);
         if (agents) result.agents = agents;
         const bad = (agents ?? []).filter(a => a.status !== 'PASS').map(a => `${a.id}=${a.status}`);
-        if (r.code !== 0 || !agents || bad.length) return fail(`context-mode doctor: ${bad.join(', ') || tail(r.stderr || r.stdout) || `код ${r.code}`}`);
+        if (r.code !== 0 || !agents || bad.length) return rollback(`context-mode doctor: ${bad.join(', ') || tail(r.stderr || r.stdout) || `код ${r.code}`}`);
       }
 
       result.message = result.state === 'installed'
         ? `установлено/настроено (${result.clis.join(', ')}); новые сессии CLI подхватят MCP и хуки`
         : `context-mode ${result.versionAfter} настроен для ${result.clis.join(', ')}`;
+      if (version !== candidates[0]!.version) result.message += ` (новее ${candidates[0]!.version} требует Node ${candidates[0]!.node ?? '?'}, здесь ${result.nodeVersion})`;
       return result;
     },
   },
