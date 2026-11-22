@@ -3020,8 +3020,19 @@ Realtime 2.1 по подписке) и голос Codex Live `codexLiveVoice = "
   настройка — остановка с просьбой спросить владельца. Для чужих установок —
   шаг выпуска `plugins-git-source`. Набор (`config/bundle.json`) оставляет их
   `local`: Git-установку он считает «другим источником» и не трогает. Плагины
-  с секретами, расписаниями и своими данными (limit-guard, project-catalog,
-  proxy-manager и др.) пока остаются в папке — после пробы на тестовом BB.
+  с секретами, расписаниями и своими данными — вторая очередь (шаг
+  `plugins-git-source-2`): project-logo, kodaforge-inspector,
+  codex-delegation-watch, context-mode-rollout, menubar-status,
+  file-local-open, voice-mode-keeper, machine-tabs, pr-issues, browser-page,
+  limit-guard, project-catalog, proxy-manager. Данные плагина при remove
+  остаются, расписания регистрируются заново; секретные настройки скрипт
+  переносит сам: копия из `<data-dir>/plugins/<id>/secrets/<key>` во
+  временный файл 600 (`~/.cache/bb-config-secret-carry/`, вне Git и
+  журнала) → `bb plugin config <id> set` после установки → проверка «set» →
+  файл затирается и удаляется. Не переводятся: config-updates (ищет
+  `scripts/updates.py` рядом с собой) и claude-origin-failover (нет в main).
+  Работа с плагином из Git: правка → версия в `package.json` → коммит в main
+  → тег `<id>/vX.Y.Z` → `bb plugin update <id>`.
   Тесты: `python3 -m unittest discover -s scripts -p test_plugin_git_source.py`.
 
 ## Настройки звонка Voice Mode 0.2.8
