@@ -1,6 +1,6 @@
 import { experimental_defineHostEntry } from '@get-bb/plugin-sdk/host';
 import { execFile } from 'node:child_process';
-import { mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { promisify } from 'node:util';
 import { basename, extname, isAbsolute, join } from 'node:path';
@@ -20,11 +20,12 @@ async function checkedApp(app: string | null | undefined): Promise<string | null
   return app;
 }
 /** Opens the file in an application on this computer and names that application. */
-async function launch(path: string, app: string | null, retain: () => { dispose(): Promise<void> }, copiedRoot: string | null): Promise<string> {
+type Dirs = { tempDir: string; dataDir: string };
+async function launch(path: string, app: string | null, retain: () => { dispose(): Promise<void> }, copiedRoot: string | null, dirs: Dirs): Promise<string> {
   if (process.platform === 'darwin') {
     let target = path;
     // A copied page is served over http so its scripts, modules and fetch() work; a text editor still gets the file.
-    const browser = app ? (await appsFor('html')).some(a => a.path === app && a.browser) : true;
+    const browser = app ? (await appsFor('html', dirs)).some(a => a.path === app && a.browser) : true;
     if (isHtml(path) && copiedRoot && browser) {
       pages ??= new LocalPages(copiedRoot, 4 * 60 * 60 * 1000, retain);
       target = await pages.url(path);
@@ -43,28 +44,32 @@ async function launch(path: string, app: string | null, retain: () => { dispose(
  * Applications for a file type. LaunchServices takes a few seconds with icons, so the answer is kept on disk:
  * a cached list is returned at once and refreshed in the background when older than six hours.
  */
-async function appsFor(extension: string, dirs?: { tempDir: string; dataDir: string }): Promise<DesktopApp[]> {
+async function appsFor(extension: string, dirs: Dirs): Promise<DesktopApp[]> {
   if (process.platform !== 'darwin') return [];
   const memo = appCache.get(extension);
   if (memo && Date.now() - memo.at < 10 * 60 * 1000) return memo.apps;
-  const file = dirs ? join(dirs.dataDir, `apps-${extension}.json`) : null;
+  const file = join(dirs.dataDir, `apps-${extension}.json`);
   const disk = file ? await readFile(file, 'utf8').then(t => JSON.parse(t) as { at: number; apps: DesktopApp[] }).catch(() => null) : null;
   if (disk && Array.isArray(disk.apps)) {
     appCache.set(extension, { at: Date.now(), apps: disk.apps });
-    if (Date.now() - disk.at > 6 * 60 * 60 * 1000) void scan(extension, dirs!, file!).catch(() => undefined);
+    if (Date.now() - disk.at > 6 * 60 * 60 * 1000) void scan(extension, dirs, file).catch(() => undefined);
     return disk.apps;
   }
-  return scan(extension, dirs ?? { tempDir: '/tmp', dataDir: '/tmp' }, file);
+  return scan(extension, dirs, file);
 }
 const scanning = new Map<string, Promise<DesktopApp[]>>();
-function scan(extension: string, dirs: { tempDir: string; dataDir: string }, file: string | null): Promise<DesktopApp[]> {
+function scan(extension: string, dirs: Dirs, file: string | null): Promise<DesktopApp[]> {
   let job = scanning.get(extension);
   if (job) return job;
   job = (async () => {
-    const sample = join(dirs.tempDir, `bb-file-local-open-sample.${extension}`), script = join(dirs.tempDir, 'bb-file-local-open-apps.js');
-    await writeFile(sample, '', { mode: 0o600 });
-    await writeFile(script, MAC_APPS_SCRIPT, { mode: 0o600 });
-    const { stdout } = await run('/usr/bin/osascript', ['-l', 'JavaScript', script, sample, '36'], { timeout: 20000, maxBuffer: 16 * 1024 * 1024 });
+    // A fresh private directory per scan, files created exclusively: the script that osascript runs
+    // can never be a file another account planted or swapped.
+    const work = await mkdtemp(join(dirs.tempDir, 'apps-'));
+    const sample = join(work, `sample.${extension}`), script = join(work, 'apps.js');
+    await writeFile(sample, '', { mode: 0o600, flag: 'wx' });
+    await writeFile(script, MAC_APPS_SCRIPT, { mode: 0o600, flag: 'wx' });
+    const { stdout } = await run('/usr/bin/osascript', ['-l', 'JavaScript', script, sample, '36'], { timeout: 20000, maxBuffer: 16 * 1024 * 1024 })
+      .finally(() => rm(work, { recursive: true, force: true }));
     const apps = tidyApps(JSON.parse(stdout) as DesktopApp[], homedir(), extension);
     appCache.set(extension, { at: Date.now(), apps });
     if (file) {
@@ -105,7 +110,7 @@ export default experimental_defineHostEntry({ contract: hostContract, handlers: 
     }
     const chosen = await checkedApp(app);
     const path = await saveBundle(bundle, downloadRoot());
-    return { path, application: await launch(path, chosen, () => context.experimental_retainWorker(), downloadRoot()) };
+    return { path, application: await launch(path, chosen, () => context.experimental_retainWorker(), downloadRoot(), context.experimental_paths) };
   },
   // The file already is on the computer that opens it: no copy is made.
   launch: async ({ path, app, action }, context) => {
@@ -115,6 +120,6 @@ export default experimental_defineHostEntry({ contract: hostContract, handlers: 
     if (!supported(path) || !(await stat(path)).isFile()) throw new Error('Этот тип файла пока не поддерживается.');
     if (action === 'clipboard') { await copyToClipboard(path); return { path, application: 'буфер обмена' }; }
     // A page in place is opened as a file: serving an arbitrary folder of this computer is not wanted.
-    return { path, application: await launch(path, await checkedApp(app), () => context.experimental_retainWorker(), null) };
+    return { path, application: await launch(path, await checkedApp(app), () => context.experimental_retainWorker(), null, context.experimental_paths) };
   },
 } });

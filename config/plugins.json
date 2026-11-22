@@ -121,7 +121,7 @@
   },
   {
     "id": "browser-page",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "enabled": true,
     "name": "Browser Page",
     "source": "path:plugins/browser-page"
@@ -337,7 +337,7 @@
   },
   {
     "id": "menubar-status",
-    "version": "0.3.2",
+    "version": "0.3.3",
     "enabled": true,
     "name": "Menubar Status",
     "source": "path:plugins/menubar-status"
@@ -512,7 +512,7 @@
   },
   {
     "id": "limit-guard",
-    "version": "0.8.1",
+    "version": "0.8.2",
     "enabled": true,
     "name": "Limit Guard",
     "source": "path:plugins/limit-guard"

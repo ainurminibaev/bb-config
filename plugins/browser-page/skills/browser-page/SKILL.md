@@ -12,6 +12,8 @@ prefer the Browser Automation skill.
 
 Run it with `node "<this skill's folder>/bb-page.mjs" <command>` inside a bb
 thread (it reads `BB_THREAD_ID`; outside a thread add `--thread <id>`).
+State and the private DevTools connection file live in `<tmp>/bb-page-<uid>`;
+the script refuses to run if that directory is not yours with mode 0700.
 
 ```sh
 node bb-page.mjs open http://localhost:3000     # hidden tab; prints url and title

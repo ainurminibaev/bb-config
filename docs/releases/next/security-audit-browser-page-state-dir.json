@@ -1,0 +1,10 @@
+{
+  "id": "security-audit-browser-page-state-dir",
+  "title": "Browser Page 0.1.1: состояние bb-page в личном каталоге пользователя",
+  "component": "browser-page",
+  "where": "server",
+  "kind": "local-plugin",
+  "plugin": "browser-page",
+  "rerun": "Проверяет установленную версию browser-page; при совпадении ничего не делает.",
+  "rollback": "Установить browser-page 0.1.0 из релиза v1.11.0."
+}

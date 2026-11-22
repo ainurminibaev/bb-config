@@ -51,7 +51,9 @@ The Mac never calls bb. The plugin writes everything to the folder of
 `filePath` on that machine: `status.json`, `chats/<thread>.json` (the listed
 threads' conversations, rewritten when a thread changes), `usage.json` (every
 two minutes), and polls `outbox/` every 1.5 s for the panel's replies and
-"open in bb" requests (failures go to `errors.json`). The local helper
+"open in bb" requests (failures go to `errors.json`). Since 0.3.3 a panel
+request is carried out only for a thread the panel currently lists; any other
+thread id is refused into `errors.json`. The local helper
 (`macos/server.py`, LaunchAgent `dev.bb.menubar`, 127.0.0.1:47615,
 token-protected) only reads those files and queues requests; the app is
 LaunchAgent `dev.bb.status`. A reply that never shows up: check the plugin log

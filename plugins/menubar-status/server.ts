@@ -176,6 +176,8 @@ export default async function menubarStatus(bb: BbPluginApi) {
    * - outbox/*.json: replies and "open in bb" requests from the panel.
    */
   const chatSignatures = new Map<string, string>();
+  // Threads the panel currently shows: the only ones a panel request may reach.
+  let panelThreads = new Set<string>();
   async function syncChats(feed: Feed, hostId: string, dir: string): Promise<void> {
     if (madeDirFor !== `${hostId}:${dir}:chats`) {
       await bb.sdk.files.mkdir({ hostId, path: `${dir}/chats`, recursive: true });
@@ -183,6 +185,7 @@ export default async function menubarStatus(bb: BbPluginApi) {
       madeDirFor = `${hostId}:${dir}:chats`;
     }
     const listed = new Set(feed.items.map((item) => item.id));
+    panelThreads = listed;
     await Promise.all(feed.items.map(async (item) => {
       const signature = `${item.updatedAt}|${item.state}|${item.activity}`;
       if (chatSignatures.get(item.id) === signature) return;
@@ -230,6 +233,8 @@ export default async function menubarStatus(bb: BbPluginApi) {
         const threadId = String(request.thread ?? "");
         if (!/^thr_[A-Za-z0-9]{4,40}$/.test(threadId)) continue;
         try {
+          // The token holder (the panel) acts only on the threads it was shown, never on any thread id.
+          if (!panelThreads.has(threadId)) throw new Error("тред больше не показан в панели — откройте его в BB");
           if (request.action === "send" && request.text?.trim()) {
             await sendTo(threadId, request.text.trim().slice(0, 20_000));
           } else if (request.action === "open") {

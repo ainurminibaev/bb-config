@@ -98,6 +98,26 @@ async function scanSecrets(path: string, files: string[]) {
   return hits;
 }
 
+/**
+ * Every file version a push of `commit` would upload: all commits not yet on origin, read from git
+ * objects (a secret added and later deleted is still in history), not only the net tree diff.
+ */
+export async function scanOutgoing(path: string, commit: string, signal: AbortSignal) {
+  const hits = new Set<string>();
+  const list = await git(['rev-list', '--max-count=200', commit, '--not', '--remotes=origin'], { cwd: path, signal });
+  for (const sha of list.out.split('\n').filter(Boolean)) {
+    const changed = (await git(['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', '-m', '--root', sha], { cwd: path, signal })).out.split('\0').filter(Boolean);
+    for (const file of [...new Set(changed)].slice(0, 5000)) {
+      if (hits.has(file)) continue;
+      const blob = await git(['cat-file', '-p', `${sha}:${file}`], { cwd: path, signal });
+      // A deleted path has no blob in this commit; its name alone may still look like a secret.
+      if (findSecrets(file, blob.ok ? blob.out.slice(0, 2 * 1024 * 1024) : '')) hits.add(file);
+      if (hits.size >= 20) return [...hits];
+    }
+  }
+  return [...hits];
+}
+
 async function isPrivateRemote(path: string, signal: AbortSignal): Promise<boolean | null> {
   const url = (await git(['config', '--get', 'remote.origin.url'], { cwd: path, signal })).out.trim();
   const match = /github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?$/.exec(url);
@@ -171,11 +191,21 @@ export async function snapshotGit(path: string, ref: string, message: string, pu
     if (!remote) { result.pushNote = 'нет remote origin — снимок только на этой машине'; return result; }
     const isPrivate = await isPrivateRemote(path, signal);
     if (isPrivate !== true) { result.pushNote = isPrivate === false ? 'репозиторий публичный — снимок только на этой машине' : 'не удалось подтвердить, что репозиторий приватный — снимок только на этой машине'; return result; }
-    // Everything that would leave the machine: unpushed commits too, not only the uncommitted part.
+    // Everything that would leave the machine: the current files, and every version in the commits the
+    // push uploads (earlier snapshots and unpushed commits), not only the net difference.
     const outgoing = (await git(['diff', '--name-only', '-z', upstream ?? EMPTY_TREE, tree], { cwd: path, signal })).out.split('\0').filter(Boolean);
     result.secrets = await scanSecrets(path, outgoing);
     if (result.secrets.length) { result.pushNote = 'похоже на секреты в файлах — снимок только на этой машине'; return result; }
-    const pushed = await git(['push', '--quiet', 'origin', `${result.commit}:${ref}`], { cwd: path, signal, timeout: 120_000 });
+    let toPush = result.commit;
+    let history = await scanOutgoing(path, toPush, signal);
+    if (history.length && previous) {
+      // An earlier local snapshot held the secret: push this state without that snapshot chain.
+      const fresh = await git(['commit-tree', tree, ...(head ? ['-p', head] : []), '-F', '-'], { cwd: path, env: IDENTITY, signal, input: message });
+      if (fresh.ok) { toPush = fresh.out.trim(); history = await scanOutgoing(path, toPush, signal); }
+    }
+    if (history.length) { result.secrets = history; result.pushNote = 'похоже на секреты в истории снимка или неотправленных коммитах — снимок только на этой машине'; return result; }
+    if (toPush !== result.commit) { await git(['update-ref', ref, toPush], { cwd: path, signal }); result.commit = toPush; }
+    const pushed = await git(['push', '--quiet', 'origin', `${toPush}:${ref}`], { cwd: path, signal, timeout: 120_000 });
     result.pushed = pushed.ok;
     if (!pushed.ok) result.pushNote = `push не удался: ${pushed.err}`;
     return result;

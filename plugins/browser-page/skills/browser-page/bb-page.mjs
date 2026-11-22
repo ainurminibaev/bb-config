@@ -22,7 +22,7 @@
 // machine with the browser when bb has several; default: the only one that
 // reports a desktop browser.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -41,10 +41,19 @@ if (!command || command === "--help" || command === "-h") {
 }
 if (!threadId) fail("no thread: run inside a bb thread or pass --thread <id>");
 
-const stateDir = join(tmpdir(), "bb-page");
+// Per-user directory: on a shared Unix /tmp another account must not be able to plant the DevTools
+// endpoint this script connects to, nor read the connection file the bb CLI writes here.
+const uid = typeof process.getuid === "function" ? process.getuid() : null;
+const stateDir = join(tmpdir(), uid === null ? "bb-page" : `bb-page-${uid}`);
 const stateFile = join(stateDir, `${threadId}.json`);
-const loadState = () => (existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : null);
-const saveState = (state) => { mkdirSync(stateDir, { recursive: true, mode: 0o700 }); writeFileSync(stateFile, JSON.stringify(state), { mode: 0o600 }); };
+function ownDir() {
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  if (uid === null) return;
+  const st = lstatSync(stateDir);
+  if (!st.isDirectory() || st.uid !== uid || (st.mode & 0o077) !== 0) fail(`unsafe state directory ${stateDir}: it must be a directory owned by you with mode 0700`);
+}
+const loadState = () => { if (!existsSync(stateFile)) return null; ownDir(); return JSON.parse(readFileSync(stateFile, "utf8")); };
+const saveState = (state) => { ownDir(); writeFileSync(stateFile, JSON.stringify(state), { mode: 0o600 }); };
 
 /** One argument for a cmd.exe command line. Quotes and %VAR% cannot be made literal there. */
 function cmdQuote(value) {
@@ -86,7 +95,7 @@ function ensureLease(state) {
   if (state.leaseId) { try { bb("browser", "release", state.leaseId, ...where(state)); } catch { /* already gone */ } }
   const lease = bb("browser", "acquire", state.tabId, ...where(state), "--controller", "bb-page", "--ttl-ms", "1800000");
   const file = join(stateDir, `${threadId}.connection-${Date.now()}.json`);
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  ownDir();
   try {
     bb("browser", "connection", lease.leaseId, ...where(state), "--output", file);
     const { wsEndpoint, expiresAt } = JSON.parse(readFileSync(file, "utf8"));

@@ -37,9 +37,11 @@ anything itself.
   - Triggers: any failed turn, entering finish, an idle thread with changes
     (at most every 10 minutes per folder), and archiving a worktree thread.
   - Local by default. With `push-private`, push only to a remote GitHub
-    confirms as private (`gh api`) and only when nothing leaving (including
-    unpushed commits) looks like a secret; a dropped snapshot drops its server
-    ref too.
+    confirms as private (`gh api`) and only when nothing leaving looks like a
+    secret: the current files and every file version in all commits not yet on
+    origin (earlier snapshots, unpushed commits) are scanned from git objects.
+    A secret left in an earlier local snapshot makes the push use a snapshot
+    without that chain; a dropped snapshot drops its server ref too.
   - Shadow snapshots refuse home folders, disk roots and BB data, stop at
     200 MB and skip secret-like files; nested repositories get `<ref>--<dir>`.
   - A clean folder drops the old snapshot only when its work is in the branch.

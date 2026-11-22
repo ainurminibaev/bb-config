@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { restoreGit, snapshotGit, snapshotShadow } from './host.ts';
+import { restoreGit, scanOutgoing, snapshotGit, snapshotShadow } from './host.ts';
 import { findSecrets, nestedRef, snapshotRef, unsafeShadowRoot } from './snapshot-logic.ts';
 
 const root = mkdtempSync(join(tmpdir(), 'limit-guard-snap-'));
@@ -152,4 +152,18 @@ test('secret detection by name and by token shape', () => {
   assert.equal(findSecrets('config/app.ts', 'const t = "ghp_' + 'a'.repeat(36) + '"'), true);
   assert.equal(findSecrets('notes.md', ['-----BEGIN', 'OPENSSH', 'PRIVATE', 'KEY-----'].join(' ')), true);
   assert.equal(findSecrets('notes.md', 'just text'), false);
+});
+test('the push check sees a secret in an earlier local snapshot even after the file is gone', async () => {
+  const { a } = repo('history');
+  writeFileSync(join(a, 'credentials.json'), '{"token":"x"}');
+  const first = await snapshotGit(a, REF, 'snap 1', false, signal);
+  assert.ok(first.commit);
+  rmSync(join(a, 'credentials.json'));
+  writeFileSync(join(a, 'f.txt'), '2\n');
+  const second = await snapshotGit(a, REF, 'snap 2', false, signal);
+  assert.ok(second.commit && second.commit !== first.commit);
+  // The second snapshot's tree is clean, but its parent chain still carries credentials.json.
+  assert.deepEqual(await scanOutgoing(a, second.commit!, signal), ['credentials.json']);
+  // Work already on origin is not uploaded again and is not scanned.
+  assert.deepEqual(await scanOutgoing(a, g(a, 'rev-parse', 'HEAD').trim(), signal), []);
 });

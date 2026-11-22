@@ -31,6 +31,8 @@ export function scriptDependencies(text: string): { modules: string[]; assets: s
 export async function collectBundle(path: string): Promise<Bundle> {
   if (!isAbsolute(path) || !allowed.has(extname(path).slice(1).toLowerCase())) throw new Error('Этот тип файла пока не поддерживается.');
   path = await realpath(path);
+  // The link's name proves nothing: a supported-looking symlink must point at a supported file too.
+  if (!allowed.has(extname(path).slice(1).toLowerCase())) throw new Error('Этот тип файла пока не поддерживается.');
   const root = dirname(path), entries: Bundle['entries'] = [], seen = new Set<string>();
   let total = 0;
   const visit = async (candidate: string, required = false) => {
@@ -79,6 +81,9 @@ function decodeBundle(bundle: Bundle) {
   const paths = new Set<string>();
   const decoded = bundle.entries.map(entry => {
     if (!safeRelative(entry.path) || paths.has(entry.path)) throw new Error('Недопустимый путь ресурса.');
+    // Only the kinds of file a page or document is made of, as collectBundle copies them.
+    const type = extname(entry.path).slice(1).toLowerCase();
+    if (entry.path !== bundle.main && !assetTypes.has(type)) throw new Error('Недопустимый тип ресурса.');
     paths.add(entry.path);
     const data = Buffer.from(entry.content, 'base64'); total += data.length;
     if (total > MAX_BYTES || sha(data) !== entry.sha256) throw new Error('Ошибка проверки файла.');

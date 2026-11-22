@@ -95,3 +95,14 @@ test('serves copied pages on 127.0.0.1 under a secret path only', () => fixture(
   } finally { await pages.stop(); }
   assert.equal(leases, 0);
 }));
+test('a supported-looking symlink must point at a supported file', (t) => fixture(async root => {
+  await writeFile(join(root, 'secret.key'), 'k');
+  try { await symlink(join(root, 'secret.key'), join(root, 'notes.txt')); }
+  catch (error) { if (error.code === 'EPERM') return t.skip('creating a symlink needs a privilege on Windows'); throw error; }
+  await assert.rejects(collectBundle(join(root, 'notes.txt')), /не поддерживается/);
+}));
+test('refuses bundle entries of kinds a page is not made of', () => fixture(async root => {
+  const entry = (path, text) => ({ path, content: Buffer.from(text).toString('base64'), sha256: sha(Buffer.from(text)) });
+  const bundle = { main: 'index.html', entries: [entry('index.html', '<p>'), entry('run.command', '#!/bin/sh')] };
+  await assert.rejects(saveBundle(bundle, join(root, 'out')), /типа ресурса|Недопустимый тип/);
+}));

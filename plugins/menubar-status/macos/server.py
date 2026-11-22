@@ -9,6 +9,7 @@ holds no credentials, and listens on loopback only; every request must carry
 the token created at install time.
 """
 import json
+import hmac
 import os
 import re
 import subprocess
@@ -70,7 +71,7 @@ class Handler(BaseHTTPRequestHandler):
     def authorized(self):
         url = urlsplit(self.path)
         query = parse_qs(url.query)
-        if query.get("t", [""])[0] != TOKEN:
+        if not hmac.compare_digest(query.get("t", [""])[0].encode(), TOKEN.encode()):
             self.reply(403, "{}")
             return None
         return url, query
