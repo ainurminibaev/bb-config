@@ -75,13 +75,26 @@
 сброса. Пороги — настройки `pri{Short,Long,Model}{On,Low,High,Near}`; свои пороги треда —
 `bb limit priority --short 35-85@45 --long off --model default` (`--reset` — снова общие).
 
+## Пороги по аккаунтам
+
+Настройка `accountRules` (в интерфейсе «Пороги по аккаунтам»): правила
+`<тариф или часть адреса>: <5 часов>/<неделя>` через `;`. По умолчанию
+`$200: 80/85` — на подписках за $200 (Claude Max 20x, ChatGPT Pro) работа идёт
+до 80% 5-часового и 85% недельного окна (и окна модели): экономный режим и
+проверка темпа включаются не раньше, неприоритетный тред ниже этого не ждёт
+(дальше порог растёт к сбросу как обычно). Правило только поднимает пороги;
+свои пороги треда главнее. Тариф Claude берётся из `~/.claude.json` машины
+(BB держит устаревший тариф до повторного входа), Codex — из данных BB.
+`bb limit status` пишет, какое правило применилось. Пусто — одни пороги для всех:
+`bb plugin config limit-guard set accountRules ''`.
+
 ## Выключатели
 
 - Файл `.bb/hands-off` в папке: снимки и подтягивание её не трогают.
 - Настройки: `snapshots` (`local` по умолчанию / `push-private` / `off`), `steer`,
   `onLimit` (`suggest` / `off`), пороги `shortEconomy`, `shortFinish`,
   `longEconomy`, `longFinish`, `etaEconomy`, `etaFinish`,
-  `notifyAfterMinutes`, `timeZone`. Пример:
+  `notifyAfterMinutes`, `timeZone`, `accountRules`. Пример:
   `bb plugin config limit-guard set snapshots local`.
 - Полностью: `bb plugin disable limit-guard`.
 

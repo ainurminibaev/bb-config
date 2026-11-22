@@ -79,3 +79,44 @@ test('the agent rule names who works in the folder and what to call', () => {
   const rule = isolationRule([{ id: 'thr_x', title: 'Другая задача' }]);
   assert.match(rule, /ПАПКА ЗАНЯТА.*«Другая задача» \(thr_x\).*project_isolate.*update_environment_directory.*project_land/s);
 });
+
+test('ignored work in the copy blocks removal; identical .env and node_modules do not', async () => {
+  const main = repo('ignored');
+  writeFileSync(join(main, '.gitignore'), '.env\n.local/\nnode_modules/\n'); g(main, 'commit', '-qam', 'ignore more');
+  const names = isolationNames('thr_ign001', main, join(root, 'data'));
+  assert.equal((await isolate(main, names.target, names.branch, signal, false)).ok, true);
+  execFileSync('mkdir', ['-p', join(names.target, 'node_modules/x'), join(names.target, '.local/config')]);
+  writeFileSync(join(names.target, 'node_modules/x/i.js'), 'x');
+  writeFileSync(join(names.target, '.local/config/snap.json'), '{}');
+  const kept = await land(main, names.target, names.branch, signal);
+  assert.equal(kept.state, 'uncommitted', kept.message);
+  assert.match(kept.message, /\.local\/config\/snap\.json/);
+  assert.equal(existsSync(join(names.target, '.local/config/snap.json')), true, 'nothing was removed');
+  rmSync(join(names.target, '.local'), { recursive: true });
+  const done = await land(main, names.target, names.branch, signal);
+  assert.equal(done.state, 'landed', done.message);
+  assert.equal(existsSync(names.target), false);
+});
+
+test('an empty copy stays while its thread may still work; removal keeps unmerged branches', async () => {
+  const main = repo('empty');
+  const names = isolationNames('thr_emp001', main, join(root, 'data'));
+  assert.equal((await isolate(main, names.target, names.branch, signal, false)).ok, true);
+  const stay = await land(main, names.target, names.branch, signal, false);
+  assert.equal(stay.state, 'waiting', stay.message);
+  assert.equal(existsSync(names.target), true);
+  const gone = await land(main, names.target, names.branch, signal, true);
+  assert.equal(gone.state, 'landed', gone.message);
+  assert.equal(g(main, 'branch', '--list', names.branch).trim(), '', 'a merged branch is deleted');
+});
+
+test('a git failure changes nothing', async () => {
+  const main = repo('gitfail');
+  const names = isolationNames('thr_gf0001', main, join(root, 'data'));
+  assert.equal((await isolate(main, names.target, names.branch, signal, false)).ok, true);
+  writeFileSync(join(names.target, 'c.txt'), 'work\n'); g(names.target, 'add', 'c.txt'); g(names.target, 'commit', '-qm', 'work');
+  const r = await land(main, names.target, 'no-such-branch', signal);
+  assert.equal(r.state, 'error', r.message);
+  assert.equal(existsSync(names.target), true);
+  assert.notEqual(g(main, 'branch', '--list', names.branch).trim(), '', 'the branch with commits is kept');
+});

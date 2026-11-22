@@ -81,12 +81,23 @@ thread (and its subthreads) wait while a watched window is above a threshold
 that rises from right-after-reset to near-reset; a fully used window holds until
 its reset. Change a thread's mode only when the user asks.
 
+## Per-account thresholds
+
+Setting `accountRules`: `<plan or part of the e-mail>: <5-hour>/<weekly>`, several
+separated by `;`. Default `$200: 80/85`: on $200 subscriptions (Claude Max 20x,
+ChatGPT Pro) economy and the pace check start no earlier than 80% of the 5-hour
+window and 85% of the weekly and model windows, and low-priority threads do not
+wait below that. Rules only raise thresholds; a thread's own thresholds win.
+The Claude plan comes from the machine's `~/.claude.json` (BB's label can be
+stale). `bb limit status` names the rule that applied. Empty value — one set of
+thresholds for every account.
+
 ## Switches
 
 - `.bb/hands-off` in a folder: no snapshots and no pulls there.
 - `bb plugin config limit-guard set snapshots local|push-private|off` (local by default).
 - Also `steer`, `onLimit`, the six threshold settings, `notifyAfterMinutes`
-  and `timeZone`.
+  `timeZone` and `accountRules`.
 - `bb plugin disable limit-guard` turns everything off.
 
 Never hand a thread off, delete snapshot refs or change these settings on the

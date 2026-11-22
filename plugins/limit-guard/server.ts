@@ -8,6 +8,7 @@ import {
   type Assessment, type Mode, type QuotaWindow, type RetryState, type StuckThread, type Thresholds,
 } from './logic.ts';
 import { snapshotMessage, snapshotRef } from './snapshot-logic.ts';
+import { accountPlan, claudeProfilePlan, DEFAULT_ACCOUNT_RULES, parseAccountRules, policiesForAccount, ruleFor, thresholdsFor, type AccountInfo, type AccountRule } from './account-logic.ts';
 import {
   decideHold, DEFAULT_POLICIES, holdReason, mergePolicies, MODE_LABEL, nextCheckAt, normalizePolicy, parseMode, parsePolicySpec, POLICY_LABEL, priorityStatus,
   type CustomPolicies, type HoldDecision, type PolicyKey, type Policies, type PriorityMode,
@@ -34,6 +35,8 @@ interface SnapshotRecord {
 export interface Status {
   threadId: string; providerId: string; model: string | null; hostId: string | null; hostName: string | null;
   fetchedAt: string | null; thresholds: Thresholds; assessment: Assessment;
+  /** The account the numbers belong to, and the per-account rule that applies to it. */
+  account?: { plan: string | null; rule: AccountRule | null } | null;
 }
 
 export default function plugin(bb: BbPluginApi) {
@@ -64,6 +67,12 @@ export default function plugin(bb: BbPluginApi) {
       type: 'number', label: 'Уведомлять, если ждать дольше, мин', default: 60,
       description: 'Короткую паузу BB переждёт сам (provider-retry). Если автоповтора нет, уведомление приходит всегда.',
     },
+    accountRules: {
+      type: 'string', label: 'Пороги по аккаунтам', default: DEFAULT_ACCOUNT_RULES,
+      description: 'Работа идёт до N% окна на аккаунтах с этим тарифом или адресом: «<тариф или часть адреса>: <5 часов>/<неделя>», несколько — через «;». '
+        + 'По умолчанию «$200: 80/85» — подписки за $200 (Claude Max 20x, ChatGPT Pro) работают до 80% 5-часового и 85% недельного окна: '
+        + 'экономный режим и темп не раньше этого, неприоритетные треды не ждут ниже этого. Пусто — одни пороги для всех.',
+    },
     timeZone: { type: 'string', label: 'Часовой пояс для времени в уведомлениях', default: '', description: 'Например Europe/Moscow. Пусто — пояс сервера BB.' },
     priShortOn: { type: 'boolean', label: 'Неприоритетные треды: учитывать 5-часовое окно', default: true },
     priShortLow: { type: 'number', label: '5-часовое окно: порог сразу после сброса, %', default: 40 },
@@ -79,12 +88,16 @@ export default function plugin(bb: BbPluginApi) {
     priModelNear: { type: 'number', label: 'Окно модели (например, Fable): «перед сбросом» — за сколько минут', default: 720 },
   });
   let thresholds: Thresholds = DEFAULT_THRESHOLDS;
+  let accountRules: AccountRule[] = parseAccountRules(DEFAULT_ACCOUNT_RULES).rules;
   let policies: Policies = DEFAULT_POLICIES;
   let cfg = { steer: true, snapshots: 'local', onLimit: 'suggest', notifyAfterMinutes: 60 };
   const load = (v: Awaited<ReturnType<typeof settings.get>>) => {
     thresholds = normalizeThresholds({ shortEconomy: v.shortEconomy, shortFinish: v.shortFinish, longEconomy: v.longEconomy, longFinish: v.longFinish, etaEconomy: v.etaEconomy, etaFinish: v.etaFinish });
     cfg = { steer: v.steer, snapshots: v.snapshots, onLimit: v.onLimit, notifyAfterMinutes: Number.isFinite(v.notifyAfterMinutes) ? Math.max(0, v.notifyAfterMinutes) : 60 };
     setTimeZone(v.timeZone);
+    const parsed = parseAccountRules(typeof v.accountRules === 'string' ? v.accountRules : DEFAULT_ACCOUNT_RULES);
+    accountRules = parsed.rules;
+    if (parsed.errors.length) bb.log.warn(`Limit Guard: непонятные правила аккаунтов пропущены: ${parsed.errors.join('; ')}`);
     policies = {
       short: normalizePolicy({ enabled: v.priShortOn, low: v.priShortLow, high: v.priShortHigh, nearMinutes: v.priShortNear }, DEFAULT_POLICIES.short),
       long: normalizePolicy({ enabled: v.priLongOn, low: v.priLongLow, high: v.priLongHigh, nearMinutes: v.priLongNear }, DEFAULT_POLICIES.long),
@@ -145,6 +158,42 @@ export default function plugin(bb: BbPluginApi) {
     });
     return { windows, error: null };
   }
+  // ---------- Account of a thread's numbers: plan and e-mail, for the per-account rule ----------
+  const profiles = new Map<string, { at: number; plan: string | null; email: string | null }>();
+  async function claudeProfile(hostId: string): Promise<{ plan: string | null; email: string | null }> {
+    const saved = profiles.get(hostId);
+    if (saved && Date.now() - saved.at < 10 * 60_000) return saved;
+    try {
+      const p = await host.call('claudeProfile', null, { hostId, timeoutMs: 4_000 });
+      const value = { at: Date.now(), plan: claudeProfilePlan(p.organizationType, p.rateLimitTier), email: p.email };
+      profiles.set(hostId, value);
+      return value;
+    } catch {
+      // An older plugin build on the machine, or it is offline: BB's own label is the fallback.
+      const value = { at: Date.now(), plan: saved?.plan ?? null, email: saved?.email ?? null };
+      profiles.set(hostId, value);
+      return value;
+    }
+  }
+  async function accountOf(usage: HostUsage, hostId: string, providerId: string): Promise<AccountInfo & { rule: AccountRule | null }> {
+    const entry = record(usage.raw[providerId]);
+    const email = text(entry.accountEmail);
+    let profilePlan: string | null = null;
+    if (providerId === 'claude-code' && accountRules.length) {
+      const p = await claudeProfile(hostId);
+      // The profile file may belong to another sign-in than the one BB reads: use it only when they agree.
+      if (p.plan && (!email || !p.email || p.email.toLowerCase() === email.toLowerCase())) profilePlan = p.plan;
+    }
+    const plan = accountPlan(providerId, text(entry.planLabel), profilePlan);
+    return { email, plan, rule: ruleFor(accountRules, { email, plan }) };
+  }
+  async function thresholdsAt(usage: HostUsage, hostId: string, providerId: string): Promise<Thresholds> {
+    return accountRules.length ? thresholdsFor(thresholds, (await accountOf(usage, hostId, providerId)).rule) : thresholds;
+  }
+  async function policiesAt(usage: HostUsage | null, hostId: string | null, providerId: string): Promise<Policies> {
+    if (!usage || !hostId || !accountRules.length) return policies;
+    return policiesForAccount(policies, (await accountOf(usage, hostId, providerId)).rule);
+  }
   async function threadModel(threadId: string): Promise<string | null> {
     try {
       const events = await bb.sdk.threads.events.list({ threadId, types: ['client/turn/requested'], order: 'desc', limit: '1' });
@@ -179,9 +228,12 @@ export default function plugin(bb: BbPluginApi) {
     base.fetchedAt = usage.fetchedAt;
     const { windows, error } = windowsOf(usage, environment.hostId, thread.providerId);
     if (error) return unknown(error);
-    return { ...base, assessment: assess(windows, base.model, thresholds, await poolReason()) };
+    const account = await accountOf(usage, environment.hostId, thread.providerId);
+    const t = thresholdsFor(thresholds, account.rule);
+    return { ...base, thresholds: t, account: { plan: account.plan, rule: account.rule }, assessment: assess(windows, base.model, t, await poolReason()) };
   }
-  const describe = (s: Status) => render(s.assessment, Date.now(), { provider: s.providerId, model: s.model, host: s.hostName, fetchedAt: s.fetchedAt });
+  const describe = (s: Status) => render(s.assessment, Date.now(), { provider: s.providerId, model: s.model, host: s.hostName, fetchedAt: s.fetchedAt })
+    + (s.account?.rule ? `\nТариф ${s.account.plan ?? 'аккаунта'}: работа идёт до ${s.account.rule.short}% 5-часового и ${s.account.rule.long}% недельного окна (правило «${s.account.rule.match}» в настройке «Пороги по аккаунтам»).` : '');
 
   // ---------- Snapshots of unfinished work ----------
   const lastSnapshotAt = new Map<string, number>();
@@ -250,7 +302,7 @@ export default function plugin(bb: BbPluginApi) {
       const u = usage.get(row.environmentHostId!);
       if (!u) continue;
       const { windows } = windowsOf(u, row.environmentHostId!, row.providerId);
-      const a = assess(windows, await threadModel(row.id), thresholds);
+      const a = assess(windows, await threadModel(row.id), await thresholdsAt(u, row.environmentHostId!, row.providerId));
       if (!a.driver || a.mode === 'unknown' || a.mode === 'normal') continue;
       // The reset time jitters by seconds between reads: round it so one window stays one key.
       const resetKey = a.driver.resetsAt ? Math.round(Date.parse(a.driver.resetsAt) / 600_000) : '';
@@ -261,8 +313,9 @@ export default function plugin(bb: BbPluginApi) {
       if (lowPriority.has(row.id)) { await markSent(row.id, { key, mode: a.mode, at: Date.now() }); continue; }
       if (!cfg.steer) { await markSent(row.id, { key, mode: a.mode, at: Date.now() }); continue; }
       try {
-        // steer-if-active joins the running turn; our dispatch hook refuses it if the turn has just ended.
-        await bb.sdk.threads.send({ threadId: row.id, mode: 'steer-if-active', input: [{ type: 'text', text: thresholdMessage(a, Date.now(), row.providerId), mentions: [] }] });
+        // Strict steer: BB refuses it unless a turn is running. steer-if-active would start a new
+        // turn for a thread in error (stopped by the limit) — that happened on 22.11.2026 (R12).
+        await bb.sdk.threads.send({ threadId: row.id, mode: 'steer', input: [{ type: 'text', text: thresholdMessage(a, Date.now(), row.providerId), mentions: [] }] });
         await markSent(row.id, { key, mode: a.mode, at: Date.now() });
       } catch (error) { bb.log.warn(`Limit Guard: could not message ${row.id}: ${message(error)}`); }
     }
@@ -297,15 +350,20 @@ export default function plugin(bb: BbPluginApi) {
   async function quickUsage(hostId: string): Promise<HostUsage | null> {
     const saved = cache.get(hostId);
     if (saved && Date.now() - saved.at < 10 * 60_000) return saved;
-    return Promise.race([hostUsage(hostId, true).catch(() => null), new Promise<null>(resolve => setTimeout(() => resolve(null), 5_000))]);
+    const fresh = await Promise.race([hostUsage(hostId, true).catch(() => null), new Promise<null>(resolve => setTimeout(() => resolve(null), 5_000))]);
+    // BB slow or offline: the last numbers up to an hour old beat "no data", which lets low-priority work through (R11).
+    if (fresh) return fresh;
+    const last = cache.get(hostId);
+    return last && Date.now() - last.at < 60 * 60_000 ? last : null;
   }
-  async function priorityFor(threadId: string, parentHint?: string | null, wasHeld = false): Promise<{ mode: PriorityMode; from: string | null; custom: CustomPolicies | null; decision: HoldDecision }> {
+  async function priorityFor(threadId: string, parentHint?: string | null, wasHeld = false): Promise<{ mode: PriorityMode; from: string | null; custom: CustomPolicies | null; base: Policies; decision: HoldDecision }> {
     const { mode, from, custom } = await effectiveMode(threadId, parentHint);
-    if (mode === 'normal') return { mode, from, custom, decision: { hold: false, unknown: false, closest: null } };
+    if (mode === 'normal') return { mode, from, custom, base: policies, decision: { hold: false, unknown: false, closest: null } };
     const row = await threadRow(threadId);
     const usage = row?.environmentHostId ? await quickUsage(row.environmentHostId) : null;
     const windows = usage && row ? windowsOf(usage, row.environmentHostId!, row.providerId) : null;
-    return { mode, from, custom, decision: decideHold(mode, mergePolicies(policies, custom), windows && !windows.error ? windows.windows : null, await threadModel(threadId), Date.now(), wasHeld) };
+    const base = await policiesAt(usage, row?.environmentHostId ?? null, row?.providerId ?? '');
+    return { mode, from, custom, base, decision: decideHold(mode, mergePolicies(base, custom), windows && !windows.error ? windows.windows : null, await threadModel(threadId), Date.now(), wasHeld) };
   }
   /** `custom` undefined keeps the thread's own thresholds, null drops them, an object replaces the windows it names. */
   async function setMode(threadId: string, mode: PriorityMode, custom?: CustomPolicies | null) {
@@ -324,9 +382,9 @@ export default function plugin(bb: BbPluginApi) {
     await bb.experimental_hooks.recheck('message.dispatch').catch(() => undefined);
   }
 
-  const rulesText = (mode: PriorityMode, custom: CustomPolicies | null = null) => {
+  const rulesText = (mode: PriorityMode, custom: CustomPolicies | null = null, base: Policies = policies) => {
     if (mode === 'normal') return [];
-    const merged = mergePolicies(policies, custom);
+    const merged = mergePolicies(base, custom);
     return (['short', 'long', 'model'] as const).map(k => {
       const p = mode === 'background' ? { ...merged[k], low: Math.max(5, merged[k].low - 20), high: Math.max(5, merged[k].high - 20) } : merged[k];
       return `${POLICY_LABEL[k]}: ${p.enabled ? `${p.low}% → ${p.high}% за ${p.nearMinutes >= 60 ? `${Math.round(p.nearMinutes / 60)} ч` : `${p.nearMinutes} мин`} до сброса` : 'не учитывается'}${custom?.[k] ? ' (свои для треда)' : ''}`;
@@ -343,9 +401,9 @@ export default function plugin(bb: BbPluginApi) {
     return {
       mode: p.mode, from: p.from, holding: waiting, unknown: !d.hold && d.unknown, text,
       window: d.hold ? d.label : d.closest?.label ?? null, used: d.hold ? d.used : d.closest?.used ?? null,
-      threshold: d.hold ? d.threshold : d.closest?.threshold ?? null, rules: rulesText(p.mode, p.custom),
+      threshold: d.hold ? d.threshold : d.closest?.threshold ?? null, rules: rulesText(p.mode, p.custom, p.base),
       policies: (['short', 'long', 'model'] as const).map(k => {
-        const m = mergePolicies(policies, p.custom)[k];
+        const m = mergePolicies(p.base, p.custom)[k];
         return { key: k, label: POLICY_LABEL[k], enabled: m.enabled, low: m.low, high: m.high, nearMinutes: m.nearMinutes, custom: Boolean(p.custom?.[k]) };
       }),
     };
@@ -383,7 +441,7 @@ export default function plugin(bb: BbPluginApi) {
   async function scheduleResume(threadId: string, note: string | null): Promise<string> {
     await resumesReady;
     const s = await status(threadId, true);
-    const pressing = resumeWindow(s.assessment.windows, s.model, thresholds, Date.now());
+    const pressing = resumeWindow(s.assessment.windows, s.model, s.thresholds, Date.now());
     const reset = pressing?.resetsAt ? Date.parse(pressing.resetsAt) : Number.NaN;
     // No window is pressing: continue in a minute; if the turn hits the limit, BB's own retry waits for the reset.
     const d = pressing ?? { label: 'лимит сейчас не давит' };
@@ -420,7 +478,10 @@ export default function plugin(bb: BbPluginApi) {
     const resume = ctx.queuedMessages.map(m => resumes.get((m as { id: string }).id)).find(Boolean);
     if (resume && Date.now() < resume.at) return { action: 'wait', reason: `Продолжение после сброса «${resume.window}» в ${clock(resume.at)}`, sendAt: resume.at };
     // A limit note must never start a turn of its own.
-    if (!resume && ctx.originPluginId === bb.pluginId && ctx.attempt === 'start-turn') return { action: 'reject', message: 'limit-guard: тред уже не работает — сообщение о лимите не нужно' };
+    // A batch of rows reports originPluginId "mixed": look at the rows themselves too.
+    const rows = ctx.queuedMessages as { originPluginId?: string | null }[];
+    const ours = ctx.originPluginId === bb.pluginId || (rows.length > 0 && rows.every(m => m.originPluginId === bb.pluginId));
+    if (!resume && ours && ctx.attempt === 'start-turn') return { action: 'reject', message: 'limit-guard: тред уже не работает — сообщение о лимите не нужно' };
     // A steer into a running turn is the user talking to work already under way.
     if (ctx.attempt !== 'start-turn') return { action: 'proceed' };
     try {
@@ -431,6 +492,7 @@ export default function plugin(bb: BbPluginApi) {
         unknownTries.set(ctx.thread.id, tries);
         bb.log.info(`Limit Guard: no limit data for ${ctx.thread.id} (try ${tries})`);
         if (tries <= 2) return { action: 'wait', reason: 'Проверяю лимит перед запуском неприоритетного треда', sendAt: Date.now() + 60_000 };
+        unknownTries.delete(ctx.thread.id); // let this one through; the next message waits again (R9)
       } else unknownTries.delete(ctx.thread.id);
       if (!decision.hold) { if (held.delete(ctx.thread.id)) bb.realtime.publish('priority', { threadId: ctx.thread.id }); return { action: 'proceed' }; }
       if (!held.has(ctx.thread.id)) { held.add(ctx.thread.id); bb.realtime.publish('priority', { threadId: ctx.thread.id }); }
@@ -443,18 +505,19 @@ export default function plugin(bb: BbPluginApi) {
 
   /** A running low-priority turn above its threshold is asked once to finish its step and stop. */
   async function notePriority(row: ThreadRow, usage: Map<string, HostUsage>) {
-    const { mode } = await effectiveMode(row.id);
+    const { mode, custom } = await effectiveMode(row.id);
     if (mode === 'normal' || !cfg.steer) return;
     const u = usage.get(row.environmentHostId!);
     if (!u) return;
     const { windows, error } = windowsOf(u, row.environmentHostId!, row.providerId);
     if (error) return;
-    const d = decideHold(mode, policies, windows, await threadModel(row.id), Date.now());
+    // The same rules as the dispatch hook: account rule, then the thread's own thresholds.
+    const d = decideHold(mode, mergePolicies(await policiesAt(u, row.environmentHostId, row.providerId), custom), windows, await threadModel(row.id), Date.now());
     if (!d.hold) return;
     const key = `prio|${d.label}|${d.resetsAt ? Math.round(d.resetsAt / 600_000) : ''}`;
     if ((await sentFor(row.id)).some(item => item.key === key)) return;
     try {
-      await bb.sdk.threads.send({ threadId: row.id, mode: 'steer-if-active', input: [{ type: 'text', text: `[limit-guard] ${holdReason(mode, d)} Доведи текущий шаг до рабочего состояния, коротко напиши «что сделано / что дальше» и остановись: следующие задания подождут. Если по задаче осталась работа — вызови limit_resume_after_reset, и тред сам продолжит.`, mentions: [] }] });
+      await bb.sdk.threads.send({ threadId: row.id, mode: 'steer', input: [{ type: 'text', text: `[limit-guard] ${holdReason(mode, d)} Доведи текущий шаг до рабочего состояния, коротко напиши «что сделано / что дальше» и остановись: следующие задания подождут. Если по задаче осталась работа — вызови limit_resume_after_reset, и тред сам продолжит.`, mentions: [] }] });
       await markSent(row.id, { key, mode: 'finish', at: Date.now() });
     } catch (error) { bb.log.warn(`Limit Guard: could not message ${row.id}: ${message(error)}`); }
   }
@@ -499,9 +562,10 @@ export default function plugin(bb: BbPluginApi) {
     const other = [...SUPPORTED].find(id => id !== providerId);
     if (!other) return null;
     try {
-      const { windows, error } = windowsOf(await hostUsage(hostId, false), hostId, other);
+      const u = await hostUsage(hostId, false);
+      const { windows, error } = windowsOf(u, hostId, other);
       if (error) return { providerId: other, mode: 'unknown', percent: null };
-      const a = assess(windows.filter(w => w.kind !== 'model'), null, thresholds);
+      const a = assess(windows.filter(w => w.kind !== 'model'), null, await thresholdsAt(u, hostId, other));
       return { providerId: other, mode: a.mode, percent: a.driver?.usedPercent ?? null };
     } catch { return { providerId: other, mode: 'unknown', percent: null }; }
   }
@@ -650,8 +714,8 @@ export default function plugin(bb: BbPluginApi) {
           if (!mode) throw new PluginCliError(`неизвестный режим «${input.positionals.mode}»`, { code: 'bad_mode', hint: 'Режимы: normal, low, background.' });
           if (input.positionals.mode !== undefined || custom !== undefined || drop.length) await setMode(threadId, mode, custom);
           const p = await priorityFor(threadId);
-          if (input.options.json) return { exitCode: 0, stdout: JSON.stringify({ threadId, ...p, policies }, null, 2) };
-          const rules = rulesText(p.mode, p.custom).map(line => `  ${line}`);
+          if (input.options.json) return { exitCode: 0, stdout: JSON.stringify({ threadId, ...p, policies: p.base }, null, 2) };
+          const rules = rulesText(p.mode, p.custom, p.base).map(line => `  ${line}`);
           return { exitCode: 0, stdout: [priorityStatus(p.mode, p.decision, p.from), ...(p.mode === 'normal' ? [] : [`Пороги (${MODE_LABEL[p.mode]}${p.mode === 'background' ? ', на 20 ниже' : ''}):`, ...rules])].join('\n') };
         },
       }),

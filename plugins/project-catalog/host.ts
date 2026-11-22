@@ -260,25 +260,68 @@ export async function isolate(main: string, target: string, branch: string, sign
   return { ok: true, path: target, branch, base, message: 'копия создана', copied, setup };
 }
 
+/** Ignored folders that a build or install recreates: losing them with the copy costs nothing. */
+const REGENERABLE = new Set(['node_modules', '.venv', 'venv', '__pycache__', 'dist', 'build', '.next', '.turbo', '.cache', 'target', '.pytest_cache', '.mypy_cache']);
+
+/**
+ * Ignored files in the copy that removing it would lose: not regenerable and not
+ * byte-identical to the same file in the main folder (`.env` copied by
+ * `.worktreeinclude` is identical and safe). Null when git could not say.
+ */
+export async function ignoredWork(main: string, copy: string, signal: AbortSignal): Promise<string[] | null> {
+  const listed = await run(copy, ['status', '--porcelain=v1', '-z', '--ignored=traditional', '--untracked-files=all'], 60_000, signal);
+  if (!listed.ok) return null;
+  const lost: string[] = [];
+  const hash = async (path: string) => { try { return createHash('sha256').update(await readFile(path)).digest('hex'); } catch { return null; } };
+  for (const entry of listed.out.split('\0')) {
+    if (!entry.startsWith('!! ')) continue;
+    const rel = entry.slice(3).replace(/\/$/, '');
+    if (rel.split('/').some(part => REGENERABLE.has(part))) continue;
+    const mine = await hash(join(copy, rel));
+    if (mine === null) { lost.push(rel); continue; } // a folder git did not expand, or unreadable: keep it
+    if (mine !== await hash(join(main, rel))) lost.push(rel);
+    if (lost.length >= 50) break;
+  }
+  return lost;
+}
+
 /**
  * Bring a copy's commits back into the main folder's branch, then remove the copy.
- * Only when the copy has no uncommitted work and the main folder is clean; a fast-forward
- * when possible, otherwise a rebase of the copy's own branch. Conflicts change nothing.
+ * Only when the copy has no uncommitted work (ignored files included) and the main
+ * folder is clean; a fast-forward when possible, otherwise a rebase of the copy's own
+ * branch. Conflicts change nothing; any git error changes nothing either.
+ * `removeEmpty` false keeps a copy without new commits: its thread may still work there.
  */
-export async function land(main: string, copy: string, branch: string, signal: AbortSignal): Promise<LandResult> {
+export async function land(main: string, copy: string, branch: string, signal: AbortSignal, removeEmpty = true): Promise<LandResult> {
   const out = (state: LandResult['state'], message: string, commits = 0): LandResult => ({ state, message, commits });
   try { await stat(copy); } catch { return out('gone', 'копии уже нет'); }
-  if ((await git(copy, ['status', '--porcelain'], signal))?.trim()) return out('uncommitted', 'в копии есть незакоммиченные правки — сначала закоммитьте законченное');
+  const dirty = await git(copy, ['status', '--porcelain'], signal);
+  if (dirty === null) return out('error', 'git не ответил в копии — ничего не трогаю');
+  if (dirty.trim()) return out('uncommitted', 'в копии есть незакоммиченные правки — сначала закоммитьте законченное');
   const mainBranch = (await git(main, ['branch', '--show-current'], signal))?.trim();
   if (!mainBranch) return out('waiting', 'основная папка не на ветке (detached) — вливать некуда');
-  const mainHead = (await git(main, ['rev-parse', 'HEAD'], signal))?.trim() ?? '';
-  const ahead = Number((await git(copy, ['rev-list', '--count', `${mainHead}..${branch}`], signal))?.trim() ?? '0');
-  const remove = async () => {
-    await run(main, ['worktree', 'remove', copy], 60_000, signal);
-    await run(main, ['branch', '-D', branch], 30_000, signal);
+  const mainHead = (await git(main, ['rev-parse', 'HEAD'], signal))?.trim();
+  if (!mainHead) return out('error', 'не удалось прочитать HEAD основной папки — ничего не трогаю');
+  const count = (await git(copy, ['rev-list', '--count', `${mainHead}..${branch}`], signal))?.trim();
+  const ahead = count && /^\d+$/.test(count) ? Number(count) : NaN;
+  if (!Number.isFinite(ahead)) return out('error', `не удалось сравнить ветку ${branch} с основной папкой — ничего не трогаю`);
+  if (ahead === 0 && !removeEmpty) return out('waiting', 'новых коммитов нет — копия остаётся, пока тред не в архиве');
+  const lost = await ignoredWork(main, copy, signal);
+  if (lost === null) return out('error', 'git не перечислил игнорируемые файлы копии — ничего не трогаю');
+  if (lost.length) return out('uncommitted', `в копии есть игнорируемые файлы, которых нет в основной папке (${lost.slice(0, 10).join(', ')}${lost.length > 10 ? ` и ещё ${lost.length - 10}` : ''}) — перенесите или удалите их, копия оставлена`);
+  /** Remove the copy, then the branch only if it is fully in the main branch (`-d`, never `-D`). */
+  const remove = async (): Promise<string> => {
+    const removed = await run(main, ['worktree', 'remove', copy], 60_000, signal);
+    if (!removed.ok) return `; копию убрать не удалось: ${removed.err}`;
+    const merged = await run(main, ['merge-base', '--is-ancestor', branch, 'HEAD'], 30_000, signal);
+    if (!merged.ok) return `; ветка ${branch} оставлена: её коммитов нет в основной ветке`;
+    const deleted = await run(main, ['branch', '-d', branch], 30_000, signal);
+    return deleted.ok ? '' : `; ветка ${branch} оставлена: ${deleted.err}`;
   };
-  if (ahead === 0) { await remove(); return out('landed', 'новых коммитов нет — копия убрана'); }
-  if ((await git(main, ['status', '--porcelain', '--untracked-files=no'], signal))?.trim()) return out('waiting', 'в основной папке есть незакоммиченные правки — волью, когда она станет чистой');
+  if (ahead === 0) return out('landed', `новых коммитов нет — копия убрана${await remove()}`);
+  const mainDirty = await git(main, ['status', '--porcelain', '--untracked-files=no'], signal);
+  if (mainDirty === null) return out('error', 'git не ответил в основной папке — ничего не трогаю');
+  if (mainDirty.trim()) return out('waiting', 'в основной папке есть незакоммиченные правки — волью, когда она станет чистой');
   const isAncestor = (await run(main, ['merge-base', '--is-ancestor', mainHead, branch], 30_000, signal)).ok;
   if (!isAncestor) {
     const rebased = await run(copy, ['rebase', '--quiet', mainHead], 120_000, signal);
@@ -289,8 +332,7 @@ export async function land(main: string, copy: string, branch: string, signal: A
   }
   const merged = await run(main, ['merge', '--ff-only', '--quiet', branch], 60_000, signal);
   if (!merged.ok) return out('waiting', `основная папка не приняла коммиты: ${merged.err}`);
-  await remove();
-  return out('landed', `влито коммитов: ${ahead} в ${mainBranch}; копия убрана`, ahead);
+  return out('landed', `влито коммитов: ${ahead} в ${mainBranch}; копия убрана${await remove()}`, ahead);
 }
 
 export default experimental_defineHostEntry({
@@ -326,8 +368,8 @@ export default experimental_defineHostEntry({
       try { const names = isolationNames(threadId, path, ctx.experimental_paths.dataDir); return await isolate(path, names.target, names.branch, ctx.signal); }
       catch (error) { return { ok: false, path: null, branch: null, base: null, message: String((error as Error).message).slice(0, 300), copied: 0, setup: null }; }
     },
-    land: async ({ path, copy, branch }, ctx): Promise<LandResult> => {
-      try { return await land(path, copy, branch, ctx.signal); }
+    land: async ({ path, copy, branch, removeEmpty }, ctx): Promise<LandResult> => {
+      try { return await land(path, copy, branch, ctx.signal, removeEmpty ?? true); }
       catch (error) { return { state: 'error', message: String((error as Error).message).slice(0, 300), commits: 0 }; }
     },
     pull: async ({ path, apply }, ctx): Promise<PullResult> => {

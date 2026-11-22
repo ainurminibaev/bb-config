@@ -1585,6 +1585,18 @@ README плагина. Карточки хранятся в хранилище �
   (`local` по умолчанию / `push-private` / `off`), `steer`, `onLimit`, пороги,
   `bb plugin disable limit-guard`.
 
+- **Пороги по аккаунтам (0.9.0, 22.11.2026).** Настройка `accountRules`,
+  по умолчанию `$200: 80/85`: на подписках за $200 (Claude Max 20x, ChatGPT
+  Pro) экономный режим и темп — не раньше 80% 5-часового и 85% недельного окна,
+  неприоритетные треды ниже этого не ждут; остальные аккаунты как раньше.
+  Повод: неприоритетный тред простоял два часа на 57–59% при свободном лимите
+  $200. Тариф Claude — из `~/.claude.json` машины (`organizationType`,
+  `organizationRateLimitTier`, хост-вызов `claudeProfile`; BB держит старый
+  тариф до повторного входа), Codex — `planLabel` из `system.usageLimits`.
+  Профиль учитывается, только если его адрес совпадает с `accountEmail` BB;
+  старая сборка на машине или сбой — берётся тариф BB. Тест: `account.test.ts`.
+  Видно в `bb limit status` (строка «Тариф …: работа идёт до …»).
+
 Исходники, тесты и навык: `plugins/limit-guard/`. Установка внесена в
 `config/plugins.json`, восстановление — `python3 scripts/restore.py --plugins
 --apply` или `npm ci && bb plugin build . && bb plugin install . --yes` в
@@ -2302,10 +2314,21 @@ git:https://github.com/ainurminibaev/bb-plugin-voice-mode.git@v0.2.5 --yes`,
 | `[thread transfer]` | `thread-transfer` | приватный снимок |
 | `[project logos]` | `project-logo` (плагин Project Logo) | приватный снимок |
 
-`[Tru project storage]` и `[codex delegation]` остаются короткими личными
+`[Tru project storage]`, `[codex delegation]` и `[subthreads]` остаются короткими личными
 блоками; строка про Chrome удалена (агент по ней ничего сделать не может —
 общее подключение Chrome обеспечивает служба chrome-devtools-shared).
 Ревью 20.11.2026: 4077 → 1909 символов.
+
+`[subthreads]` (22.11.2026, слова владельца): модель подтреда у координатора
+Fable — `claude-opus-5-5` → `gpt-6.2-astra` low → `gpt-6.2-sol` medium
+(идентификаторы сверены с `bb provider models`); длинная работа — в подтред;
+свой разовый подтред архивирует создатель, чужие треды не трогает;
+незаконченные подтреды — списком владельцу; публичная ветка, выпуск и
+сообщение человеку — после «да» владельца; четыре ступени выбора инструмента
+(формулировка из AGENTS.md ai_agents). Текст — в приватном снимке
+`.local/config/plugins/custom-instructions.json`, восстановление —
+`scripts/restore.py --apply`. Проверено новыми тредами Claude и Codex.
+Всего в настройке 3379 из 4096 символов.
 
 Project Logo 0.2.2: навык `project-logo` раньше не попадал к агентам —
 `bb.agents.configure` возвращал `skills: []`. Теперь навык доступен во всех

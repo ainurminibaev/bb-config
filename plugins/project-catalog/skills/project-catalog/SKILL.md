@@ -153,6 +153,8 @@ When the session instructions say «ПАПКА ЗАНЯТА» and the task chang
 call `project_isolate` first, then `update_environment_directory` with the path
 it returns, and end the turn. Work and commit in the copy. At the end call
 `project_land`; if the main folder is busy or has edits, the plugin lands the
-commits later by itself. Conflicts are reported and change nothing. A
+commits later by itself. Until `project_land` (or archiving) the copy is never
+landed or removed. Ignored files the main folder lacks (for example `.local/`)
+keep the copy: move or delete them first. Conflicts are reported and change nothing. A
 read-only task needs no copy. Settings: `bb plugin config project-catalog set
 autoPull auto|check|off`, `cleanupMissingWorktrees true|false`.

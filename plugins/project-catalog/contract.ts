@@ -58,7 +58,7 @@ export const hostContract = defineRpcContract({
     output: z.object({ ok: z.boolean(), path: z.string().nullable(), branch: z.string().nullable(), base: z.string().nullable(), message: z.string(), copied: z.number(), setup: z.string().nullable() }),
   },
   land: {
-    input: z.object({ path: z.string().min(1), copy: z.string().min(1), branch: z.string().min(1) }),
+    input: z.object({ path: z.string().min(1), copy: z.string().min(1), branch: z.string().min(1), removeEmpty: z.boolean().optional() }),
     output: z.object({ state: z.enum(['landed', 'waiting', 'uncommitted', 'conflict', 'gone', 'error']), message: z.string(), commits: z.number() }),
   },
   // Writes into the project (fast-forward only), so never retried automatically.

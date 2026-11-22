@@ -463,14 +463,19 @@ export default function projectCatalog(bb: BbPluginApi) {
       'В конце работы закоммить законченное и вызови project_land.'].join('\n');
   }
   const landing = new Set<string>();
-  async function tryLand(record: Isolation, reason: string): Promise<LandResult> {
+  /** `removeEmpty`: a copy without new commits goes only when its thread asked or is archived. */
+  async function tryLand(record: Isolation, reason: string, removeEmpty: boolean): Promise<LandResult> {
     if (landing.has(record.threadId)) return { state: 'waiting', message: 'вливание уже идёт', commits: 0 };
     landing.add(record.threadId);
     try {
-      const busy = (await neighbours(record.threadId, record.hostId, record.main).catch(() => [])).filter(n => n.active);
-      const result: LandResult = busy.length
+      // Unknown neighbours mean "do not touch": a failed thread list must not merge under a running thread.
+      let busy: Awaited<ReturnType<typeof neighbours>> | null = null;
+      try { busy = (await neighbours(record.threadId, record.hostId, record.main)).filter(n => n.active); } catch { busy = null; }
+      const result: LandResult = busy === null
+        ? { state: 'waiting', message: 'не удалось узнать, кто работает в основной папке — волью позже', commits: 0 }
+        : busy.length
         ? { state: 'waiting', message: `в основной папке сейчас работает ${busy.map(n => `«${n.title}»`).join(', ')} — волью, когда она освободится`, commits: 0 }
-        : await host.call('land', { path: record.main, copy: record.copy, branch: record.branch }, { hostId: record.hostId, timeoutMs: 300_000 });
+        : await host.call('land', { path: record.main, copy: record.copy, branch: record.branch, removeEmpty }, { hostId: record.hostId, timeoutMs: 300_000 });
       if (result.state === 'landed' || result.state === 'gone') {
         await bb.storage.kv.delete(`iso:${record.threadId}`);
         if (result.state === 'landed') {
@@ -485,15 +490,23 @@ export default function projectCatalog(bb: BbPluginApi) {
       return result;
     } finally { landing.delete(record.threadId); }
   }
-  /** Land every copy whose thread is not running; called when threads go idle and every 30 minutes. */
+  /**
+   * Land copies whose work is finished: the thread called project_land, or it is
+   * archived or gone. An idle thread between turns is not finished — its copy stays.
+   * Called when threads go idle or are archived, and every 30 minutes.
+   */
   async function landPending(reason: string) {
     for (const key of await bb.storage.kv.list('iso:')) {
       const record = await bb.storage.kv.get<Isolation>(key);
       if (!record) continue;
-      const thread = await bb.sdk.threads.get({ threadId: record.threadId }).catch(() => null);
-      if (thread && thread.status === 'active') continue;
+      let thread: Awaited<ReturnType<typeof bb.sdk.threads.get>> | null | undefined;
+      try { thread = await bb.sdk.threads.get({ threadId: record.threadId }); }
+      catch (error) { thread = /not.?found|404/i.test(String(error)) ? null : undefined; }
+      if (thread === undefined) continue; // BB did not answer: decide later
+      const finished = thread === null || Boolean((thread as { archivedAt?: number | null }).archivedAt);
+      if (!finished && (!record.landRequested || thread?.status === 'active')) continue;
       if (record.lastLand?.state === 'conflict' && record.lastLandAt && Date.now() - record.lastLandAt < 6 * 60 * 60_000) continue;
-      await tryLand(record, reason).catch(error => bb.log.warn(`Project Catalog: land failed: ${String(error)}`));
+      await tryLand(record, reason, finished).catch(error => bb.log.warn(`Project Catalog: land failed: ${String(error)}`));
     }
   }
   bb.events.on('thread.idle', () => { void landPending('тред затих'); });
@@ -518,7 +531,8 @@ export default function projectCatalog(bb: BbPluginApi) {
       try {
         const record = await isolationOf(ctx.threadId);
         if (!record) return 'У этого треда нет отдельной копии — вливать нечего.';
-        const result = await tryLand(record, 'агент попросил');
+        if (!record.landRequested) await bb.storage.kv.set(`iso:${ctx.threadId}`, { ...record, landRequested: true });
+        const result = await tryLand({ ...record, landRequested: true }, 'агент попросил', true);
         return result.state === 'landed' ? `${landText(result)}. Тред остаётся в папке копии, которой больше нет: для дальнейшей работы вызови update_environment_directory с путём ${record.main}.`
           : result.state === 'waiting' ? `${landText(result)}. Плагин вольёт сам, когда станет можно.` : landText(result);
       } catch (error) { return { content: [{ type: 'text', text: `Вливание не выполнено: ${error instanceof Error ? error.message : String(error)}` }], isError: true }; }

@@ -1,0 +1,10 @@
+{
+  "id": "project-catalog-safe-landing",
+  "title": "Project Catalog 0.8.0: копия треда вливается только по project_land или после архива, без потери файлов",
+  "component": "project-catalog",
+  "where": "server",
+  "kind": "local-plugin",
+  "plugin": "project-catalog",
+  "rerun": "Проверяет установленную версию project-catalog; при совпадении ничего не делает.",
+  "rollback": "Установить project-catalog 0.7.0 из предыдущего релиза; вливание снова пойдёт после каждого хода треда."
+}

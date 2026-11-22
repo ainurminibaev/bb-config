@@ -285,9 +285,21 @@ export async function restoreGit(path: string, ref: string, signal: AbortSignal)
   return applied.ok ? { ok: true, message: `снимок ${commit.slice(0, 8)} разложен как незакоммиченные правки` } : { ok: false, message: `git apply не удался: ${applied.err}` };
 }
 
+async function readClaudeProfile(): Promise<{ email: string | null; organizationType: string | null; rateLimitTier: string | null }> {
+  const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  try {
+    const file = join(process.env.CLAUDE_CONFIG_DIR || homedir(), '.claude.json');
+    const account = JSON.parse(await readFile(file, 'utf8'))?.oauthAccount;
+    if (!account || typeof account !== 'object') return { email: null, organizationType: null, rateLimitTier: null };
+    return { email: text(account.emailAddress), organizationType: text(account.organizationType),
+      rateLimitTier: text(account.organizationRateLimitTier) ?? text(account.userRateLimitTier) };
+  } catch { return { email: null, organizationType: null, rateLimitTier: null }; }
+}
+
 export default experimental_defineHostEntry({
   contract: hostContract,
   handlers: {
+    claudeProfile: readClaudeProfile,
     snapshot: async ({ path, ref, message, push }, ctx): Promise<SnapshotResult> => {
       try {
         try { if (!(await stat(path)).isDirectory()) throw new Error('not a directory'); }

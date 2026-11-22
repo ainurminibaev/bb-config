@@ -34,6 +34,11 @@ export const hostContract = defineRpcContract({
     input: z.object({ path: z.string().min(1), ref: z.string().min(1) }),
     output: restoreResult,
   },
+  /** Plan of the Claude account signed in on the machine, for the per-account thresholds. */
+  claudeProfile: {
+    input: z.null(),
+    output: z.object({ email: z.string().nullable(), organizationType: z.string().nullable(), rateLimitTier: z.string().nullable() }),
+  },
 });
 
 const priorityView = z.object({

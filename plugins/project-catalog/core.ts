@@ -514,6 +514,8 @@ export type LandResult = { state: 'landed' | 'waiting' | 'uncommitted' | 'confli
 export type Isolation = {
   threadId: string; projectId: string; hostId: string; main: string; copy: string; branch: string; base: string;
   createdAt: number; lastLand: LandResult | null; lastLandAt: number | null;
+  /** The thread called project_land: from now on the plugin lands it by itself when it can. */
+  landRequested?: boolean;
 };
 
 /** Branch and folder names for a thread's own copy: stable, filesystem-safe, short. */

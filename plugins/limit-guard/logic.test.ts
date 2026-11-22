@@ -135,4 +135,6 @@ test('a resume waits for the most pressing window, the soonest among equals', ()
   const weekly = [w('Current session', 20, { resetsAt: at(4) }), w('Weekly limit', 98, { resetsAt: at(30) })];
   assert.equal(resumeWindow(weekly, null, T, now)?.label, 'Weekly limit', 'a full week decides even if later');
   assert.equal(resumeWindow([w('Current session', 50, { resetsAt: null })], null, T, now), null);
+  const both = [w('Current session', 100, { resetsAt: at(2) }), w('Weekly limit', 100, { resetsAt: at(30) })];
+  assert.equal(resumeWindow(both, null, T, now)?.label, 'Weekly limit', 'several used up: wait for the last reset (R7)');
 });

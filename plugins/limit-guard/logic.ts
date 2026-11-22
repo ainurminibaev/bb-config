@@ -24,6 +24,8 @@ export interface Thresholds {
   /** Pace: economy / finish when the short window would be full within these minutes. */
   etaEconomyMinutes: number;
   etaFinishMinutes: number;
+  /** The pace check starts at this share of the short window (an account rule raises it). */
+  paceFrom?: number;
 }
 export const DEFAULT_THRESHOLDS: Thresholds = {
   short: { economy: 75, finish: 90 }, long: { economy: 90, finish: 97 }, etaEconomyMinutes: 40, etaFinishMinutes: 10,
@@ -87,7 +89,7 @@ export function windowMode(w: QuotaWindow, t: Thresholds): Mode {
   const long = w.kind === 'weekly' || w.kind === 'model';
   const level = long ? t.long : t.short;
   if (w.usedPercent >= level.finish) return 'finish';
-  const eta = long ? null : w.etaMinutes ?? null;
+  const eta = long || w.usedPercent < (t.paceFrom ?? 0) ? null : w.etaMinutes ?? null;
   if (eta !== null && eta <= t.etaFinishMinutes && w.usedPercent < 100) return 'finish';
   if (w.usedPercent >= level.economy) return 'economy';
   if (eta !== null && eta <= t.etaEconomyMinutes) return 'economy';
@@ -289,5 +291,8 @@ export function resumeWindow(windows: QuotaWindow[], model: string | null, t: Th
     .sort((a, b) => b.rank - a.rank || a.at - b.at);
   // Nothing is pressing (or the pressing window hides its reset): a far weekly reset is no reason to wait.
   if (!ranked[0] || ranked[0].rank <= RANK.normal) return null;
+  // Several windows used up: work can go on only once the last of them resets.
+  const exhausted = ranked.filter(r => r.w.usedPercent >= 100).sort((a, b) => b.at - a.at);
+  if (exhausted[0]) return exhausted[0].w;
   return ranked[0].w;
 }

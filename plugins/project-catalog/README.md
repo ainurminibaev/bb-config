@@ -81,9 +81,14 @@ that are meant to differ on every machine are listed in the card or with
   `.bb-env-setup.sh`; the agent moves there with `update_environment_directory`.
   Committed work lands back by fast-forward, or by rebasing the copy's own
   branch, when the copy is clean and the main folder is clean and free
-  (`project_land`, idle threads, every 30 minutes). Conflicts change nothing.
-  The copy and branch are removed after landing; uncommitted work is never
-  landed or removed.
+  (`project_land`, then again when threads go idle and every 30 minutes).
+  Only copies whose thread called `project_land`, or is archived, are landed:
+  an idle thread between turns keeps its copy and unfinished commits (0.8.0).
+  Conflicts change nothing. The copy is removed after landing; its branch only
+  with `branch -d` once it is in the main branch. Uncommitted work — including
+  ignored files that are not byte-identical in the main folder (build and
+  dependency folders aside) — is never landed or removed. If the thread list or
+  git fails, nothing is touched.
 - **Sync history.** The last 40 pulls and checks per project (machine, thread,
   result) are kept in plugin storage, shown in the card as «Синхронизация» and
   printed by `bb catalog history [project]`.
