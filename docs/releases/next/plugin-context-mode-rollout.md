@@ -1,8 +1,10 @@
-Устанавливает на сервере BB новый плагин Context Mode Rollout 0.3.0. Штатный
+Устанавливает на сервере BB новый плагин Context Mode Rollout 0.4.0. Штатный
 шаг `local-plugin` собирает и ставит плагин из `plugins/context-mode-rollout`
 и проверяет источник и версию.
 
-Плагин держит актуальное расширение context-mode в Claude Code и Codex CLI на
+Плагин держит актуальное расширение context-mode в Claude Code, Codex, Gemini
+CLI, Pi и других агентах, которых поддерживает context-mode, а в Antigravity
+(CLI и приложение) и Cursor подключает его MCP-сервер, на
 каждой подключённой машине BB: новую машину проверяет сразу после подключения,
 остальные — раз в сутки, новый релиз с npm (выдержанный 2 дня) раскатывает
 сразу. Закрепить версию: `bb plugin config context-mode-rollout set version X.Y.Z`.

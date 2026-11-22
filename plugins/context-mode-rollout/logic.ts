@@ -1,7 +1,10 @@
 // Pure decisions of the rollout: kept free of I/O so they are unit-tested.
 
-export const AGENTS = ['claude-code', 'codex'] as const;
-export type AgentId = (typeof AGENTS)[number];
+/** Agents context-mode's own `setup` supports, keyed by its agent id, with the CLI binary that marks them installed. */
+export const SETUP_AGENTS: Record<string, string> = {
+  'claude-code': 'claude', codex: 'codex', gemini: 'gemini', pi: 'pi', opencode: 'opencode', qwen: 'qwen', 'copilot-cli': 'copilot',
+};
+export const AGENTS = Object.keys(SETUP_AGENTS);
 
 export const VERSION_RE = /^\d+\.\d+\.\d+$/;
 

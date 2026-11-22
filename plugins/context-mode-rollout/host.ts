@@ -2,15 +2,15 @@
 // Installs the pinned context-mode npm package when it is missing or older, and runs its own
 // setup for the CLIs found in PATH. Never uses sudo and never touches accounts or auth.
 import { execFile } from 'node:child_process';
-import { access, constants } from 'node:fs/promises';
+import { access, constants, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { experimental_defineHostEntry } from '@get-bb/plugin-sdk/host';
 import { hostContract, type EnsureResult } from './contract.ts';
-import { AGENTS, agentsNeedingSetup, chooseCandidate, packageIsCurrent, parseAgents, satisfiesNode, type AgentState } from './logic.ts';
+import { MCP_TARGETS, probeMcp, sameServer, type McpServer, type TargetCtx } from './mcp-targets.ts';
+import { AGENTS, SETUP_AGENTS, agentsNeedingSetup, chooseCandidate, packageIsCurrent, parseAgents, satisfiesNode, type AgentState } from './logic.ts';
 
 const WIN = process.platform === 'win32';
-const CLI_BIN: Record<string, string> = { 'claude-code': 'claude', codex: 'codex' };
 
 interface Run { code: number; stdout: string; stderr: string }
 
@@ -65,8 +65,13 @@ export default experimental_defineHostEntry({
       };
       const fail = (message: string): EnsureResult => ({ ...result, state: 'error', message });
 
-      for (const id of AGENTS) if (await which(CLI_BIN[id]!, env.PATH!)) result.clis.push(id);
-      if (!result.clis.length) return { ...result, state: 'no-cli', message: 'Claude Code и Codex CLI не найдены в PATH: ставить некуда' };
+      for (const id of AGENTS) if (await which(SETUP_AGENTS[id]!, env.PATH!)) result.clis.push(id);
+      const tctx: TargetCtx = { home: homedir(), which: name => which(name, env.PATH!), run: (cmd, args) => run(cmd, args, env, 60_000, signal) };
+      const mcpTargets = [];
+      for (const t of MCP_TARGETS) if (await t.detect(tctx).catch(() => false)) mcpTargets.push(t);
+      const setupClis = [...result.clis];
+      result.clis.push(...mcpTargets.map(t => t.id));
+      if (!result.clis.length) return { ...result, state: 'no-cli', message: 'агенты (Claude Code, Codex, Gemini, Pi, Antigravity, Cursor и др.) не найдены: ставить некуда' };
 
       const version_ = async () => {
         const bin = await which('context-mode', env.PATH!);
@@ -118,39 +123,70 @@ export default experimental_defineHostEntry({
         result.actions.push(`откат: npm install -g context-mode@${prev}`);
         const r = await install(prev);
         const b = await which('context-mode', env.PATH!);
-        const s = r.code === 0 && b ? await run(b, ['setup', '--yes', '--no-input', '--agents', result.clis.join(','), '--json'], env, 15 * 60_000, signal) : null;
+        const s = r.code === 0 && b ? (setupClis.length ? await run(b, ['setup', '--yes', '--no-input', '--agents', setupClis.join(','), '--json'], env, 15 * 60_000, signal) : { code: 0, stdout: '', stderr: '' }) : null;
         result.versionAfter = await version_();
         const back = s?.code === 0 && result.versionAfter === prev;
         return fail(`${why}; ${back ? `откатил на ${prev}, она работает` : `откат на ${prev} не удался — нужна ручная проверка`}`);
       };
 
       const bin = (await which('context-mode', env.PATH!))!;
-      const agentsArg = result.clis.join(',');
-      const dry = await run(bin, ['setup', '--dry-run', '--no-input', '--agents', agentsArg, '--json'], env, 5 * 60_000, signal);
-      const planned: AgentState[] | null = parseAgents(dry.stdout);
-      const todo = result.versionBefore === result.versionAfter ? agentsNeedingSetup(result.clis, planned) : [...result.clis];
-      result.agents = planned ?? [];
+      if (setupClis.length) {
+        const agentsArg = setupClis.join(',');
+        const dry = await run(bin, ['setup', '--dry-run', '--no-input', '--agents', agentsArg, '--json'], env, 5 * 60_000, signal);
+        const planned: AgentState[] | null = parseAgents(dry.stdout);
+        const todo = result.versionBefore === result.versionAfter ? agentsNeedingSetup(setupClis, planned) : [...setupClis];
+        result.agents = planned ?? [];
 
-      if (todo.length) {
-        result.actions.push(`context-mode setup --yes --agents ${todo.join(',')}`);
-        if (!apply) return { ...result, state: 'planned', message: `нужен setup для ${todo.join(', ')}` };
-        const r = await run(bin, ['setup', '--yes', '--no-input', '--agents', todo.join(','), '--json'], env, 15 * 60_000, signal);
-        const agents = parseAgents(r.stdout);
-        if (agents) result.agents = [...result.agents.filter(a => !todo.includes(a.id)), ...agents];
-        if (r.code !== 0) return rollback(`context-mode setup завершился с кодом ${r.code}: ${tail(r.stderr || r.stdout)}`);
-        result.state = 'installed';
+        if (todo.length) {
+          result.actions.push(`context-mode setup --yes --agents ${todo.join(',')}`);
+          if (!apply) return { ...result, state: 'planned', message: `нужен setup для ${todo.join(', ')}` };
+          const r = await run(bin, ['setup', '--yes', '--no-input', '--agents', todo.join(','), '--json'], env, 15 * 60_000, signal);
+          const agents = parseAgents(r.stdout);
+          if (agents) result.agents = [...result.agents.filter(a => !todo.includes(a.id)), ...agents];
+          if (r.code !== 0) return rollback(`context-mode setup завершился с кодом ${r.code}: ${tail(r.stderr || r.stdout)}`);
+          result.state = 'installed';
+        }
+
+        if (verify || result.state === 'installed') {
+          const r = await run(bin, ['doctor', '--no-input', '--agents', agentsArg, '--json'], env, 10 * 60_000, signal);
+          const agents = parseAgents(r.stdout);
+          if (agents) result.agents = agents;
+          const bad = (agents ?? []).filter(a => a.status !== 'PASS').map(a => `${a.id}=${a.status}`);
+          if (r.code !== 0 || !agents || bad.length) return rollback(`context-mode doctor: ${bad.join(', ') || tail(r.stderr || r.stdout) || `код ${r.code}`}`);
+        }
       }
 
-      if (verify || result.state === 'installed') {
-        const r = await run(bin, ['doctor', '--no-input', '--agents', agentsArg, '--json'], env, 10 * 60_000, signal);
-        const agents = parseAgents(r.stdout);
-        if (agents) result.agents = agents;
-        const bad = (agents ?? []).filter(a => a.status !== 'PASS').map(a => `${a.id}=${a.status}`);
-        if (r.code !== 0 || !agents || bad.length) return rollback(`context-mode doctor: ${bad.join(', ') || tail(r.stderr || r.stdout) || `код ${r.code}`}`);
+      // MCP-only agents (Antigravity, Cursor): point their user-level MCP config at this install's server.
+      if (mcpTargets.length) {
+        const nodeBin = (await which('node', env.PATH!))!;
+        const server: McpServer = { command: nodeBin, args: [join(dirname(await realpath(bin)), 'server.mjs')] };
+        const errors: string[] = [];
+        for (const t of mcpTargets) {
+          const current = await t.read(tctx).catch(() => 'unreadable' as const);
+          let changed = 0;
+          if (!sameServer(current, server)) {
+            changed = 1;
+            result.actions.push(`MCP context-mode → ${t.id}`);
+            if (!apply) continue;
+            try { await t.write(tctx, server); result.state = 'installed'; } catch (error) {
+              errors.push(`${t.id}: ${error instanceof Error ? error.message : String(error)}`);
+              result.agents.push({ id: t.id, status: 'FAIL', changes: changed });
+              continue;
+            }
+          }
+          if (changed || verify) {
+            try { await probeMcp(server, t.clientName, env, homedir()); result.agents.push({ id: t.id, status: 'PASS', changes: changed }); } catch (error) {
+              errors.push(`${t.id}: ${error instanceof Error ? error.message : String(error)}`);
+              result.agents.push({ id: t.id, status: 'FAIL', changes: changed });
+            }
+          } else result.agents.push({ id: t.id, status: 'PASS', changes: 0 });
+        }
+        if (!apply && result.actions.some(a => a.startsWith('MCP '))) return { ...result, state: 'planned', message: `будет подключён MCP context-mode: ${result.actions.filter(a => a.startsWith('MCP ')).map(a => a.replace('MCP context-mode → ', '')).join(', ')}` };
+        if (errors.length) return fail(`MCP-подключение: ${errors.join('; ')}`);
       }
 
       result.message = result.state === 'installed'
-        ? `установлено/настроено (${result.clis.join(', ')}); новые сессии CLI подхватят MCP и хуки`
+        ? `установлено/настроено (${result.clis.join(', ')}); новые сессии агентов подхватят MCP${setupClis.length ? ' и хуки' : ''}`
         : `context-mode ${result.versionAfter} настроен для ${result.clis.join(', ')}`;
       if (version !== candidates[0]!.version) result.message += ` (новее ${candidates[0]!.version} требует Node ${candidates[0]!.node ?? '?'}, здесь ${result.nodeVersion})`;
       return result;

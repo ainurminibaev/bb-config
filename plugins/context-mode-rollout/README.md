@@ -11,6 +11,9 @@ BB, including machines enrolled later.
 - `server.ts` polls `hosts.list()` every 2 minutes (BB has no "machine
   connected" event) and runs the host check for a new or reconnected machine and
   once a day; CLI `bb context-mode-rollout status|check|apply`.
+- `mcp-targets.ts` registers only the MCP server for agents context-mode's setup does not
+  support: Antigravity CLI (`agy mcp add`), the Antigravity app and Cursor (their user
+  `mcp.json`), verified with an MCP handshake.
 - `logic.ts` holds the pure decisions, covered by `logic.test.ts`.
 
 ```sh

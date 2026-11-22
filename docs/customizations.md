@@ -54,7 +54,7 @@ Context Mode подключается отдельно в пользовател
 Это расширение CLI; его раскатку на машины выполняет собственный плагин BB
 `context-mode-rollout` (ниже).
 
-### Автоустановка и обновление: плагин Context Mode Rollout 0.3.0
+### Автоустановка и обновление: плагин Context Mode Rollout 0.4.0
 
 Собственный плагин `plugins/context-mode-rollout/` (дом — bb-config). Зачем
 плагин, а не шаг `restore.py`: восстановление запускают вручную на одной
@@ -80,6 +80,18 @@ Context Mode подключается отдельно в пользовател
   раскатывается на подключённые машины сразу, без ожидания суточной проверки.
   npm недоступен — последняя известная цель, иначе 2.2.0. `version` = `X.Y.Z`
   закрепляет версию.
+- Агенты: штатный `context-mode setup` — для найденных в PATH `claude`
+  (claude-code), `codex`, `gemini`, `pi`, `opencode`, `qwen`, `copilot`
+  (copilot-cli). Antigravity и Cursor context-mode 2.2.x считает
+  неподдерживаемыми (нет хуков), поэтому им плагин подключает только MCP-сервер
+  (инструменты `ctx_*` работают, авто-индексации нет): Antigravity CLI —
+  `agy mcp add context-mode -- <node> <…>/context-mode/server.mjs` (профиль
+  `~/.gemini/config`); приложение Antigravity — `mcpServers` в
+  `~/.gemini/antigravity/mcp_config.json`; Cursor — в `~/.cursor/mcp.json`
+  (только если каталог есть). Чужие записи и ключи сохраняются, перед первой
+  правкой файл копируется в `*.before-context-mode`, непарсящийся JSON не
+  трогается. Проверка — MCP initialize + tools/list от имени клиента
+  (`agy`, `antigravity`, `cursor-vscode`). Код — `mcp-targets.ts`.
 - Совместимость с Node: сервер передаёт машине до 10 допустимых версий с их
   `engines.node` из npm (сейчас `>=24.15.0`). Машина сверяет их с `node
   --version` из PATH (тот же node запускает context-mode) и ставит самую новую
@@ -125,6 +137,10 @@ host-часть в изолированном HOME и npm-префиксе: су
 doctor PASS, повтор без плохой версии — `ok`. Tru и UA после установки 0.3.0 —
 `ok`, Node v24.22.3.
 Mac (Node v26.13.0) — `apply` 2.2.0 → 2.2.1, doctor PASS для обоих CLI.
+0.4.0: песочница с Cursor (`mcp.json` с чужим сервером), пустым конфигом
+Antigravity и `agy` — все цели PASS, чужие записи сохранены, повтор — `ok`.
+Tru и UA — claude-code, codex, antigravity-cli PASS; Mac — claude-code, codex,
+antigravity-ide, cursor PASS.
 
 Восстановление выполняется под тем пользователем, от которого BB запускает CLI,
 на каждой нужной машине, с Node.js, поддерживающим `node:sqlite`:

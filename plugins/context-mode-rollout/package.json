@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-context-mode-rollout",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "description": "Keeps the context-mode extension installed in Claude Code and Codex CLI on every BB machine",
   "engines": {

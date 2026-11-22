@@ -14,6 +14,15 @@ description: "Check, dry-run or force the install of the context-mode extension 
 подключённые машины. `bb context-mode-rollout status` показывает цель и её
 источник. Конкретная `X.Y.Z` в `version` закрепляет версию.
 
+## Какие агенты
+
+- Через штатный `context-mode setup` (MCP + хуки): Claude Code, Codex, Gemini
+  CLI, Pi, OpenCode, Qwen, Copilot CLI — если их бинарник есть в PATH.
+- Только MCP (context-mode их не поддерживает, хуков нет, инструменты `ctx_*`
+  работают): Antigravity CLI (`agy mcp add`), приложение Antigravity
+  (`~/.gemini/antigravity/mcp_config.json`), Cursor (`~/.cursor/mcp.json`).
+  Чужие записи сохраняются, резервная копия — `*.before-context-mode`.
+
 ## Совместимость с Node и откат
 
 - Сервер передаёт машине список допустимых версий с `engines.node` из npm
