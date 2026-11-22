@@ -347,6 +347,12 @@
    "kind": "local",
    "name": "PR и Issues",
    "description": "Страница в боковом меню с вашими PR и issue на GitHub: где нужно ваше действие, что ждёт других, что закрыто."
+  },
+  {
+   "id": "context-mode-rollout",
+   "kind": "local",
+   "name": "Context Mode Rollout",
+   "description": "Актуальный context-mode во всех агентах на всех машинах BB: setup для Claude Code, Codex и других, MCP для Antigravity и Cursor."
   }
  ],
  "repository": "https://github.com/ainurminibaev/bb-config"

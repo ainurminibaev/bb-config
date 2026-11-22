@@ -42,6 +42,7 @@ KodaForge 0.7.0, ChatGPT Realtime 0.1.0; более новая даёт пред
 | `fresh-thread-hint` | свой плагин | `plugins/fresh-thread-hint` | подсказка продолжить большой давний тред в новом | — |
 | `limit-guard` | свой плагин | `plugins/limit-guard` | режимы у порога лимита подписки | — |
 | `pr-issues` | свой плагин | `plugins/pr-issues` | страница PR и issue на GitHub | `gh` с входом на сервере BB |
+| `context-mode-rollout` | свой плагин | `plugins/context-mode-rollout` | context-mode во всех агентах на всех машинах | Node.js с npm на машинах (сейчас Node ≥ 24.15) |
 
 Вне плагинов: на каждой машине с Codex — `python3 scripts/codex_defaults.py --apply --verify`.
 Это действие на других машинах; установка показывает его в `attention`.
