@@ -39,6 +39,9 @@ KodaForge 0.7.0, ChatGPT Realtime 0.1.0; более новая даёт пред
 | `push-button` | свой плагин | `plugins/push-button` | — | — |
 | `web-bb-button` | свой плагин | `plugins/web-bb-button` | — | публичный адрес BB (`webUrl`) |
 | `local-transcribe` | свой плагин (резервная path-копия) | `plugins/local-transcribe`; рабочая установка может идти из собственного Git-репозитория — она сохраняется | — | исполнители `workerHosts`, Python и ffmpeg на них |
+| `fresh-thread-hint` | свой плагин | `plugins/fresh-thread-hint` | подсказка продолжить большой давний тред в новом | — |
+| `limit-guard` | свой плагин | `plugins/limit-guard` | режимы у порога лимита подписки | — |
+| `pr-issues` | свой плагин | `plugins/pr-issues` | страница PR и issue на GitHub | `gh` с входом на сервере BB |
 
 Вне плагинов: на каждой машине с Codex — `python3 scripts/codex_defaults.py --apply --verify`.
 Это действие на других машинах; установка показывает его в `attention`.

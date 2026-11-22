@@ -329,6 +329,24 @@
      "text": "Исполнители распознавания: задайте workerHosts; на них нужны Python и ffmpeg (окружение готовится при первом обращении)."
     }
    ]
+  },
+  {
+   "id": "fresh-thread-hint",
+   "kind": "local",
+   "name": "Fresh Thread Hint",
+   "description": "Подсказка над полем ввода продолжить большой давно молчащий тред Claude в новом."
+  },
+  {
+   "id": "limit-guard",
+   "kind": "local",
+   "name": "Limit Guard",
+   "description": "Режимы работы агента у порога лимита подписки и снимок незаконченной работы при обрыве хода."
+  },
+  {
+   "id": "pr-issues",
+   "kind": "local",
+   "name": "PR и Issues",
+   "description": "Страница в боковом меню с вашими PR и issue на GitHub: где нужно ваше действие, что ждёт других, что закрыто."
   }
  ],
  "repository": "https://github.com/ainurminibaev/bb-config"
