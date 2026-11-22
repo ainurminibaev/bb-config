@@ -13,7 +13,8 @@ This plugin answers bb's `message.dispatch` hook for Codex threads only, and
 only for a message a person sent that would join a running turn:
 
 - `/goal resume` is queued. The card above the composer reads "Held by Codex
-  Goal Queue · выполнится сам после текущего хода Codex". bb sends it by itself
+  Goal Queue · runs by itself after the current Codex turn" (in Russian with
+  `language` = `ru`). bb sends it by itself
   as soon as the thread settles; it then starts a turn and Codex makes the Goal
   active. Send-now on the card bypasses the plugin and passes the text to the
   model, so the Goal does not resume.
@@ -29,7 +30,8 @@ Everything else proceeds unchanged, including other `/goal ...` text, messages
 with attachments and every other provider. If the check fails the message is
 sent unchanged and a warning is logged (`bb plugin logs codex-goal-queue`).
 
-No settings and no commands. Inspect held messages with
+One setting, `language` (`en` default, `ru`): the language of the card and
+refusal notes (`bb plugin config codex-goal-queue set language ru`). No commands. Inspect held messages with
 `bb thread queue list <thread>`. Remove the plugin once bb's Codex provider
 runs Goal commands during a turn itself; until then it must stay enabled for
 the queueing to apply.

@@ -7,16 +7,27 @@ export type GoalDecision =
 
 const COMMANDS: readonly GoalCommand[] = ["resume", "pause", "clear"];
 
-export const RESUME_REASON = "выполнится сам после текущего хода Codex";
+export type Language = "en" | "ru";
 
-export const ALREADY_QUEUED_MESSAGE =
-  "/goal resume уже в очереди этого треда и выполнится после текущего хода. Повтор не нужен.";
+const TEXT = {
+  en: {
+    resume: "runs by itself after the current Codex turn",
+    queued: "/goal resume is already queued in this thread and runs after the current turn. No need to send it again.",
+    pause: "Codex is working, so /goal pause would reach the model as plain text. Press Stop: BB ends the turn and pauses the active Goal.",
+    clear: "Codex is working, so /goal clear would reach the model as plain text. Send it when the thread is idle, or run bb thread clear-goal for this thread.",
+  },
+  ru: {
+    resume: "выполнится сам после текущего хода Codex",
+    queued: "/goal resume уже в очереди этого треда и выполнится после текущего хода. Повтор не нужен.",
+    pause: "Codex работает, поэтому /goal pause ушёл бы модели текстом. Нажмите «Стоп»: BB остановит ход и поставит активную цель на паузу.",
+    clear: "Codex работает, поэтому /goal clear ушёл бы модели текстом. Отправьте команду, когда тред остановится, или выполните bb thread clear-goal для этого треда.",
+  },
+} as const;
 
-export const PAUSE_MESSAGE =
-  "Codex работает, поэтому /goal pause ушёл бы модели текстом. Нажмите «Стоп»: BB остановит ход и поставит активную цель на паузу.";
-
-export const CLEAR_MESSAGE =
-  "Codex работает, поэтому /goal clear ушёл бы модели текстом. Отправьте команду, когда тред остановится, или выполните bb thread clear-goal для этого треда.";
+/** Messages in the chosen language; anything unknown falls back to English. */
+export function texts(language: unknown) {
+  return TEXT[language === "ru" ? "ru" : "en"];
+}
 
 /** The command Codex's provider would run for this text when it starts a turn. */
 export function parseGoalCommand(blocks: readonly { type: string }[], text: string): GoalCommand | null {
@@ -36,15 +47,17 @@ export function decide(args: {
   fromUser: boolean;
   blocks: readonly { type: string }[];
   text: string;
+  language?: Language;
 }): GoalDecision {
+  const t = texts(args.language);
   if (args.providerId !== "codex" || args.attempt !== "join-turn" || !args.fromUser) return { action: "proceed" };
   switch (parseGoalCommand(args.blocks, args.text)) {
     case "resume":
-      return { action: "wait", reason: RESUME_REASON };
+      return { action: "wait", reason: t.resume };
     case "pause":
-      return { action: "reject", message: PAUSE_MESSAGE };
+      return { action: "reject", message: t.pause };
     case "clear":
-      return { action: "reject", message: CLEAR_MESSAGE };
+      return { action: "reject", message: t.clear };
     default:
       return { action: "proceed" };
   }
