@@ -12,7 +12,8 @@ function fixture(){
     events:{on:(name,fn)=>events[name]=fn},
     rpc:{experimental_invalidate:()=>{},register:(_,handlers)=>Object.assign(methods,handlers)},
     providers:{experimental_contributeEnv:(_,fn)=>resolve=fn},
-    sdk:{files:{write:async()=>{},read:async({path})=>({content:JSON.stringify({resetAt:path.endsWith('.backup')?state.backupReset:state.originReset})})},hosts:{get:async()=>({threadStorageRootPath:'/storage',status:state.connected?'connected':'offline'})},
+    sdk:{system:{usageLimits:async({hostId})=>{if(!state.live)throw Error('offline');return {'claude-code':{status:'ok',windows:[{usedPercent:state.live[hostId]??100}]}};}},
+    files:{write:async({path,content})=>{(state.writes??=[]).push({path,content});if(content==='')path.endsWith('.backup')?state.backupReset=0:state.originReset=0;},read:async({path})=>({content:JSON.stringify({resetAt:path.endsWith('.backup')?state.backupReset:state.originReset})})},hosts:{get:async()=>({threadStorageRootPath:'/storage',status:state.connected?'connected':'offline'})},
       environments:{get:async()=>({hostId:'host_tru'})},
       threads:{queuedMessages:{list:async()=>state.queue??[],send:async({queuedMessageId})=>{state.sent=queuedMessageId;}},
         retry:async()=>{throw Error('HTTP 409: Turn original already has a retry waiting on thread test.');},
@@ -73,4 +74,28 @@ test('quota on a later retry dispatches the existing original queue entry',async
     windows:[{status:'blocked',resetsAtMs:Date.now()+60000}]}});
   await methods.setRetryPreference({threadId:'test',enabled:true});
   assert.equal(state.sent,'scheduled');
+});
+
+test('a stale limit mark is cleared when the machine actually has quota again', async()=>{
+  const {state,methods}=fixture();
+  await methods.setRetryPreference({threadId:'test',enabled:true});
+  const available=methods['provider-retry.v1.availability'];
+  const request={threadId:'test',requestId:'creq_live'};
+  state.originReset=Date.now()+3*86400000;
+  state.backupReset=Date.now()+86400000;
+  state.live={host_tru:100,host_ua:100};
+  assert.equal((await available(request)).kind,'blocked','both really exhausted: keep waiting');
+  assert.equal(state.writes,undefined);
+});
+
+test('origin freed early: the mark is cleared and the turn runs on the origin', async()=>{
+  const {state,methods}=fixture();
+  await methods.setRetryPreference({threadId:'test',enabled:true});
+  const available=methods['provider-retry.v1.availability'];
+  state.originReset=Date.now()+3*86400000;
+  state.backupReset=Date.now()+86400000;
+  state.live={host_tru:8,host_ua:100};
+  assert.equal((await available({threadId:'test',requestId:'creq_free'})).kind,'not-routed','origin stage: native launch on Tru');
+  assert.deepEqual(state.writes.map(w=>w.content),['']);
+  assert.ok(!state.writes[0].path.endsWith('.backup'));
 });

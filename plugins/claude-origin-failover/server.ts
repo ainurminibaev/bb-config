@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import {routeState} from "./bin/route-state.mjs";
+import {routeState, heldUntil} from "./bin/route-state.mjs";
 import { randomUUID } from "node:crypto";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 
@@ -50,6 +50,35 @@ export default function plugin(bb: BbPluginApi) {
     };
     const [originWindow,backupWindow]=await Promise.all([read(path),read(path+".backup")]);
     return routeState(originWindow,backupWindow);
+  }
+  // Отметка «машина в лимите до …» пишется по отказу CLI и потом не
+  // перепроверяется. Если лимит сняли досрочно (сброс, смена тарифа), тред
+  // ждал бы до записанного времени. Сверяем с фактическим остатком машины.
+  const liveChecked = new Map<string, number>();
+  async function liveFree(hostId: string) {
+    try {
+      const raw = await bb.sdk.system.usageLimits({hostId, refresh: true, signal: AbortSignal.timeout(20_000)}) as
+        unknown as Record<string, {status?: string; windows?: {usedPercent?: number}[]}>;
+      const entry = raw["claude-code"];
+      if (entry?.status !== "ok" || !entry.windows?.length) return false;
+      return entry.windows.every(w => typeof w.usedPercent === "number" && w.usedPercent < 100);
+    } catch { return false; }
+  }
+  async function reconcile(threadId: string, run: string) {
+    const key = threadId + ":" + run;
+    if (Date.now() - (liveChecked.get(key) ?? 0) < 5 * 60_000) return;
+    liveChecked.set(key, Date.now());
+    const {pilotOrigin, pilotBackup} = await settings.get();
+    const host = await bb.sdk.hosts.get({hostId: pilotOrigin});
+    if (!host.threadStorageRootPath) return;
+    const root = join(host.threadStorageRootPath, threadId);
+    const base = join(root, "quota-probe-" + run);
+    for (const [file, machine] of [[base, pilotOrigin], [base + ".backup", pilotBackup]] as const) {
+      let content = "";
+      try { content = (await bb.sdk.files.read({hostId: pilotOrigin, path: file, rootPath: root})).content; } catch { continue; }
+      if (!heldUntil(content, Date.now()) || !machine || !await liveFree(machine)) continue;
+      await bb.sdk.files.write({hostId: pilotOrigin, rootPath: root, path: file, content: "", mode: 0o600});
+    }
   }
   async function eligible(threadId: string) {
     const config = await settings.get();
@@ -153,6 +182,7 @@ export default function plugin(bb: BbPluginApi) {
       if (threadId !== testThread || !quotaProbe) return { kind: "not-routed" as const };
       const key = probeKey(threadId, quotaProbe);
       if (quotaProbe.startsWith("auto-")) {
+        await reconcile(threadId, quotaProbe).catch(() => undefined);
         const {pilotOrigin}=await settings.get();
         const route=await activeRoute(threadId,quotaProbe,pilotOrigin);
         if(route.stage==="waiting") return {kind:"blocked" as const,retryAt:route.resetAt};
@@ -195,6 +225,7 @@ export default function plugin(bb: BbPluginApi) {
       const key = probeKey(testThread, quotaProbe);
       const state = await bb.storage.kv.get<string>(key);
       const permanent=quotaProbe.startsWith("auto-");
+      if (permanent) await reconcile(testThread, quotaProbe).catch(() => undefined);
       const route=permanent?await activeRoute(testThread,quotaProbe,context.hostId):null;
       if(permanent && route.stage==="origin" && state) await bb.storage.kv.set(key,"");
       if (!permanent && !state) await bb.storage.kv.set(key, "armed");
