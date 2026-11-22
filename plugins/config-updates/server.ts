@@ -222,6 +222,20 @@ export default async function configUpdates(bb: BbPluginApi) {
   let status: UpdateStatus = { ...EMPTY, ...((await bb.storage.kv.get<UpdateStatus>("status")) ?? {}) };
   let local: LocalStatus = { installed: null, partial: null, run: null, lastRun: null };
   let root = "";
+  // Where the checkout is when the plugin cannot see it from its own folder (a Git install).
+  let configuredRoot = (await settings.get()).checkout.trim();
+  let rememberedRoot = (await bb.storage.kv.get<string>("installationRoot")) ?? null;
+  settings.onChange((next) => { configuredRoot = next.checkout.trim(); });
+  const resolveRoot = () => io.root(configuredRoot, rememberedRoot);
+  async function remember(found: string) {
+    const installation = io.projectRoot(found);
+    if (rememberedRoot === installation) return;
+    rememberedRoot = installation;
+    await bb.storage.kv.set("installationRoot", installation);
+  }
+  // Remember the installation as soon as the plugin starts from a folder: a release may
+  // move it to a Git source before any check runs (a fresh status skips the first one).
+  try { root = resolveRoot(); await remember(root); } catch { /* reported by the next check */ }
   let checking: Promise<UpdateStatus> | null = null;
   let starting: Promise<z.infer<typeof StartSchema>> | null = null;
 
@@ -235,11 +249,8 @@ export default async function configUpdates(bb: BbPluginApi) {
   async function checkOnce(): Promise<UpdateStatus> {
     const checkedAt = Date.now();
     try {
-      root = io.root((await settings.get()).checkout.trim(), (await bb.storage.kv.get<string>("installationRoot")) ?? null);
-      // Remember the installation while the plugin can still see it from its folder:
-      // after a move to a Git source this is how it finds the checkout again.
-      const installation = io.projectRoot(root);
-      if ((await bb.storage.kv.get<string>("installationRoot")) !== installation) await bb.storage.kv.set("installationRoot", installation);
+      root = resolveRoot();
+      await remember(root);
       runtime.python = (await settings.get()).pythonPath.trim();
       const configured = (await settings.get()).repository.trim();
       const repository = configured || parseRepository(await io.origin(root));
@@ -334,7 +345,7 @@ export default async function configUpdates(bb: BbPluginApi) {
    * `updates.py apply` and writes {code, stdout, stderr} to a file that the
    * plugin reads after any restart.
    */
-  const resultFile = () => resolve(io.projectRoot(root || io.root()), ".local/updates/button-run.json");
+  const resultFile = () => resolve(io.projectRoot(root || resolveRoot()), ".local/updates/button-run.json");
   const WRAPPER = "import json,subprocess,sys\nr=subprocess.run(sys.argv[2:],capture_output=True,text=True)\n" +
     "open(sys.argv[1]+'.tmp','w').write(json.dumps({'code':r.returncode,'stdout':r.stdout,'stderr':r.stderr}))\n" +
     "import os\nos.replace(sys.argv[1]+'.tmp',sys.argv[1])\n";
@@ -457,7 +468,7 @@ export default async function configUpdates(bb: BbPluginApi) {
     if (thread.id !== status.lastRunOwner && thread.id !== status.runOwner && thread.id !== status.threadId) return;
     try {
       runtime.python = (await settings.get()).pythonPath.trim();
-      const journal = await io.local(root || io.root());
+      const journal = await io.local(root || resolveRoot());
       const last = journal.lastRun;
       if (journal.run || journal.partial || !last?.complete || last.owner !== thread.id) return;
       const mark = `${last.owner}:${last.at}`;
