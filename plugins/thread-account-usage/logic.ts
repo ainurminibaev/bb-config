@@ -10,6 +10,18 @@ export function appliesToModel(window: QuotaWindow, model: string | null): boole
   return model !== null && ['fable', 'opus', 'sonnet', 'haiku', 'mythos'].some(
     family => window.label.toLowerCase().includes(family) && model.toLowerCase().includes(family));
 }
+/**
+ * Claude's usage endpoint is rate limited. Then Claude Code answers with the
+ * five-hour and weekly windows only, and per-model windows (Fable) vanish.
+ * Keep the last known per-model window of the same account until it resets.
+ */
+export function carryModelWindows(fresh: QuotaWindow[], previous: readonly QuotaWindow[] | undefined, now: number): QuotaWindow[] {
+  if (!previous?.length) return fresh;
+  const present = new Set(fresh.filter(w => w.kind === 'model').map(w => w.label.toLowerCase()));
+  const carried = previous.filter(w => w.kind === 'model' && !present.has(w.label.toLowerCase()) &&
+    w.resetsAt !== null && Date.parse(w.resetsAt) > now);
+  return carried.length ? [...fresh, ...carried] : fresh;
+}
 export function riskyOverride(names: readonly string[], providerId: string): boolean {
   const risky = providerId === 'codex'
     ? ['CODEX_HOME', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'CODEX_API_KEY', 'OPENAI_API_BASE']

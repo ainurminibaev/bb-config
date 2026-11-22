@@ -1,6 +1,6 @@
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
-import { rpcContract, type Account, type Snapshot } from './contract';
-import { claudeProfilePlan, classifyWindow, dedupeAccounts, riskyOverride } from './logic';
+import { rpcContract, type Account, type QuotaWindow, type Snapshot } from './contract';
+import { carryModelWindows, claudeProfilePlan, classifyWindow, dedupeAccounts, riskyOverride } from './logic';
 import { hostContract } from './host-contract';
 const providers = [{ id: 'claude-code', name: 'Claude Code' }, { id: 'codex', name: 'Codex' }];
 const record = (v: unknown): Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
@@ -12,6 +12,8 @@ export default function plugin(bb: BbPluginApi) {
   // Cache in memory only. No account identities or usage history persisted.
   const cache = new Map<string, { at: number; accounts: Account[] }>();
   const pending = new Map<string, Promise<Account[]>>();
+  // Last per-model windows by account, shared across machines with that login.
+  const modelWindows = new Map<string, QuotaWindow[]>();
   async function readHost(hostId: string, hostName: string, refresh: boolean): Promise<Account[]> {
     const saved = cache.get(hostId);
     if (!refresh && saved && Date.now() - saved.at < 120_000) return saved.accounts;
@@ -29,11 +31,13 @@ export default function plugin(bb: BbPluginApi) {
           const usage = record(raw[provider.id]);
           const old = saved?.accounts.find(a => a.providerId === provider.id);
           const ok = usage.status === 'ok';
-          const windows = ok && Array.isArray(usage.windows) ? usage.windows.flatMap(item => {
+          const email = string(usage.accountEmail)?.toLowerCase() ?? null;
+          const windows = ok && Array.isArray(usage.windows) ? carryModelWindows(usage.windows.flatMap(item => {
             const w = record(item);
             if (typeof w.label !== 'string' || typeof w.usedPercent !== 'number' || !Number.isFinite(w.usedPercent)) return [];
             return [{ label: w.label, kind: classifyWindow(w.label, w.kind), usedPercent: w.usedPercent, resetsAt: string(w.resetsAt) }];
-          }) : old?.windows ?? [];
+          }), email ? modelWindows.get(`${provider.id}:${email}`) : undefined, Date.now()) : old?.windows ?? [];
+          if (ok && email) modelWindows.set(`${provider.id}:${email}`, windows.filter(w => w.kind === 'model'));
           return {
             key: `${provider.id}:${hostId}`, providerId: provider.id, providerName: provider.name,
             hostIds: [hostId], hostNames: [hostName], email: string(usage.accountEmail) ?? (!ok ? old?.email ?? null : null),

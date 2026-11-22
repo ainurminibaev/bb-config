@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { accountExhausted, appliesToModel, classifyWindow, dedupeAccounts, riskyOverride, planLabel, claudeProfilePlan } from './logic.ts';
+import { accountExhausted, appliesToModel, classifyWindow, dedupeAccounts, riskyOverride, planLabel, claudeProfilePlan, carryModelWindows } from './logic.ts';
 import type { Account, QuotaWindow } from './contract.ts';
 const window = (label: string, kind: QuotaWindow['kind']): QuotaWindow => ({ label, kind, usedPercent: 100, resetsAt: null });
 test('model weekly quotas remain distinct from the account weekly quota', () => {
@@ -68,4 +68,15 @@ test('Claude plan from the account profile', () => {
   assert.equal(claudeProfilePlan('claude_max', null), 'Max');
   assert.equal(claudeProfilePlan('claude_pro', 'default_claude_ai'), 'Pro');
   assert.equal(claudeProfilePlan(null, null), null);
+});
+
+test('per-model window survives a rate-limited answer until it resets', () => {
+  const now = Date.parse('2026-11-22T20:00:00Z');
+  const fable: QuotaWindow = { label: 'Fable', kind: 'model', usedPercent: 24, resetsAt: '2026-11-24T21:00:00Z' };
+  const base = [window('Current session', 'five-hour'), window('Weekly limit', 'weekly')];
+  assert.deepEqual(carryModelWindows(base, [fable], now), [...base, fable]);
+  const fresh = { ...fable, usedPercent: 30 };
+  assert.deepEqual(carryModelWindows([...base, fresh], [fable], now), [...base, fresh]);
+  assert.deepEqual(carryModelWindows(base, [{ ...fable, resetsAt: '2026-11-22T19:00:00Z' }], now), base);
+  assert.deepEqual(carryModelWindows(base, undefined, now), base);
 });

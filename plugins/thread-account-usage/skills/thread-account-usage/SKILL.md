@@ -10,6 +10,9 @@ quota window has its own column: label and used percentage above, time until
 reset (↻) below. Keep five-hour before weekly in both columns and rings,
 regardless of used percentage; model/other windows follow as fallbacks.
 Only reported windows appear; a provider may report one or two.
+When Claude's usage endpoint is rate limited, BB returns only the five-hour
+and weekly windows; the plugin keeps the last known per-model window (Fable)
+of the same login until its reset time.
 These are account quotas, separate from the adjacent Tokenomics thread spend.
 
 `+N` means confirmed available reset credits. Codex credits are read through

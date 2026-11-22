@@ -453,6 +453,14 @@ Pro → Max там остаётся `pro`. Плагин через свой host
 `prolite`/`promax` показываются как «Pro Lite $100»/«Pro Max $500».
 Проверка — `node --test logic.test.ts`.
 
+Окно Fable (0.1.2): эндпоинт лимитов Claude (`/api/oauth/usage`) бывает
+занят (`rate_limit_error`), и тогда `system.usageLimits` BB 0.50 отдаёт только
+«Current session» и «Weekly limit» без массива `limits` с `weekly_scoped`
+окнами моделей. Плагин хранит в памяти последнее окно модели для того же
+провайдера и e-mail и подставляет его, пока не наступил его `resetsAt`.
+Пришло свежее окно — используется оно. Проверка — `carryModelWindows` в
+`logic.test.ts`.
+
 Настройка `hideGlobalTokenomics` скрывает верхний левый индикатор Tokenomics
 адресным стилем нашего плагина; файлы готового плагина не меняются.
 Можно вернуть через `bb plugin config thread-account-usage set
