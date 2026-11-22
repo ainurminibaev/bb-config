@@ -251,3 +251,16 @@ test("the button's run result: installed and updated components, attention, fail
   const broken = scriptAnswer({ code: 1, stdout: "", stderr: "Traceback" });
   assert.equal(summarize("v1.5.0", 1, broken.code, broken.answer, "Traceback").error, "Traceback");
 });
+
+test("findRoot: the configured checkout wins; a missing one falls back", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, realpathSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { findRoot } = await import("./server.ts");
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "cu-root-")));
+  mkdirSync(join(dir, "scripts")); mkdirSync(join(dir, ".git"));
+  writeFileSync(join(dir, "scripts/updates.py"), "");
+  assert.equal(findRoot(dir, null), dir);
+  assert.notEqual(findRoot(join(dir, "missing"), null), join(dir, "missing"));
+});
+

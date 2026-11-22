@@ -81,12 +81,22 @@ const SHA = /^[0-9a-f]{40}$/;
 const NOTES_FOR = 5;
 const START_WINDOW_MS = 15 * 60_000;
 
-/** Checkout root: the plugin runs from <checkout>/plugins/config-updates (or its dist/). */
-function findRoot(): string {
+const isCheckout = (directory: string) => existsSync(resolve(directory, "scripts/updates.py")) && existsSync(resolve(directory, ".git"));
+
+/**
+ * The bb-config checkout whose scripts/updates.py runs the updates. Installed from a
+ * folder, the plugin sits inside it: <checkout>/plugins/config-updates (or its dist/).
+ * Installed from Git (BB keeps it in its own cache) there is no checkout around it:
+ * then the checkout named in the settings, or the installation root remembered while
+ * the plugin still ran from a folder, is used.
+ */
+export function findRoot(configured = "", remembered: string | null = null): string {
+  if (configured && isAbsolute(configured) && isCheckout(configured)) return realpathSync(configured);
   let directory = dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 4; depth += 1, directory = dirname(directory)) {
-    if (existsSync(resolve(directory, "scripts/updates.py")) && existsSync(resolve(directory, ".git"))) return realpathSync(directory);
+    if (isCheckout(directory)) return realpathSync(directory);
   }
+  if (remembered && isAbsolute(remembered) && isCheckout(remembered)) return realpathSync(remembered);
   throw new Error("Рядом с плагином нет checkout с scripts/updates.py. Из постоянной рабочей копии bb-config соберите plugins/config-updates и выполните bb plugin install path:\"$PWD/plugins/config-updates\".");
 }
 
@@ -202,6 +212,8 @@ export default async function configUpdates(bb: BbPluginApi) {
       description: "Когда все шаги релиза уже выполнены или неприменимы, версия отмечается установленной сразу при проверке. Ничего не собирается и не устанавливается." },
     pythonPath: { type: "string", label: "Интерпретатор Python (3.11+)", default: "",
       description: "Чем запускать scripts/updates.py. Пусто — python3 из PATH сервера BB (на Windows — python). На Windows укажите полный путь, если python в PATH — заглушка Microsoft Store." },
+    checkout: { type: "string", label: "Рабочая копия bb-config (абсолютный путь)", default: "",
+      description: "Где лежит scripts/updates.py. Пусто — папка, из которой установлен плагин, а при установке из Git — запомненная рабочая копия установки." },
     cliPath: { type: "string", label: "BB CLI (путь к исполняемому файлу)", default: process.env.BB_CLI ?? "",
       description: "Нужен кнопке «Обновить»: установка плагинов идёт через bb plugin. Пусто — значение BB_CLI сервера." },
     archiveWhenDone: { type: "boolean", label: "Архивировать тред после успешного обновления", default: true,
@@ -223,7 +235,11 @@ export default async function configUpdates(bb: BbPluginApi) {
   async function checkOnce(): Promise<UpdateStatus> {
     const checkedAt = Date.now();
     try {
-      root = io.root();
+      root = io.root((await settings.get()).checkout.trim(), (await bb.storage.kv.get<string>("installationRoot")) ?? null);
+      // Remember the installation while the plugin can still see it from its folder:
+      // after a move to a Git source this is how it finds the checkout again.
+      const installation = io.projectRoot(root);
+      if ((await bb.storage.kv.get<string>("installationRoot")) !== installation) await bb.storage.kv.set("installationRoot", installation);
       runtime.python = (await settings.get()).pythonPath.trim();
       const configured = (await settings.get()).repository.trim();
       const repository = configured || parseRepository(await io.origin(root));

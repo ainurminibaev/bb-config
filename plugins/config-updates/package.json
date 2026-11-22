@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-config-updates",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "type": "module",
   "engines": {
     "bb": ">=0.49",
