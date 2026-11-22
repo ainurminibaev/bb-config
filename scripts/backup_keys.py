@@ -103,9 +103,15 @@ def chrome_import():
     folder = ROOT / '.local/keys'
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     folder.chmod(0o700)
+    if folder.is_symlink() or not folder.is_dir() or folder.stat().st_uid != os.getuid():
+        raise RuntimeError(f'Unsafe key folder: {folder}')
     path = folder / 'chrome-import-BB-recovery.csv'
-    with path.open('w', newline='') as stream:
-        os.chmod(path, 0o600)
+    # A fresh private file only: never follow or reuse something already at this path,
+    # which could send the recovery key wherever a link points.
+    if path.is_symlink() or path.exists():
+        raise RuntimeError(f'{path} already exists: run cleanup-import first')
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    with os.fdopen(fd, 'w', newline='') as stream:
         writer = csv.writer(stream)
         writer.writerow(['name', 'url', 'username', 'password', 'note'])
         writer.writerow(['BB — ключ восстановления бэкапов', 'https://bb-backups.invalid',
