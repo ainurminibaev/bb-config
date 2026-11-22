@@ -2795,9 +2795,11 @@ bb browser-relay service install --machine <Mac с Chrome>   # новая маш
 
 ## Проверка переключения Claude между машинами
 
-Экспериментальный плагин: исходник хранится здесь, но в комплект
-(`config/plugins.json`) и релизы не входит и пользователям не ставится. На
-сервере ставится вручную: `bb plugin build plugins/claude-origin-failover &&
+Экспериментальный плагин: в комплект (`config/bundle.json`,
+`config/plugins.json`) и релизы не входит и пользователям не ставится. Пока он
+в разработке, исходник ведётся в ветке `fix/origin-failover-live-usage` и в
+`main` попадает только вместе с решением включить его в комплект. На сервере
+ставится вручную: `bb plugin build plugins/claude-origin-failover &&
 bb plugin install path:<checkout>/plugins/claude-origin-failover --yes`.
 Менять маршрут Claude — только по отдельному поручению.
 
