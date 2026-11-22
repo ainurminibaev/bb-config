@@ -66,12 +66,12 @@ def settings(plugin_id):
     config = bb('plugin', 'config', plugin_id)
     if not config.get('ok'):
         raise MigrationError('BB did not return the settings schema')
+    secret = {key for key, field in config['schema'].items() if field.get('secret')}
     for key, field in config['schema'].items():
-        if field.get('secret'):
-            raise SecretSetting(f'secret setting {key!r} cannot be saved and returned; ask the owner first')
-        if field['type'] not in {'boolean', 'number', 'string', 'select'}:
+        if key not in secret and field['type'] not in {'boolean', 'number', 'string', 'select'}:
             raise MigrationError(f'Unsupported setting for migration: {key}')
-    values = config['values']
+    # Secret values never leave BB through `config`; they are carried separately.
+    values = {key: value for key, value in config['values'].items() if key not in secret}
     if values.keys() - config['schema'].keys() or any(type(value) not in (bool, int, float, str)
                                                        for value in values.values()):
         raise MigrationError('BB returned settings that cannot be restored safely')
@@ -171,7 +171,86 @@ def wait_running(plugin_id, seconds=60):
     return row
 
 
+# ---------- Secret settings: BB 0.50 drops them on remove, so they are carried ----------
+
+def is_set(value):
+    return value is True or (isinstance(value, dict) and value.get('set') is True) or (isinstance(value, str) and bool(value))
+
+
+def set_secrets(plugin_id):
+    config = bb('plugin', 'config', plugin_id)
+    return [key for key, field in config['schema'].items()
+            if field.get('secret') and is_set(config['values'].get(key))]
+
+
+def carry_path(plugin_id):
+    """A private file outside Git and outside the update journal, removed after success."""
+    base = Path(os.environ.get('BB_CONFIG_SECRET_CARRY') or Path.home() / '.cache' / 'bb-config-secret-carry')
+    return base / f'{plugin_id}.json'
+
+
+def bb_data_dir():
+    explicit = os.environ.get('BB_DATA_DIR')
+    if explicit:
+        return Path(explicit)
+    out = subprocess.run([os.environ.get('BB_CLI') or 'bb', 'status'], capture_output=True, text=True, timeout=60)
+    for line in out.stdout.splitlines():
+        if line.startswith('Data dir:'):
+            return Path(line.split(':', 1)[1].strip())
+    raise SecretSetting('cannot find the BB data folder to carry secret settings; ask the owner first')
+
+
+def carry_save(plugin_id):
+    """Copy the plugin's set secret settings from BB's store before anything is removed.
+    A secret that cannot be read stops the migration here."""
+    path = carry_path(plugin_id)
+    keys = set_secrets(plugin_id)
+    if path.exists():
+        return  # an interrupted migration: the saved copy is the original one
+    if not keys:
+        return
+    store = bb_data_dir() / 'plugins' / plugin_id / 'secrets'
+    values = {}
+    for key in keys:
+        source = store / key
+        if not source.is_file():
+            raise SecretSetting(f'secret setting {key!r} cannot be saved and returned; ask the owner first')
+        values[key] = source.read_text(encoding='utf-8')
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+        json.dump(values, handle)
+    print(f'{plugin_id}: saved {len(values)} secret setting(s) to a private file ({", ".join(values)})', flush=True)
+
+
+def carry_restore(plugin_id):
+    path = carry_path(plugin_id)
+    if not path.exists():
+        return
+    values = json.loads(path.read_text(encoding='utf-8'))
+    for key, value in values.items():
+        bb('plugin', 'config', plugin_id, 'set', key, value)
+    missing = [key for key in values if key not in set_secrets(plugin_id)]
+    if missing:
+        raise MigrationError(f'BB does not report {", ".join(missing)} as set after the restore')
+    print(f'{plugin_id}: restored {len(values)} secret setting(s)', flush=True)
+
+
+def carry_forget(plugin_id):
+    path = carry_path(plugin_id)
+    if path.exists():
+        size = path.stat().st_size
+        with path.open('r+b') as handle:
+            handle.write(b'\0' * size)
+            handle.flush()
+            os.fsync(handle.fileno())
+        path.unlink()
+        print(f'{plugin_id}: private file with secret settings deleted', flush=True)
+
+
 def restore_settings(plugin_id, expected):
+    carry_restore(plugin_id)
     current = settings(plugin_id)
     for key in current.keys() - expected.keys():
         bb('plugin', 'config', plugin_id, 'unset', key)
@@ -282,6 +361,7 @@ def rollback(plugin_id, journal, record, allow_remove):
     restore_settings(plugin_id, record['settings'])
     record['phase'] = 'rolled-back'
     save(journal, record)
+    carry_forget(plugin_id)
     print(f'{plugin_id}: {row["source"]}, {row["version"]}, running; original settings verified')
 
 
@@ -301,6 +381,7 @@ def apply(plugin_id, journal, record, allow_remove):
                 raise
             record['phase'] = 'migrated'
             save(journal, record)
+            carry_forget(plugin_id)
             print(f'{plugin_id}: {row["version"]}, running; original settings verified')
         else:
             verify_running(row)
@@ -322,6 +403,7 @@ def apply(plugin_id, journal, record, allow_remove):
         save(journal, record)
         print(f'{plugin_id}: saved the original source and settings in {journal}', flush=True)
     prebuild(plugin_id, record['target'].rsplit('@', 1)[1])
+    carry_save(plugin_id)
 
     try:
         install(plugin_id, record['target'], record['path'], allow_remove,
@@ -338,6 +420,7 @@ def apply(plugin_id, journal, record, allow_remove):
 
     record['phase'] = 'migrated'
     save(journal, record)
+    carry_forget(plugin_id)
     print(f'{plugin_id}: {row["source"]}, {row["version"]}, running; original settings verified')
 
 

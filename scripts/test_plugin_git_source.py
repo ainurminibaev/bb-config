@@ -48,6 +48,12 @@ class GitSourceTests(unittest.TestCase):
         self.addCleanup(build.stop)
         build.start()
         self.required = False
+        self.secrets = {}
+        self.store = root / 'data' / 'plugins' / self.plugin_id / 'secrets'
+        for name, value in (('BB_DATA_DIR', str(root / 'data')), ('BB_CONFIG_SECRET_CARRY', str(root / 'carry'))):
+            env = patch.dict(migration.os.environ, {name: value})
+            env.start()
+            self.addCleanup(env.stop)
         sleep = patch.object(migration.time, 'sleep', lambda s: None)
         self.addCleanup(sleep.stop)
         sleep.start()
@@ -68,14 +74,23 @@ class GitSourceTests(unittest.TestCase):
         if command == 'config':
             if len(args) > 1:
                 self.assertEqual(args[1], 'set')
-                self.values[args[2]] = json.loads(args[3])
-            return {'ok': True, 'values': self.values.copy(), 'schema': self.schema}
+                if self.schema.get(args[2], {}).get('secret'):
+                    self.secrets[args[2]] = args[3]
+                else:
+                    self.values[args[2]] = json.loads(args[3])
+            shown = self.values.copy()
+            shown.update({k: {'set': k in self.secrets} for k, f in self.schema.items() if f.get('secret')})
+            return {'ok': True, 'values': shown, 'schema': self.schema}
         if command == 'install-jobs':
             return {'jobs': []}
         if command == 'remove':
             self.assertEqual(args, (self.plugin_id,))
             self.source = None
             self.values = self.defaults.copy()
+            self.secrets = {}
+            if self.store.exists():
+                for item in self.store.iterdir():
+                    item.unlink()
             return
         if command == 'install':
             if self.source and not self.allow_replace:
@@ -148,12 +163,25 @@ class GitSourceTests(unittest.TestCase):
         self.assertEqual((self.source, self.version, self.values), (self.path, '0.1.0', self.initial))
         self.assertEqual(self.record()['phase'], 'rolled-back')
 
-    def test_secret_schema_stops_before_writing_journal(self):
-        self.schema['secret'] = {'type': 'string', 'secret': True}
+    def test_a_secret_that_cannot_be_read_stops_before_removal(self):
+        self.schema['vault'] = {'type': 'string', 'secret': True}
+        self.secrets = {'vault': 'x'}  # set in BB, but its stored value is not readable
         with self.assertRaisesRegex(migration.SecretSetting, 'ask the owner'):
             self.apply(allow_remove=True)
-        self.assertIsNone(self.record())
-        self.assertNotIn('install', [command[0] for command in self.commands])
+        self.assertNotIn(('remove', self.plugin_id), self.commands)
+        self.assertEqual(self.source, self.path)
+
+    def test_secret_settings_are_carried_and_the_private_file_is_deleted(self):
+        self.schema['vault'] = {'type': 'string', 'secret': True}
+        self.secrets = {'vault': '[{"id":"p1"}]'}
+        self.store.mkdir(parents=True)
+        (self.store / 'vault').write_text(self.secrets['vault'], encoding='utf-8')
+        self.apply(allow_remove=True)
+        self.assertEqual(self.source, self.git)
+        self.assertEqual(self.secrets, {'vault': '[{"id":"p1"}]'})
+        self.assertEqual(self.values, self.initial)
+        self.assertFalse(migration.carry_path(self.plugin_id).exists())
+        self.assertNotIn('p1', self.journal.read_text(encoding='utf-8'))
 
     def test_missing_original_files_prevent_removal_on_rollback(self):
         self.apply(allow_remove=True)
@@ -199,6 +227,17 @@ class GitSourceTests(unittest.TestCase):
         (checkout / 'config' / 'bundle.json').unlink()
         with self.assertRaises(migration.NotApplicable):
             migration.release_path(self.plugin_id, row)
+
+    def test_secret_settings_come_back_on_rollback_too(self):
+        self.schema['vault'] = {'type': 'string', 'secret': True}
+        self.secrets = {'vault': 'v'}
+        self.store.mkdir(parents=True)
+        (self.store / 'vault').write_text('v', encoding='utf-8')
+        self.abort_install = True
+        with self.assertRaises(migration.MigrationError):
+            self.apply(allow_remove=True)
+        self.assertEqual((self.source, self.secrets, self.values), (self.path, {'vault': 'v'}, self.initial))
+        self.assertFalse(migration.carry_path(self.plugin_id).exists())
 
 if __name__ == '__main__':
     unittest.main()
