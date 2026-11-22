@@ -50,7 +50,52 @@ Context Mode подключается отдельно в пользовател
 Источник: [mksglu/context-mode](https://github.com/mksglu/context-mode), npm-пакет
 `context-mode`. Проверенная версия — `2.2.0`; настроены Codex CLI и Claude Code.
 Инвентаризация машин и результаты проверки хранятся только в `.local/docs/`.
-Это расширение CLI, поэтому запись в списке плагинов BB не требуется.
+Это расширение CLI; его раскатку на машины выполняет собственный плагин BB
+`context-mode-rollout` (ниже).
+
+### Автоустановка: плагин Context Mode Rollout 0.1.0
+
+Собственный плагин `plugins/context-mode-rollout/` (дом — bb-config). Зачем
+плагин, а не шаг `restore.py`: восстановление запускают вручную на одной
+машине, а машины BB подключаются позже и без участия bb-config. Плагин с
+частью `host` BB сам доставляет на каждую подключённую машину, и код
+выполняется там от пользователя, запускающего CLI.
+
+- Сервер раз в 2 минуты читает `hosts.list()` (события «машина подключилась» в
+  SDK 0.6.157 нет). Новую машину проверяет сразу, переподключившуюся — не чаще
+  раза в 30 минут, остальные — раз в сутки, после ошибки — через час.
+- Host-часть: PATH из login shell (+ `~/.local/bin`, `~/.npm-global/bin`, на
+  macOS Homebrew), ищет `claude` и `codex`; нет обоих — `no-cli`. Пакет
+  отсутствует или старее закреплённого — `npm install -g context-mode@<версия>`
+  без sudo, новее — не откатывает. Затем `setup --dry-run`; если есть изменения
+  или агент не PASS — `setup --yes --agents <найденные>` и `doctor`. MCP пишет
+  сам setup context-mode только в пользовательский профиль (Claude Code — плагин
+  с Scope: user, Codex — `~/.codex/config.toml`), не в local scope.
+- Опирается на JSON `context-mode setup|doctor --json` версии 2.2.0 (поля
+  `agents[].id/status/changes`); разбор терпим к лишним полям, при непонятном
+  выводе setup выполняется заново, итог проверяет `doctor`. Тест —
+  `logic.test.ts`.
+- Настройки: `autoInstall` (по умолчанию true), `version` (2.2.0). Команды:
+  `bb context-mode-rollout status | check [--machine] [--verify] | apply [--machine]`.
+  Навык: `plugins/context-mode-rollout/skills/`.
+- Не проверено: Windows и машина с npm, у которого глобальный каталог не
+  доступен на запись (ожидается `error` с просьбой ручной установки).
+
+Установка, обновление и восстановление:
+
+```bash
+cd plugins/context-mode-rollout
+npm ci && npm run typecheck && npm test
+bb plugin build && bb plugin install . --yes
+bb context-mode-rollout check      # сухой прогон на всех подключённых машинах
+```
+
+`scripts/restore.py --plugins --apply` ставит плагин из `config/plugins.json`.
+Удаление: `bb plugin remove context-mode-rollout` (сам context-mode остаётся;
+его снимает `context-mode setup --remove` на машине).
+Проверено 22.11.2026: Tru и UA — `ok` (оба CLI PASS); «новая машина» —
+host-часть в изолированном HOME и npm-префиксе: сухой прогон `planned`,
+установка `installed` за 25 с с doctor PASS для обоих CLI, повтор — `ok`.
 
 Восстановление выполняется под тем пользователем, от которого BB запускает CLI,
 на каждой нужной машине, с Node.js, поддерживающим `node:sqlite`:

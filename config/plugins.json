@@ -198,6 +198,13 @@
     "source": "builtin:drafts"
   },
   {
+    "id": "context-mode-rollout",
+    "version": "0.1.0",
+    "enabled": true,
+    "name": "Context Mode Rollout",
+    "source": "path:plugins/context-mode-rollout"
+  },
+  {
     "id": "environment-git-worktree",
     "version": "0.1.0",
     "enabled": true,

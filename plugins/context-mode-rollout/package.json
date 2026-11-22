@@ -1,0 +1,34 @@
+{
+  "name": "bb-plugin-context-mode-rollout",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Keeps the context-mode extension installed in Claude Code and Codex CLI on every BB machine",
+  "engines": {
+    "bb": ">=0.50",
+    "bbPluginSdk": ">=0.6.157"
+  },
+  "bb": {
+    "name": "Context Mode Rollout",
+    "description": "Ставит и проверяет context-mode в Claude Code и Codex на каждой подключённой машине BB, включая новые.",
+    "branding": {
+      "icon": "Layers"
+    },
+    "server": "./server.ts",
+    "host": "./host.ts",
+    "skills": [
+      "skills"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test logic.test.ts"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.6.157",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

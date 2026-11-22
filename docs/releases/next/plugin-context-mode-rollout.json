@@ -1,0 +1,11 @@
+{
+  "id": "plugin-context-mode-rollout",
+  "title": "Context Mode Rollout 0.1.0: context-mode в Claude Code и Codex на всех машинах BB, включая новые",
+  "component": "context-mode-rollout",
+  "where": "server",
+  "kind": "local-plugin",
+  "plugin": "context-mode-rollout",
+  "introduces": true,
+  "rerun": "Безопасно: при совпадении версии и источника шаг только проверяется; сам плагин на машинах, где context-mode уже настроен, ничего не меняет.",
+  "rollback": "bb plugin remove context-mode-rollout. Установленный context-mode остаётся; снять его с машины — context-mode setup --remove."
+}

@@ -1,0 +1,21 @@
+# Context Mode Rollout
+
+BB plugin that keeps [context-mode](https://github.com/mksglu/context-mode)
+installed and set up in Claude Code and Codex CLI on every machine enrolled in
+BB, including machines enrolled later.
+
+- `host.ts` runs on each machine: finds `claude`/`codex` in the login-shell PATH,
+  installs the pinned npm package if missing or older (no sudo, never
+  downgrades), runs `context-mode setup --dry-run` and, when it reports work,
+  `setup --yes` plus `doctor`.
+- `server.ts` polls `hosts.list()` every 2 minutes (BB has no "machine
+  connected" event) and runs the host check for a new or reconnected machine and
+  once a day; CLI `bb context-mode-rollout status|check|apply`.
+- `logic.ts` holds the pure decisions, covered by `logic.test.ts`.
+
+```sh
+npm ci && npm run typecheck && npm test
+bb plugin build && bb plugin install . --yes
+```
+
+Settings: `autoInstall` (default true), `version` (default `2.2.0`).

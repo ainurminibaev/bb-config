@@ -13,6 +13,10 @@
     "install": "bb plugin install git:https://github.com/ainurminibaev/bb-codex-project-trust.git@^1.0.0 --yes",
     "note": "Codex project trust card; GitHub releases"
   },
+  "context-mode-rollout": {
+    "home": "bb-config",
+    "note": "own plugin: keeps context-mode in Claude Code and Codex on every BB machine"
+  },
   "knowledge-base": {
     "home": "project",
     "project": "ai_agents",
