@@ -37,7 +37,7 @@ function PagedList({ Component, nativeProps, pinned }: {
           {visible < count ? (
             <button type="button" aria-controls={id}
               onClick={() => setLimit(visible + PAGE_SIZE)}>
-              <span aria-hidden="true">↓</span> Показать ещё
+              <span aria-hidden="true">↓</span> ещё {Math.min(PAGE_SIZE, count - visible)}
             </button>
           ) : null}
           {visible > PAGE_SIZE ? (
@@ -79,16 +79,23 @@ export function withGroupPaging(runtime: Record<string, any>) {
 }
 
 export const GROUP_PAGING_CSS = `
+/* The pager takes no room: it floats over the bottom-right corner of the
+   list and shows only while the list is hovered or focused. */
+[data-machine-tabs-page] { position: relative; }
 .machine-tabs-pager {
-  display: flex; align-items: center; gap: 12px;
-  min-height: 24px; padding: 1px 12px 1px 20px;
+  position: absolute; right: 6px; bottom: 2px; z-index: 2;
+  display: flex; align-items: center; gap: 8px;
+  height: 20px; padding: 0 6px;
   font-size: 11px; line-height: 20px; color: var(--muted-foreground);
-  opacity: 0; transition: opacity 120ms ease;
+  background: var(--sidebar, var(--background)); border-radius: 6px;
+  box-shadow: 0 0 0 1px var(--border), 0 1px 3px rgb(0 0 0 / .08);
+  opacity: 0; pointer-events: none; transition: opacity 120ms ease;
 }
-[data-machine-tabs-page]:hover > .machine-tabs-pager,
-[data-machine-tabs-page]:focus-within > .machine-tabs-pager,
-[data-sidebar-sticky-group]:hover > div > [data-machine-tabs-page] > .machine-tabs-pager {
-  opacity: .65;
+/* Only the innermost hovered list shows its pager. */
+[data-machine-tabs-page]:hover:not(:has([data-machine-tabs-page]:hover)) > .machine-tabs-pager,
+[data-machine-tabs-page]:focus-within:not(:has([data-machine-tabs-page]:focus-within)) > .machine-tabs-pager,
+[data-sidebar-sticky-group]:hover > div > [data-machine-tabs-page]:not(:has([data-machine-tabs-page]:hover)) > .machine-tabs-pager {
+  opacity: 1; pointer-events: auto;
 }
 .machine-tabs-pager button {
   display: inline-flex; align-items: center; gap: 4px;
@@ -96,9 +103,8 @@ export const GROUP_PAGING_CSS = `
   cursor: pointer; white-space: nowrap; border-radius: 3px; color: inherit;
 }
 .machine-tabs-pager button:hover { text-decoration: underline; text-underline-offset: 3px; }
-.machine-tabs-pager:focus-within, .machine-tabs-pager:hover { opacity: 1; }
 .machine-tabs-pager button:focus-visible { outline: 2px solid var(--sidebar-ring); outline-offset: 2px; }
-.machine-tabs-page-count { margin-left: auto; flex-shrink:0; white-space:nowrap; font-size: 10px; font-variant-numeric: tabular-nums; opacity: .7; }
-@media (hover: none) { .machine-tabs-pager { opacity: .7; min-height: 32px; gap:6px; padding-inline:8px; } }
+.machine-tabs-page-count { flex-shrink:0; white-space:nowrap; font-size: 10px; font-variant-numeric: tabular-nums; opacity: .7; }
+@media (hover: none) { .machine-tabs-pager { position: static; height: auto; min-height: 32px; box-shadow: none; background: none; opacity: .7; pointer-events: auto; } }
 @media (prefers-reduced-motion: reduce) { .machine-tabs-pager { transition: none; } }
 `;
