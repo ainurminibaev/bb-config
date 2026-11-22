@@ -10,3 +10,6 @@ subthread. Uses the Thread list plugin's own RPC (`listPreferences` /
 Part of the [bb-config](../../README.md) set: `python3 scripts/updates.py apply` from the repository root installs it with everything else. Alone: `npm ci && npm test && npm run typecheck`, then
 `bb plugin build . && bb plugin install . --yes`. Status:
 `bb subthread-autocollapse status`.
+
+Version 0.1.1 is the pilot for BB's Git-source update check with the
+`subthread-autocollapse/` tag prefix.

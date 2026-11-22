@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-subthread-autocollapse",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Collapses expanded subthread lists in the BB sidebar a few minutes after they open",
   "engines": {

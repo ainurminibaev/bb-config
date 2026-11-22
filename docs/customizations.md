@@ -2974,6 +2974,15 @@ Realtime 2.1 по подписке) и голос Codex Live `codexLiveVoice = "
   `bb plugin remove subthread-autocollapse`.
 - **Обновление для установивших:** шаг
   `docs/releases/next/plugin-subthread-autocollapse`.
+- **Проба Git-обновлений (BB 0.50.1):** `scripts/plugin_git_source.py
+  --check subthread-autocollapse` проверяет источник по полям `requested`,
+  `range`, `tagPrefix` и `subdirectory` команды `bb plugin source --json`.
+  `--apply` и `--rollback` используют приватный журнал в
+  `.local/updates/plugin-git-source/`. В BB 0.50.1 смена path на Git требует
+  удаления регистрации, на которое даёт согласие `--allow-remove`.
+  Сохраняйте исходную папку выпуска для отката. Проверка восстановления
+  нестандартных настроек, повторного запуска и отката:
+  `python3 -m unittest discover -s scripts -p test_plugin_git_source.py`.
 
 ## Настройки звонка Voice Mode 0.2.8
 
