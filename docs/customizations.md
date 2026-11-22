@@ -2688,16 +2688,41 @@ v1.4.0 первым шагом `bundle` вызывает его, а `python3 scr
   до нового ответа; «Новый тред» в выбранном проекте BB с поручением
   разобраться без отправки на GitHub.
 - **Настройки:** `since`, `extraRepos`, `ignoreRepos` (`bb plugin config pr-issues`),
-  попадают в приватный снимок. Данные: KV плагина (`state`, `seen`, `mutes`,
-  `events`, `sources`).
+  попадают в приватный снимок. Данные: KV плагина (`state` без записей, `seen`,
+  `mutes`, `events`, `sources`) и SQLite плагина (таблица `items`).
 - **CLI:** `bb prs list [--bucket action|waiting|done|all] [--json]`,
   `bb prs refresh`.
 - **Дальше:** провайдеры кроме GitHub — модуль `github.ts` отделён от правил
   (`core.ts`), поле `provider` у записи.
 
 Установка внесена в `config/plugins.json` и шаг `docs/releases/next/plugin-pr-issues`.
-Пока ветка не слита в main, плагин на сервере BB установлен из
-`.local/staging/pr-issues` в checkout bb-config на сервере. После слияния:
+Ставится шагом обновления из релиза; вручную —
 `npm ci && bb plugin build . && bb plugin install path:<checkout>/plugins/pr-issues --yes`
-в каталоге плагина на сервере — отметки и лента сохраняются. Проверка:
-`bb prs refresh`, `npm test` (10 тестов правил и команд `gh`).
+в каталоге плагина на сервере: отметки и лента сохраняются. Проверка:
+`bb prs refresh`, `npm test` (17 тестов правил, страниц и команд `gh`).
+
+## Git Thread Provenance 0.1.0
+
+Серверный плагин передаёт общую инструкцию через `bb.agents.configure` новым
+сессиям Codex и Claude Code во всех проектах этого BB, независимо от машины
+исполнения. Агент сверяет `BB_THREAD_ID` из shell с текущим ID из контекста
+BB. Для собственного нового коммита он добавляет один Git trailer
+`BB-Thread: thr_…`, а для нового PR — такую же строку отдельным абзацем после
+объяснения. Правила репозитория и ограничения пользователя на публикацию
+действуют и для этой строки. После успешного push агент указывает репозиторий,
+ветку и фактический полный SHA в рабочем треде.
+
+Поиск выполняется через `bb thread show <id>` и штатные BB-ссылки с правами
+читателя. Архив сохраняет исходный ID. Handoff не меняет ссылку на исходный
+тред. В Git попадает только ID. Это инструкция для агента. Ручной Git, кнопки
+BB и CI находятся вне её действия. Установка действует при следующем запуске
+сессии провайдера. Уже запущенные сессии сохраняют свои инструкции до
+перезапуска.
+
+Восстановление на сервере BB выполняет `python3 scripts/restore.py --plugins
+--apply` по записи в `config/plugins.json`. Для отдельной установки из
+`plugins/git-thread-provenance` запустите `npm ci --include=dev`,
+`bb plugin build .`, `bb plugin install . --yes`. Проверьте версию и статус
+`running` в `bb plugin list --json`. Для отключения выполните
+`bb plugin disable git-thread-provenance`. У плагина нет собственных
+настроек и данных для переноса.

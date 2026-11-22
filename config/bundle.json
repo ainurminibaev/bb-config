@@ -91,6 +91,12 @@
    ]
   },
   {
+   "id": "git-thread-provenance",
+   "kind": "local",
+   "name": "Git Thread Provenance",
+   "description": "Связь коммитов, pull request и результатов push с тредом BB."
+  },
+  {
    "id": "handoff",
    "kind": "catalog",
    "name": "Handoff",

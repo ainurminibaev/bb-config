@@ -226,6 +226,13 @@
     "source": "path:plugins/file-local-open"
   },
   {
+    "id": "git-thread-provenance",
+    "version": "0.1.0",
+    "enabled": true,
+    "name": "Git Thread Provenance",
+    "source": "path:plugins/git-thread-provenance"
+  },
+  {
     "id": "handoff",
     "version": "0.8.1",
     "enabled": true,
