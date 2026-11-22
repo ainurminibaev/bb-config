@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "version": "v1.10.0",
+  "title": "Machine Tabs 0.2.6: меню проектов ближе и быстрее",
+  "steps": [
+    {
+      "id": "bundle",
+      "title": "Полный набор компонентов bb-config",
+      "component": "bb-config",
+      "where": "server",
+      "kind": "bundle",
+      "rerun": "Безопасно: установленное и актуальное только проверяется; повтор доделывает остаток после сбоя.",
+      "rollback": "Компонент, который не нужен, исключите командой python3 scripts/bundle.py exclude <id> и удалите штатно (bb plugin remove <id>); прежнюю версию собственного плагина ставит предыдущий релиз."
+    },
+    {
+      "id": "plugin-machine-tabs-menu-closer",
+      "title": "Machine Tabs 0.2.6: меню проектов ближе к указателю и быстрее",
+      "component": "machine-tabs",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "machine-tabs",
+      "rerun": "Проверяет установленную версию machine-tabs; при совпадении ничего не делает.",
+      "rollback": "Установить machine-tabs 0.2.5 из релиза v1.8.0; меню снова будет открываться ниже строки фильтров и через 0,65 с."
+    }
+  ]
+}
