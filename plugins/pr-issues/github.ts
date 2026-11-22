@@ -93,7 +93,9 @@ export function toItem(node: Node, me: string, relation: Relation): Item | null 
 export interface FetchPlan { query: string; relation: Relation; pages: number }
 
 /** Every search the page needs: yours anywhere, review requests, mentions, and open items in your projects. */
-export function plan(projectRepos: string[], now: number, from = 0): FetchPlan[] {
+export interface Targets { orgs: string[]; repos: string[] }
+
+export function plan(targets: Targets, now: number, from = 0): FetchPlan[] {
   const since = new Date(Math.max(now - 30 * 86_400_000, from)).toISOString().slice(0, 10);
   const window = from > 0 ? ` updated:>=${new Date(from).toISOString().slice(0, 10)}` : '';
   const out: FetchPlan[] = [
@@ -102,7 +104,12 @@ export function plan(projectRepos: string[], now: number, from = 0): FetchPlan[]
     { query: 'is:open review-requested:@me sort:updated-desc', relation: 'review', pages: 2 },
     { query: `involves:@me -author:@me updated:>=${since} sort:updated-desc`, relation: 'involved', pages: 2 },
   ];
-  for (const chunk of repoChunks(projectRepos)) {
+  for (const org of targets.orgs) {
+    // `user:` matches both personal accounts and organizations.
+    out.push({ query: `user:${org} is:open sort:updated-desc`, relation: 'project', pages: 4 });
+    out.push({ query: `user:${org} is:closed closed:>=${since} -author:@me sort:updated-desc`, relation: 'project', pages: 2 });
+  }
+  for (const chunk of repoChunks(targets.repos)) {
     const repos = chunk.map(repo => `repo:${repo}`).join(' ');
     out.push({ query: `${repos} is:open sort:updated-desc`, relation: 'project', pages: 2 });
     out.push({ query: `${repos} is:closed closed:>=${since} -author:@me sort:updated-desc`, relation: 'project', pages: 1 });
@@ -113,11 +120,11 @@ export function plan(projectRepos: string[], now: number, from = 0): FetchPlan[]
 export interface FetchResult { me: string; items: Item[]; errors: string[] }
 
 /** Run all searches, merging duplicates (an item found by several searches keeps all its relations). */
-export async function fetchAll(run: Runner, projectRepos: string[], now: number, from = 0): Promise<FetchResult> {
+export async function fetchAll(run: Runner, targets: Targets, now: number, from = 0): Promise<FetchResult> {
   const byKey = new Map<string, Item>();
   const errors: string[] = [];
   let me = '';
-  for (const step of plan(projectRepos, now, from)) {
+  for (const step of plan(targets, now, from)) {
     let after: string | null = null;
     for (let page = 0; page < step.pages; page++) {
       let data: Node;
@@ -145,6 +152,12 @@ export async function fetchAll(run: Runner, projectRepos: string[], now: number,
   }
   if (!me) throw new Error(errors[0] ?? 'GitHub не ответил: проверьте `gh auth status` на сервере BB');
   return { me, items: [...byKey.values()], errors };
+}
+
+/** Organizations the user belongs to. */
+export async function myOrgs(run: Runner): Promise<string[]> {
+  const out = await run(['api', 'user/orgs', '--paginate', '--jq', '.[].login']);
+  return out.split('\n').map(line => line.trim()).filter(Boolean);
 }
 
 export type Action = 'comment' | 'close' | 'reopen' | 'merge' | 'approve';

@@ -139,11 +139,10 @@ export function unread(item: Item, seen: Seen | undefined, statusLabel: string):
   return Boolean(item.lastOther && item.lastOther.at > seen.at);
 }
 
-/** A muted item stays hidden until someone else writes again or it gets closed. */
+/** A dismissed item stays hidden until GitHub reports any update after the dismissal (reply, push, label, status). */
 export function stillMuted(item: Item, mute: Mute | undefined): boolean {
   if (!mute) return false;
-  if (item.lastOther && item.lastOther.at > mute.at) return false;
-  return true;
+  return Math.max(item.updatedAt, item.lastOther?.at ?? 0) <= mute.at;
 }
 
 /** How long a merged or closed item of yours stays in "your move" as a notice to dismiss. */
@@ -168,7 +167,7 @@ export function view(item: Item, me: string, seen: Seen | undefined, mute: Mute 
   let muted = false;
   if (bucket === 'done') {
     const closed = item.closedAt ?? item.updatedAt;
-    if (mine && now - closed < NOTICE_MS && !(mute && mute.at >= closed)) { bucket = 'action'; reason = noticeText(item); notice = true; }
+    if (mine && now - closed < NOTICE_MS && !(mute && mute.at >= Math.max(closed, item.updatedAt))) { bucket = 'action'; reason = noticeText(item); notice = true; }
   } else if (stillMuted(item, mute)) { muted = true; bucket = 'done'; reason = `Скинуто вами · ${reason}`; }
   return { ...item, status: st.label, tone: st.tone, bucket, reason, unread: unread(item, seen, st.label), muted, mine, notice };
 }
@@ -240,9 +239,72 @@ export function repoChunks(repos: string[], size = 6): string[][] {
   return out;
 }
 
-/** Other people's items found only because the repository belongs to a BB project are yours only when you maintain it. */
-export function relevant(item: Item): boolean {
-  return item.relations.some(relation => relation !== 'project') || canWrite(item);
+/**
+ * Tracking mode of an organization or repository:
+ * all — every PR and issue there; mine — only yours and where you take part; hidden — nothing.
+ */
+export type SourceMode = 'all' | 'mine' | 'hidden';
+/** Explicit choices keyed `org:<login>` or `repo:<owner/name>`, lower-case. */
+export type SourceChoices = Record<string, SourceMode>;
+
+/** Organizations tracked in full until the user says otherwise. */
+export const DEFAULT_ALL_ORGS = ['erp-engineering'];
+
+export interface SourceContext {
+  me: string;
+  myOrgs: string[];
+  /** GitHub repositories of BB projects, lower-case owner/name. */
+  bbRepos: string[];
+  choices: SourceChoices;
+  /** Legacy text settings: extra → all, ignore → hidden. */
+  extra?: string[];
+  ignore?: string[];
+}
+
+export const ownerOf = (repo: string) => repo.split('/')[0]!.toLowerCase();
+
+export function orgMode(org: string, ctx: SourceContext): SourceMode {
+  const login = org.toLowerCase();
+  const explicit = ctx.choices[`org:${login}`];
+  if (explicit) return explicit;
+  return login === ctx.me.toLowerCase() || DEFAULT_ALL_ORGS.includes(login) ? 'all' : 'mine';
+}
+
+/** Default for a repository: BB project repos of yours or your organizations are tracked in full; otherwise the organization decides. */
+export function repoDefault(repo: string, ctx: SourceContext): SourceMode {
+  const name = repo.toLowerCase();
+  if (ctx.ignore?.includes(name)) return 'hidden';
+  if (ctx.extra?.includes(name)) return 'all';
+  const owner = ownerOf(name);
+  const org = orgMode(owner, ctx);
+  if (org === 'hidden') return 'hidden';
+  if (ctx.bbRepos.includes(name) && (owner === ctx.me.toLowerCase() || ctx.myOrgs.map(o => o.toLowerCase()).includes(owner))) return 'all';
+  return org;
+}
+
+export function repoMode(repo: string, ctx: SourceContext): SourceMode {
+  return ctx.choices[`repo:${repo.toLowerCase()}`] ?? repoDefault(repo, ctx);
+}
+
+/** Shown when the repository is not hidden, and either tracked in full or the item involves you. */
+export function visible(item: Item, ctx: SourceContext): boolean {
+  const mode = repoMode(item.repo, ctx);
+  if (mode === 'hidden') return false;
+  return mode === 'all' || item.relations.some(relation => relation !== 'project');
+}
+
+/** What to search: whole organizations and single repositories tracked in full outside them. */
+export function trackedTargets(ctx: SourceContext, knownRepos: string[]): { orgs: string[]; repos: string[] } {
+  const orgs = new Set<string>();
+  for (const key of [...ctx.myOrgs, ctx.me, ...DEFAULT_ALL_ORGS, ...Object.keys(ctx.choices).filter(k => k.startsWith('org:')).map(k => k.slice(4))]) {
+    if (orgMode(key, ctx) === 'all') orgs.add(key.toLowerCase());
+  }
+  const repos = new Set<string>();
+  for (const repo of [...knownRepos, ...ctx.bbRepos, ...(ctx.extra ?? []), ...Object.keys(ctx.choices).filter(k => k.startsWith('repo:')).map(k => k.slice(5))]) {
+    const name = repo.toLowerCase();
+    if (repoMode(name, ctx) === 'all' && !orgs.has(ownerOf(name))) repos.add(name);
+  }
+  return { orgs: [...orgs].sort(), repos: [...repos].sort() };
 }
 
 export const BUCKET_ORDER: Record<Bucket, number> = { action: 0, waiting: 1, done: 2 };

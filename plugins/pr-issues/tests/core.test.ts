@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { bucketOf, recentEnough, parseSince, relevant, diffEvents, firstSeen, githubRepo, parseRepos, status, view, type Item } from '../core';
+import { bucketOf, recentEnough, parseSince, diffEvents, firstSeen, githubRepo, parseRepos, status, view, type Item } from '../core';
 import { act, plan, toItem } from '../github';
 
 const ME = 'me';
@@ -72,7 +72,7 @@ test('repositories from remotes and settings', () => {
   assert.equal(githubRepo('https://github.com/o/r'), 'o/r');
   assert.equal(githubRepo('https://gitlab.com/o/r.git'), null);
   assert.deepEqual(parseRepos('o/r, https://github.com/A/B\n bad'), ['o/r', 'a/b']);
-  assert.equal(plan(Array.from({ length: 7 }, (_, i) => `o/r${i}`), 0).length, 4 + 2 * 2);
+  assert.equal(plan({ orgs: ['erp'], repos: Array.from({ length: 7 }, (_, i) => `o/r${i}`) }, 0).length, 4 + 2 + 2 * 2);
 });
 
 test('GraphQL node becomes an item; bots are ignored', () => {
@@ -101,11 +101,6 @@ test('writes go through gh with argument arrays', async () => {
   await assert.rejects(act(run, { kind: 'issue', repo: 'o/r', number: 3 }, 'merge'));
 });
 
-test('project-only items count only in repositories you maintain', () => {
-  assert.equal(relevant(item({ author: 'bob', relations: ['project'] })), false);
-  assert.equal(relevant(item({ author: 'bob', relations: ['project'], permission: 'ADMIN' })), true);
-  assert.equal(relevant(item({ author: 'bob', relations: ['project', 'involved'] })), true);
-});
 
 test('a fresh outcome of yours is a notice under "your move" until dismissed', () => {
   const now = 100 * 86_400_000;
@@ -123,4 +118,43 @@ test('cut-off date hides items untouched since then', () => {
   assert.equal(recentEnough(item({ updatedAt: Date.parse('2024-06-01') }), since), false);
   assert.equal(recentEnough(item({ updatedAt: Date.parse('2025-03-01') }), since), true);
   assert.equal(parseSince(''), 0);
+});
+
+import { orgMode, repoMode, trackedTargets, visible as shown, type SourceContext } from '../core';
+
+const ctx = (extra: Partial<SourceContext> = {}): SourceContext => ({ me: 'Me', myOrgs: ['erp-engineering', 'Technaxis'], bbRepos: ['me/cfg', 'technaxis/app', 'get-bb/bb'], choices: {}, ...extra });
+
+test('source defaults: own account and erp-engineering in full, BB repos of your orgs in full, the rest only yours', () => {
+  assert.equal(orgMode('me', ctx()), 'all');
+  assert.equal(orgMode('ERP-Engineering', ctx()), 'all');
+  assert.equal(orgMode('technaxis', ctx()), 'mine');
+  assert.equal(repoMode('technaxis/app', ctx()), 'all');
+  assert.equal(repoMode('get-bb/bb', ctx()), 'mine');
+  assert.equal(repoMode('technaxis/other', ctx()), 'mine');
+});
+
+test('explicit choices: repo beats organization; hidden hides even your own items', () => {
+  const c = ctx({ choices: { 'org:erp-engineering': 'hidden', 'repo:erp-engineering/botsman': 'all', 'repo:me/cfg': 'hidden' } });
+  assert.equal(repoMode('erp-engineering/x', c), 'hidden');
+  assert.equal(repoMode('erp-engineering/botsman', c), 'all');
+  assert.equal(shown(item({ repo: 'me/cfg' }), c), false);
+  assert.equal(shown(item({ repo: 'get-bb/bb', author: 'bob', relations: ['project'] }), c), false);
+  assert.equal(shown(item({ repo: 'get-bb/bb', relations: ['authored'] }), c), true);
+  assert.equal(shown(item({ repo: 'erp-engineering/botsman', author: 'bob', relations: ['project'] }), c), true);
+});
+
+test('tracked targets: whole organizations, plus single repositories outside them', () => {
+  const t = trackedTargets(ctx({ choices: { 'repo:get-bb/bb': 'all', 'org:tryon-team': 'all' } }), ['erp-engineering/botsman']);
+  assert.deepEqual(t.orgs, ['erp-engineering', 'me', 'tryon-team']);
+  assert.deepEqual(t.repos, ['get-bb/bb', 'technaxis/app']);
+});
+
+test('a dismissed item comes back on any GitHub update after the dismissal', () => {
+  const open = item({ updatedAt: 5000 });
+  assert.equal(view(open, ME, undefined, { at: 6000 }).bucket, 'done');
+  assert.equal(view(item({ updatedAt: 7000 }), ME, undefined, { at: 6000 }).muted, false);
+  const now = 100 * 86_400_000;
+  const merged = item({ state: 'merged', closedAt: now - 1000, updatedAt: now - 1000 });
+  assert.equal(view(merged, ME, undefined, { at: now - 500 }, now).bucket, 'done');
+  assert.equal(view({ ...merged, updatedAt: now - 100 }, ME, undefined, { at: now - 500 }, now).notice, true);
 });

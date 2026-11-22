@@ -29,6 +29,8 @@ const board = z.object({
 });
 export type Board = z.infer<typeof board>;
 const key = z.string().min(3).max(300);
+const sourceMode = z.enum(['all', 'mine', 'hidden']);
+export type SourcesDto = { orgs: { login: string; mode: 'all' | 'mine' | 'hidden'; explicit: boolean; me: boolean; member: boolean; count: number; repos: { repo: string; mode: 'all' | 'mine' | 'hidden'; explicit: boolean; inherited: 'all' | 'mine' | 'hidden'; count: number; projects: string[] }[] }[] };
 
 export const rpcContract = defineRpcContract({
   board: { input: z.null(), output: board },
@@ -40,5 +42,16 @@ export const rpcContract = defineRpcContract({
     output: z.object({ ok: z.boolean(), message: z.string() }),
   },
   delegate: { input: z.object({ key, projectId: z.string().min(1) }).strict(), output: z.object({ threadId: z.string() }) },
+  sources: {
+    input: z.null(),
+    output: z.object({ orgs: z.array(z.object({
+      login: z.string(), mode: sourceMode, explicit: z.boolean(), me: z.boolean(), member: z.boolean(), count: z.number(),
+      repos: z.array(z.object({ repo: z.string(), mode: sourceMode, explicit: z.boolean(), inherited: sourceMode, count: z.number(), projects: z.array(z.string()) })),
+    })) }),
+  },
+  set_source: {
+    input: z.object({ key: z.string().regex(/^(org:[\w.-]+|repo:[\w.-]+\/[\w.-]+)$/), mode: sourceMode.nullable() }).strict(),
+    output: z.object({ ok: z.boolean() }),
+  },
   projects: { input: z.null(), output: z.object({ projects: z.array(z.object({ id: z.string(), name: z.string(), repo: z.string().nullable() })) }) },
 });

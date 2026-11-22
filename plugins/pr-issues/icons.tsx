@@ -12,6 +12,8 @@ const PATHS: Record<string, string> = {
   ExternalLink: 'M15 3h6v6M10 14L21 3M18 13v7a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h7',
   Search: 'M21 21l-4.3-4.3M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z',
   X: 'M18 6L6 18M6 6l12 12',
+  ChevronDown: 'M6 9l6 6 6-6',
+  Building: 'M6 21V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v17M3 21h18M10 7h1M13 7h1M10 11h1M13 11h1M10 15h1M13 15h1',
   CircleHelp: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM9.4 9a2.7 2.7 0 0 1 5.2.9c0 1.8-2.6 2.5-2.6 4M12 17.5h.01',
 };
 
