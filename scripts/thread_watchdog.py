@@ -56,6 +56,7 @@ def main():
     state = json.loads(path.read_text()) if path.exists() else {}
     now = int(time.time() * 1000)
     # First run scans history once. Later ticks fetch only the new bounded pages.
+    incomplete = False
     if 'seq' not in state:
         events = bb('thread', 'log', args.thread, '--format', 'json', '--all')
     else:
@@ -71,11 +72,9 @@ def main():
             if len(page) < 100:
                 break
         else:
-            # Catch up before any recovery action on an incomplete view.
-            state['seq'] = cursor
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(state))
-            return
+            # More is waiting: read what was fetched (a manual stop in it must count),
+            # but take no recovery action on an incomplete view; the next tick continues.
+            incomplete = True
     for event in events:
         kind, data = event['type'], event.get('data', {})
         state['seq'] = max(state.get('seq', 0), event['seq'])
@@ -87,6 +86,10 @@ def main():
         elif kind == 'system/thread/interrupted':
             state['manual_stop'] = data.get('reason') != 'provider-turn-idle'
             state['stopped_at'] = event['createdAt']
+    if incomplete:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state))
+        return
     thread = bb('thread', 'show', args.thread)['thread']
     queue = bb('thread', 'queue', 'list', args.thread)
     newest = max((q['createdAt'] for q in queue if q.get('initiator') == 'user'), default=0)

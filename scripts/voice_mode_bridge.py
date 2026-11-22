@@ -45,7 +45,12 @@ def state():
     found = plugin()
     if not found:
         return 'absent', None, None
-    source = Path(found.get('rootDir') or '') / 'codex_voice.py'
+    root = found.get('rootDir') or ''
+    # Only the installed plugin's own folder: an empty or relative root would make the
+    # current directory decide which installer runs.
+    if not root or not Path(root).is_absolute():
+        return 'no-bridge-in-plugin', found, None
+    source = Path(root) / 'codex_voice.py'
     installed = RUNTIME / 'codex_voice.py'
     if not source.is_file():
         return 'no-bridge-in-plugin', found, source
