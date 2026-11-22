@@ -1,0 +1,10 @@
+{
+  "id": "plugin-machine-tabs-menu-closer",
+  "title": "Machine Tabs 0.2.6: меню проектов ближе к указателю и быстрее",
+  "component": "machine-tabs",
+  "where": "server",
+  "kind": "local-plugin",
+  "plugin": "machine-tabs",
+  "rerun": "Проверяет установленную версию machine-tabs; при совпадении ничего не делает.",
+  "rollback": "Установить machine-tabs 0.2.5 из релиза v1.8.0; меню снова будет открываться ниже строки фильтров и через 0,65 с."
+}

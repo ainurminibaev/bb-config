@@ -98,7 +98,7 @@ button.mt-pq-fold:hover { color: var(--popover-foreground); background: var(--st
 `;
 
 const OPEN_DELAY = 140;
-const FIELD_DELAY = 650;
+const FIELD_DELAY = 300;
 const CLOSE_DELAY = 260;
 
 /** bb's icon for a thread state (summary counts, filter chips). */
@@ -259,7 +259,9 @@ export function ProjectQuickMenu<P extends QuickProject>({
   const anchorLeft = useRef<number | null>(null);
   const placeNow = useCallback(() => {
     if (!button.current) return;
-    const fieldRect = (field?.current ?? button.current).getBoundingClientRect();
+    // The input itself, not the whole sticky row: the row also holds the filter strip below it.
+    const box = field?.current?.querySelector("input") ?? field?.current ?? button.current;
+    const fieldRect = box.getBoundingClientRect();
     const left = anchorLeft.current ?? button.current.getBoundingClientRect().left;
     setPlace(placeBelow(fieldRect, left, 288, 460));
   }, [field]);
