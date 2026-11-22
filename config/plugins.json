@@ -330,7 +330,7 @@
   },
   {
     "id": "machine-tabs",
-    "version": "0.2.7",
+    "version": "0.2.8",
     "enabled": true,
     "name": "Machine Tabs",
     "source": "path:plugins/machine-tabs"

@@ -85,6 +85,15 @@ long rest on it, shows the project's threads, and clicking one opens it and flas
 CLI or setting for it. If a click does not scroll, the list is not grouped by
 project (rows need `data-sidebar-project-id`); the menu then opens the project.
 
+Subthreads (0.2.8): chips count threads of all levels (tooltip: top-level vs
+subthreads, number of projects); a project row counts top-level threads and marks
+a state present only in subthreads with "↳". In a project's thread list a running
+thread shows its current turn's duration, and the subthread fold button carries the
+descendants' top state and count. In the sidebar a parent with unfinished
+subthreads gets a quiet "↳⟳1"/"↳✕2" mark. Turn start comes from RPC
+`turn_started` (`bb plugin rpc call machine-tabs turn_started` with
+`{"threadIds":[...]}`), cached 30 s, only for running threads while the menu is open.
+
 The search row stays pinned at the top of the sidebar while the list scrolls.
 
 ## Project images

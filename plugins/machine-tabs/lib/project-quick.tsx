@@ -2,8 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { createPortal } from "react-dom";
 import { experimental_Icon as Icon } from "@get-bb/plugin-sdk/app";
 import {
-  QUICK_FILTERS, QUICK_STATES, STATE_LABEL, ago, filterCounts, passesFilter, projectThreads,
-  summarizeProjects, threadState, threadTree, type ProjectSummary, type QuickFilter, type QuickProject,
+  QUICK_FILTERS, QUICK_STATES, STATE_LABEL, ago, duration, filterCounts, insideStates, passesFilter, projectThreads,
+  summarizeProjects, threadState, threadTree, type FilterCount, type ProjectSummary, type QuickFilter, type QuickProject,
   type QuickState, type QuickThread,
 } from "./project-quick-model";
 import { textMatches } from "./text-match";
@@ -79,6 +79,11 @@ export const PROJECT_QUICK_CSS = `
   color: var(--muted-foreground); background: transparent; border: 0; border-radius: 4px; cursor: pointer;
 }
 button.mt-pq-fold:hover { color: var(--popover-foreground); background: var(--state-active); }
+/* The fold button carries what its subthreads do: the top state and how many are in it. */
+.mt-pq-fold[data-inside] { width: auto; min-width: 18px; gap: 1px; padding: 0 3px; font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.mt-pq-count[data-nested] { opacity: .75; }
+.mt-pq-count[data-nested]::before { content: "↳"; margin-right: 1px; }
+.mt-pq-thread > .mt-pq-meta[data-running] { color: var(--popover-foreground); }
 .mt-pq-thread[data-unread] > .mt-pq-title { font-weight: 600; }
 .mt-pq-thread > .mt-pq-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mt-pq-thread > .mt-pq-meta { flex-shrink: 0; font-size: 10.5px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
@@ -106,7 +111,7 @@ const STATE_ICON: Record<QuickState, string | null> = {
   input: "CircleQuestion", error: "CircleX", working: "Loading", unread: null, idle: "CircleCheck",
 };
 
-function StateMark({ state, small = false }: { state: QuickState; small?: boolean }) {
+export function StateMark({ state, small = false }: { state: QuickState; small?: boolean }) {
   const icon = STATE_ICON[state];
   return (
     <span className="mt-pq-st" data-k={state} data-small={small ? "" : undefined} title={STATE_LABEL[state]} aria-hidden="true">
@@ -148,20 +153,37 @@ function ProjectsIcon() {
   );
 }
 
-function Counts({ summary }: { summary: ProjectSummary }) {
+function chipTitle(filter: QuickFilter, count: FilterCount): string {
+  const threads = count.roots + count.nested;
+  const where = filter === "all" ? `${count.projects} проектов` : `в ${count.projects} проектах`;
+  return `Тредов ${threads}: главных ${count.roots}, подтредов ${count.nested} · ${where}`;
+}
+
+/** Top-level counts as before; a state only inside subthreads shows its subthread count with ↳. */
+function Counts({ summary, longest }: { summary: ProjectSummary; longest?: number }) {
   const shown = QUICK_STATES.filter((state) => state !== "idle" && summary.counts[state] > 0);
-  const title = QUICK_STATES.filter((state) => summary.counts[state] > 0)
-    .map((state) => `${STATE_LABEL[state]}: ${summary.counts[state]}`).join("\n");
+  const lines = QUICK_STATES.filter((state) => summary.counts[state] > 0).map((state) => {
+    const roots = summary.rootCounts[state], nested = summary.nestedCounts[state];
+    const parts = [roots ? `главных ${roots}` : "", nested ? `подтредов ${nested}` : ""].filter(Boolean).join(", ");
+    const extra = state === "working" && longest ? ` — дольше всех ${duration(longest)}` : "";
+    return `${STATE_LABEL[state]}: ${summary.counts[state]} (${parts})${extra}`;
+  });
+  const nestedTotal = summary.threads.length - summary.roots;
+  if (summary.threads.length) lines.push(`Тредов: ${summary.roots}${nestedTotal ? ` + ${nestedTotal} подтредов` : ""}`);
   return (
-    <span className="mt-pq-counts" title={title || "Нет активных тредов"}>
-      {shown.map((state) => (
-        <span key={state} className="mt-pq-count"><StateMark state={state} small />{summary.counts[state]}</span>
-      ))}
-      {summary.threads.length > 0 ? <span>{summary.threads.length}</span> : null}
+    <span className="mt-pq-counts" title={lines.join("\n") || "Нет активных тредов"}>
+      {shown.map((state) => {
+        const roots = summary.rootCounts[state];
+        return (
+          <span key={state} className="mt-pq-count" data-nested={roots ? undefined : ""}>
+            <StateMark state={state} small />{roots || summary.nestedCounts[state]}
+          </span>
+        );
+      })}
+      {summary.roots > 0 ? <span>{summary.roots}</span> : null}
     </span>
   );
 }
-
 type Place = { left: number; top: number; maxHeight: number };
 
 /** Under the search field, from `left` (the button, or the pointer over the field), never over the field itself. */
@@ -190,7 +212,10 @@ export function ProjectQuickMenu<P extends QuickProject>({
   onThread,
   field,
   searchQuery = "",
+  turnStarts,
 }: {
+  /** When the given running threads' turns started; absent — no running times. */
+  turnStarts?: (threadIds: string[]) => Promise<Record<string, number>>;
   /** The sidebar search row: the menu opens under it, and a long rest on it opens the menu too. */
   field?: { readonly current: HTMLElement | null };
   /** What is typed in "Поиск тредов": narrows projects to those whose name or threads match. */
@@ -225,6 +250,24 @@ export function ProjectQuickMenu<P extends QuickProject>({
 
   const summaries = useMemo(() => summarizeProjects(projects, threads), [projects, threads]);
   const counts = useMemo(() => filterCounts(summaries), [summaries]);
+  const inside = useMemo(() => insideStates(threads), [threads]);
+  const working = useMemo(() => threads.filter((thread) => threadState(thread) === "working" && !thread.isArchived && !thread.isHidden)
+    .map((thread) => thread.id).sort().slice(0, 50), [threads]);
+  const workingKey = working.join(",");
+  const [starts, setStarts] = useState<Record<string, number>>({});
+  // Running times only while the menu is open: one small request, then a clock tick every 30 s.
+  useEffect(() => {
+    if (!open || !turnStarts || working.length === 0) return;
+    let alive = true;
+    const load = () => { void turnStarts(working).then((next) => { if (alive) setStarts(next); }).catch(() => undefined); };
+    load();
+    const tick = window.setInterval(() => { setNow(Date.now()); load(); }, 30_000);
+    return () => { alive = false; window.clearInterval(tick); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, turnStarts, workingKey]);
+  const runningFor = (id: string) => (starts[id] ? Math.max(0, now - starts[id]!) : 0);
+  /** The longest running turn among a project's threads, for its tooltip. */
+  const longestIn = (summary: ProjectSummary) => Math.max(0, ...summary.threads.map((thread) => runningFor(thread.id)));
   const outer = useMemo(() => needlesFor(searchQuery), [searchQuery]);
   /** Threads that answer the sidebar search, per project; null without a search. */
   const searchHits = useMemo(() => {
@@ -413,12 +456,13 @@ export function ProjectQuickMenu<P extends QuickProject>({
             className="mt-pq-chip"
             data-on={filter === item.id ? "" : undefined}
             aria-pressed={filter === item.id}
-            disabled={item.id !== "all" && counts[item.id] === 0 && filter !== item.id}
+            disabled={item.id !== "all" && counts[item.id].projects === 0 && filter !== item.id}
+            title={chipTitle(item.id, counts[item.id])}
             onClick={() => setFilter((now) => (now === item.id ? "all" : item.id))}
           >
             {item.id !== "all" ? <StateMark state={item.id} small /> : null}
             {item.label}
-            <b>{counts[item.id]}</b>
+            <b>{counts[item.id].roots + counts[item.id].nested}</b>
           </button>
         ))}
       </div>
@@ -453,7 +497,7 @@ export function ProjectQuickMenu<P extends QuickProject>({
               >
                 <span className="mt-pq-mark">{mark(id)}</span>
                 <span className="mt-pq-name">{summary.project.isPersonal ? "Без проекта" : summary.project.name}</span>
-                <Counts summary={summary} />
+                <Counts summary={summary} longest={longestIn(summary)} />
               </button>
               {summary.threads.length > 0 ? (
                 <button
@@ -477,32 +521,42 @@ export function ProjectQuickMenu<P extends QuickProject>({
   const threadRow = (thread: QuickThread, depth: number, kids: number) => {
     const state = threadState(thread);
     const open = expanded.has(thread.id);
+    const below = inside.get(thread.id);
+    const running = state === "working" ? runningFor(thread.id) : 0;
+    const insideLine = below && below.total
+      ? `\nВнутри: ${QUICK_STATES.filter((s) => below.counts[s] > 0).map((s) => `${STATE_LABEL[s].toLowerCase()} ${below.counts[s]}`).join(", ")}`
+      : "";
+    const top = below?.top ?? null;
     return (
       <div key={thread.id} className="mt-pq-trow">
         <button
           type="button"
           className="mt-pq-thread"
           data-unread={state === "unread" ? "" : undefined}
-          title={`${thread.displayTitle}\n${STATE_LABEL[state]}${thread.host ? ` · ${thread.host.name}` : ""}`}
+          title={`${thread.displayTitle}\n${STATE_LABEL[state]}${running ? ` · ход идёт ${duration(running)}` : ""}${thread.host ? ` · ${thread.host.name}` : ""}${insideLine}`}
           onClick={() => chooseThread(thread)}
         >
           <ThreadMark thread={thread} />
           <span className="mt-pq-title" style={depth ? { paddingLeft: depth * 12 } : undefined}>{thread.displayTitle}</span>
-          <span className="mt-pq-meta">{ago(thread.updatedAt ?? thread.createdAt ?? 0, now)}</span>
+          {running
+            ? <span className="mt-pq-meta" data-running="">{duration(running)}</span>
+            : <span className="mt-pq-meta">{ago(thread.updatedAt ?? thread.createdAt ?? 0, now)}</span>}
         </button>
         {kids > 0 ? (
           <button
             type="button"
             className="mt-pq-fold"
+            data-inside={top && !open ? "" : undefined}
             aria-expanded={open}
             aria-label={open ? "Скрыть подтреды" : `Показать подтреды: ${kids}`}
-            title={open ? "Скрыть подтреды" : `Подтреды: ${kids}`}
+            title={(open ? "Скрыть подтреды" : `Подтреды: ${kids}`) + insideLine}
             onClick={() => setExpanded((now) => {
               const next = new Set(now);
               if (next.has(thread.id)) next.delete(thread.id); else next.add(thread.id);
               return next;
             })}
           >
+            {top && !open ? <><StateMark state={top} small />{below!.counts[top]}</> : null}
             <Icon name={open ? "ChevronDown" : "ChevronRight"} className="size-3.5" />
           </button>
         ) : <span className="mt-pq-fold" aria-hidden="true" />}

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { threadTree, ago, filterCounts, passesFilter, projectThreads, summarizeProjects, threadState } from '../lib/project-quick-model.ts';
+import { threadTree, ago, duration, filterCounts, insideStates, passesFilter, projectThreads, summarizeProjects, threadState } from '../lib/project-quick-model.ts';
 
 const projects = [
   { id: 'a', name: 'Alpha', isPersonal: false },
@@ -39,7 +39,9 @@ test('counts and quick filters', () => {
   const rows = summarizeProjects(projects, threads);
   const b = rows.find(row => row.project.id === 'b');
   assert.deepEqual(b.counts, { input: 1, error: 0, working: 0, unread: 0, idle: 1 });
-  assert.deepEqual(filterCounts(rows), { all: 3, input: 1, error: 1, working: 1, unread: 0 });
+  const counts = filterCounts(rows);
+  assert.deepEqual(Object.fromEntries(Object.entries(counts).map(([k, v]) => [k, v.projects])), { all: 3, input: 1, error: 1, working: 1, unread: 0 });
+  assert.deepEqual(counts.working, { projects: 1, roots: 1, nested: 0 });
   assert.deepEqual(rows.filter(row => passesFilter(row, 'error')).map(row => row.project.id), ['a']);
   const a = rows.find(row => row.project.id === 'a');
   assert.deepEqual(projectThreads(a, 'working').map(thread => thread.id), ['a1', 'a2']);
@@ -64,4 +66,43 @@ test('subthreads fold under their parent; orphans of other projects stay roots',
 
 test('a message waiting to send is not counted as working', () => {
   assert.equal(threadState(t('x', 'a', 1, { indicator: 'queued-waiting' })), 'idle');
+});
+
+test('subthreads: top-level and nested apart, states rolled up the tree', () => {
+  const threads = [
+    t('root', 'a', 50),                                            // idle itself
+    t('kid1', 'a', 40, { parentThreadId: 'root', status: 'active' }),
+    t('kid2', 'a', 30, { parentThreadId: 'root', status: 'error' }),
+    t('grand', 'a', 20, { parentThreadId: 'kid1', status: 'active' }),
+    t('solo', 'a', 10, { status: 'active' }),
+    t('orphan', 'a', 5, { parentThreadId: 'gone', status: 'active' }), // parent not live: top-level
+  ];
+  const [a] = summarizeProjects(projects, threads);
+  assert.equal(a.roots, 3);
+  assert.deepEqual([a.rootCounts.working, a.nestedCounts.working, a.nestedCounts.error], [2, 2, 1]);
+  const counts = filterCounts([a]);
+  assert.deepEqual(counts.working, { projects: 1, roots: 2, nested: 2 });
+  const inside = insideStates(threads);
+  assert.equal(inside.get('root').total, 3);
+  assert.deepEqual([inside.get('root').counts.working, inside.get('root').counts.error], [2, 1]);
+  assert.equal(inside.get('root').top, 'error');
+  assert.equal(inside.get('kid1').top, 'working');
+  assert.equal(inside.get('solo').top, null);
+});
+test('a parent cycle neither loops nor double-counts', () => {
+  const threads = [t('x', 'a', 2, { parentThreadId: 'y', status: 'active' }), t('y', 'a', 1, { parentThreadId: 'x' })];
+  const inside = insideStates(threads);
+  assert.ok(inside.get('x').total <= 1 && inside.get('y').total <= 1);
+});
+test('running time labels', () => {
+  assert.equal(duration(0), '');
+  assert.equal(duration(45_000), '45 с');
+  assert.equal(duration(12 * 60_000), '12 мин');
+  assert.equal(duration(65 * 60_000), '1 ч 05 мин');
+});
+test('a thread whose parent is in another project heads its tree in its own project', () => {
+  const threads = [t('p', 'a', 2), t('c', 'b', 1, { parentThreadId: 'p', status: 'active' })];
+  const b = summarizeProjects(projects, threads).find(row => row.project.id === 'b');
+  assert.equal(b.roots, 1);
+  assert.equal(b.rootCounts.working, 1);
 });

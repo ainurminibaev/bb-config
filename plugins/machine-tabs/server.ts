@@ -66,6 +66,11 @@ export const rpcContract = defineRpcContract({
     input: z.object({ refresh: z.boolean().optional() }),
     output: z.object({ icons: z.record(z.string(), z.string()) }),
   },
+  /** When each given thread's latest turn started (ms), for the running-time labels. */
+  turn_started: {
+    input: z.object({ threadIds: z.array(z.string().regex(/^thr_[A-Za-z0-9]+$/)).max(50) }),
+    output: z.object({ starts: z.record(z.string(), z.number()) }),
+  },
   tabs_state: { input: z.null(), output: stateSchema },
   tabs_set_view: {
     input: z.object({ byDay: z.boolean(), outer: outerSchema }),
@@ -292,7 +297,34 @@ export default async function plugin(bb: BbPluginApi) {
   const rowMark = async () => ({ rowMark: rowMarkSchema.catch("ask").parse((await settings.get()).rowMark) });
   settings.onChange(() => bb.realtime.publish(ROW_MARK_CHANGED, null));
 
+  // A turn's start changes only when a new turn begins; half a minute of reuse keeps the
+  // event log out of every menu refresh.
+  const turnCache = new Map<string, { at: number | null; fetched: number }>();
+  async function turnStarted(threadId: string): Promise<number | null> {
+    const hit = turnCache.get(threadId);
+    if (hit && Date.now() - hit.fetched < 30_000) return hit.at;
+    let at: number | null = null;
+    try {
+      const rows = (await (bb.sdk.threads as any).events.list({ threadId, types: ["turn/started"], order: "desc", limit: "1" })) as unknown;
+      const first = Array.isArray(rows) ? (rows[0] as { createdAt?: unknown } | undefined) : undefined;
+      at = typeof first?.createdAt === "number" ? first.createdAt : null;
+    } catch {
+      at = null;
+    }
+    turnCache.set(threadId, { at, fetched: Date.now() });
+    if (turnCache.size > 2000) turnCache.delete(turnCache.keys().next().value!);
+    return at;
+  }
+
   bb.rpc.register(rpcContract, {
+    async turn_started({ threadIds }) {
+      const starts: Record<string, number> = {};
+      await Promise.all([...new Set(threadIds)].map(async (id) => {
+        const at = await turnStarted(id);
+        if (at !== null) starts[id] = at;
+      }));
+      return { starts };
+    },
     row_mark: rowMark,
     async set_row_mark(input) {
       await settings.experimental_set({ rowMark: input.rowMark });

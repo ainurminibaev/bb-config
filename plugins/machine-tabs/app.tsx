@@ -39,9 +39,9 @@ import { textMatches } from "./lib/text-match";
 import { installSidebarView } from "./lib/sidebar-view";
 import { waitForThreadListBundle } from "./lib/thread-list-bundle";
 import { SearchExtras, SearchSettings, type SearchOptions } from "./lib/thread-search";
-import { PROJECT_QUICK_CSS, ProjectQuickMenu } from "./lib/project-quick";
+import { PROJECT_QUICK_CSS, ProjectQuickMenu, StateMark } from "./lib/project-quick";
 import { REVEAL_CSS, revealProject, revealThread } from "./lib/sidebar-reveal";
-import type { QuickThread } from "./lib/project-quick-model";
+import { QUICK_STATES, STATE_LABEL, insideStates, type Inside, type QuickThread } from "./lib/project-quick-model";
 
 const TABS_CHANGED = "machine-tabs-changed";
 const ICONS_CHANGED = "machine-tabs-icons-changed";
@@ -100,6 +100,8 @@ const ProjectBadges = createContext<ReadonlyMap<string, ProjectBadge> | null>(
 );
 /** Sidebar threads by id, so a row can draw every plugin's row marks (limit, PR, …). */
 const RowThreads = createContext<ReadonlyMap<string, PluginSidebarThread> | null>(null);
+/** What each thread's subthreads are doing (see insideStates), for the quiet "↳" mark in its row. */
+const RowInside = createContext<ReadonlyMap<string, Inside> | null>(null);
 
 const MachineFilter = createContext<ListView>(DEFAULT_VIEW);
 
@@ -463,12 +465,19 @@ async function loadNativeList(
   }) {
     const badge = useContext(ProjectBadges)?.get(props.threadId);
     const thread = useContext(RowThreads)?.get(props.threadId);
+    const inside = useContext(RowInside)?.get(props.threadId);
+    const top = inside?.top ?? null;
     return (
       <>
         {badge ? <ProjectBadgeMark badge={badge} /> : null}
         <RealTitle {...props} />
         {thread ? (
           <span data-machine-tabs-row-meta="">
+            {top ? (
+              <span data-machine-tabs-inside="" title={`Внутри подтредов: ${QUICK_STATES.filter((s) => inside!.counts[s] > 0).map((s) => `${STATE_LABEL[s].toLowerCase()} ${inside!.counts[s]}`).join(", ")}`}>
+                ↳<StateMark state={top} small />{inside!.counts[top]}
+              </span>
+            ) : null}
             <ThreadRowMetadata thread={thread} />
           </span>
         ) : null}
@@ -1077,6 +1086,10 @@ const HIDE_EMPTY_GROUPS = `
   font-size: 11px;
   line-height: 1;
 }
+[data-machine-tabs-inside] {
+  display: inline-flex; align-items: center; gap: 1px; opacity: .7;
+  font-size: 10.5px; font-variant-numeric: tabular-nums;
+}
 [data-machine-tabs-row-meta]:empty {
   display: none;
 }
@@ -1243,6 +1256,10 @@ function MachineThreadList(props: PluginThreadListProps) {
   // Project marks stay until the user picks topic icons. The question comes once the list first
   // draws a mark before a title, and again with the filters if it was put off.
   const markRpc = useRpc<typeof rpcContract>();
+  const turnStarts = useCallback(
+    (threadIds: string[]) => markRpc.call("turn_started", { threadIds }).then((result) => result.starts),
+    [markRpc],
+  );
   const [rowMark, setRowMark] = useState<RowMark | null>(null);
   const [askingMark, setAskingMark] = useState(false);
   const loadRowMark = useCallback(() => {
@@ -1384,6 +1401,7 @@ function MachineThreadList(props: PluginThreadListProps) {
     return map;
   }, [threads, projectBadges, rowMark]);
   const threadsById = useMemo(() => new Map(threads.map((thread) => [thread.id, thread as PluginSidebarThread])), [threads]);
+  const insideById = useMemo(() => insideStates(threads as readonly QuickThread[]), [threads]);
   const headerCss = useMemo(() => projectHeaderCss(projectBadges), [projectBadges]);
 
   // Each filter's list counts what it would leave with the other filter as it is now.
@@ -1614,6 +1632,7 @@ function MachineThreadList(props: PluginThreadListProps) {
           onThread={openThread}
           field={searchRow}
           searchQuery={query}
+          turnStarts={turnStarts}
         />
         <SearchSettings options={searchOptions} onChange={setSearchOptions} />
       </div>
@@ -1680,7 +1699,7 @@ function MachineThreadList(props: PluginThreadListProps) {
       <style>{emptyCss}</style>
       {query.trim() !== "" ? <SearchExtras query={query} needles={needles}
         options={searchOptions} machineId={selectedId} topicFilter={topicFilter} projectFilter={projectFilter} localIds={new Set(shown.map((thread) => thread.id))} /> : null}
-      <RowThreads.Provider value={threadsById}><ProjectBadges.Provider value={badges}>
+      <RowThreads.Provider value={threadsById}><RowInside.Provider value={insideById}><ProjectBadges.Provider value={badges}>
         {RecentList && recentView && state !== null ? (
           <>
             <div
@@ -1695,7 +1714,7 @@ function MachineThreadList(props: PluginThreadListProps) {
             <div className="mx-3 mb-1.5 mt-1 border-b border-border" />
           </>
         ) : null}
-      </ProjectBadges.Provider></RowThreads.Provider>
+      </ProjectBadges.Provider></RowInside.Provider></RowThreads.Provider>
       {matchIds !== null && shown.length === 0 ? (
         <p className="px-4 py-2 text-xs text-muted-foreground">
           {!query.trim() ? "По выбранным фильтрам тредов нет." : searchOptions.archive || searchOptions.messages
@@ -1704,7 +1723,7 @@ function MachineThreadList(props: PluginThreadListProps) {
         </p>
       ) : null}
       {NativeList && state !== null ? (
-        <RowThreads.Provider value={threadsById}><ProjectBadges.Provider value={badges}>
+        <RowThreads.Provider value={threadsById}><RowInside.Provider value={insideById}><ProjectBadges.Provider value={badges}>
         <div data-machine-tabs-list="" data-machine-tabs-host-id={baseView.machineId ?? undefined} data-machine-tabs-hide-empty={hideEmpty ? "" : undefined}>
           {outer === "none" ? (
             <MachineFilter.Provider value={baseView}>
@@ -1762,7 +1781,7 @@ function MachineThreadList(props: PluginThreadListProps) {
             })
           )}
         </div>
-        </ProjectBadges.Provider></RowThreads.Provider>
+        </ProjectBadges.Provider></RowInside.Provider></RowThreads.Provider>
       ) : error ? (
         <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
           Machine Tabs could not load bb’s thread list. {error}

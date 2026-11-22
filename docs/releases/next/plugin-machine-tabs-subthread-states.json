@@ -1,0 +1,10 @@
+{
+  "id": "plugin-machine-tabs-subthread-states",
+  "title": "Machine Tabs 0.2.8: подтреды в счётчиках, время хода, метка ↳ у родителя",
+  "component": "machine-tabs",
+  "where": "server",
+  "kind": "local-plugin",
+  "plugin": "machine-tabs",
+  "rerun": "Проверяет установленную версию machine-tabs; при совпадении ничего не делает.",
+  "rollback": "Установить machine-tabs 0.2.7 (после выпуска с ним) или 0.2.6 из релиза v1.10.0."
+}
