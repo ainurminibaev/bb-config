@@ -110,7 +110,7 @@ export function bucketOf(item: Item, me: string): { bucket: Bucket; reason: stri
     }
     if (item.reviewRequestedFromMe) return { bucket: 'action', reason: `Просят ваше ревью (${item.author})` };
     if (canWrite(item) && !item.draft) {
-      if (item.lastMine === null) return { bucket: 'action', reason: `Новый PR от @${item.author} в вашем репозитории` };
+      if (item.lastMine === null) return { bucket: 'action', reason: `Новый PR от @${item.author}` };
       if (reply) return { bucket: 'action', reason: `Новый комментарий от ${who(item)}` };
       return { bucket: 'waiting', reason: `Ждёт автора (@${item.author})` };
     }
@@ -124,7 +124,7 @@ export function bucketOf(item: Item, me: string): { bucket: Bucket; reason: stri
   }
   if (item.assignedToMe && (item.lastMine === null || reply)) return { bucket: 'action', reason: 'Назначен на вас' };
   if (canWrite(item)) {
-    if (item.lastMine === null) return { bucket: 'action', reason: `Новый issue от @${item.author} в вашем репозитории` };
+    if (item.lastMine === null) return { bucket: 'action', reason: `Новый issue от @${item.author}` };
     if (reply) return { bucket: 'action', reason: `Новый комментарий от ${who(item)}` };
     return { bucket: 'waiting', reason: `Ждёт автора (@${item.author})` };
   }
@@ -310,4 +310,69 @@ export function trackedTargets(ctx: SourceContext, knownRepos: string[]): { orgs
 export const BUCKET_ORDER: Record<Bucket, number> = { action: 0, waiting: 1, done: 2 };
 export function sortViews(items: ItemView[]): ItemView[] {
   return [...items].sort((a, b) => BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket] || Number(b.unread) - Number(a.unread) || (b.bucket === 'done' ? (b.closedAt ?? b.updatedAt) - (a.closedAt ?? a.updatedAt) : b.updatedAt - a.updatedAt));
+}
+
+export type Bucket3 = 'action' | 'waiting' | 'done';
+export interface ViewFilter { kind: 'all' | 'pr' | 'issue'; scope: string; mine: boolean; q: string }
+
+/** '' — everything; 'org:<login>' — a whole organization; 'repo:<owner/name>' — one repository. */
+export function inScope(repo: string, scope: string): boolean {
+  if (!scope) return true;
+  return scope.startsWith('org:') ? repo.split('/')[0]!.toLowerCase() === scope.slice(4) : repo.toLowerCase() === scope.slice(5);
+}
+
+type Pageable = Pick<ItemView, 'key' | 'kind' | 'repo' | 'number' | 'title' | 'author' | 'status' | 'reason' | 'labels' | 'bucket' | 'unread' | 'mine'>;
+
+function haystack(item: Pageable): string {
+  return `${item.title} ${item.repo}#${item.number} #${item.number} ${item.author} @${item.author} ${item.status} ${item.reason} ${item.labels.join(' ')} ${item.kind === 'pr' ? 'pr pull request пулреквест' : 'issue задача'}`.toLowerCase();
+}
+
+/** Search words, kind and "only mine" — everything except the scope, which the scope menu needs untouched. */
+export function matchesExceptScope(item: Pageable, f: ViewFilter): boolean {
+  if (f.kind !== 'all' && item.kind !== f.kind) return false;
+  if (f.mine && !item.mine) return false;
+  const words = f.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const text = haystack(item);
+  return words.every(word => text.includes(word));
+}
+
+/**
+ * One page of a bucket plus the counters the page header needs. The client never
+ * receives the whole list: it asks for the next page when the user scrolls.
+ */
+export function pageOf<T extends Pageable>(all: T[], bucket: Bucket3, f: ViewFilter, offset: number, limit: number) {
+  const counts = { action: 0, waiting: 0, done: 0 };
+  const fresh = { action: 0, waiting: 0, done: 0 };
+  const kinds = { all: 0, pr: 0, issue: 0 };
+  const scopes = new Map<string, number>();
+  const rows: T[] = [];
+  const unread: string[] = [];
+  for (const item of all) {
+    const rest = matchesExceptScope(item, f);
+    if (rest && item.bucket === bucket) scopes.set(item.repo, (scopes.get(item.repo) ?? 0) + 1);
+    if (!inScope(item.repo, f.scope)) continue;
+    if (item.bucket === bucket && (!f.mine || item.mine) && matchesExceptScope(item, { ...f, kind: 'all' })) { kinds.all++; kinds[item.kind]++; }
+    if (!rest) continue;
+    counts[item.bucket]++;
+    if (item.unread) fresh[item.bucket]++;
+    if (item.bucket !== bucket) continue;
+    rows.push(item);
+    if (item.unread) unread.push(item.key);
+  }
+  return {
+    items: rows.slice(offset, offset + limit), total: rows.length, counts, fresh, kinds, unread,
+    scopes: [...scopes].map(([repo, count]) => ({ repo, count })).sort((a, b) => b.count - a.count || a.repo.localeCompare(b.repo)),
+  };
+}
+
+/** Newest first, one line per item, moment and text: a repeated sync must not double the feed. */
+export function dedupeEvents(list: FeedEvent[]): FeedEvent[] {
+  const seenLines = new Set<string>();
+  return [...list].sort((a, b) => b.at - a.at).filter(event => {
+    const id = `${event.key}|${event.at}|${event.text}`;
+    if (seenLines.has(id)) return false;
+    seenLines.add(id);
+    return true;
+  });
 }

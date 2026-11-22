@@ -158,3 +158,28 @@ test('a dismissed item comes back on any GitHub update after the dismissal', () 
   assert.equal(view(merged, ME, undefined, { at: now - 500 }, now).bucket, 'done');
   assert.equal(view({ ...merged, updatedAt: now - 100 }, ME, undefined, { at: now - 500 }, now).notice, true);
 });
+
+import { pageOf } from '../core';
+test('board pages: counts the whole bucket, returns one page, scope menu ignores the scope itself', () => {
+  const all = Array.from({ length: 120 }, (_, i) => view(item({ number: i + 1, key: `github:o/r${i % 3}#${i + 1}`, repo: `o/r${i % 3}`, author: i % 2 ? 'x' : ME, updatedAt: 1000 + i }), ME, undefined, undefined));
+  const f = { kind: 'all' as const, scope: '', mine: false, q: '' };
+  const bucket = all[0]!.bucket;
+  const inBucket = all.filter(v => v.bucket === bucket).length;
+  const first = pageOf(all, bucket, f, 0, 50);
+  assert.equal(first.total, inBucket);
+  assert.equal(first.items.length, Math.min(50, inBucket));
+  assert.equal(first.counts.action + first.counts.waiting + first.counts.done, 120);
+  const scoped = pageOf(all, bucket, { ...f, scope: 'repo:o/r1' }, 0, 200);
+  assert.ok(scoped.items.every(v => v.repo === 'o/r1'));
+  assert.equal(scoped.scopes.length, first.scopes.length);
+  const mine = pageOf(all, bucket, { ...f, mine: true }, 0, 200);
+  assert.ok(mine.items.every(v => v.mine));
+  const found = pageOf(all, bucket, { ...f, q: '#7' }, 0, 200);
+  assert.ok(found.items.every(v => `#${v.number}`.includes('#7')));
+});
+
+import { dedupeEvents } from '../core';
+test('the feed keeps one copy of a repeated event', () => {
+  const e = { at: 5, key: 'k', repo: 'o/r', number: 1, kind: 'pr' as const, title: 'T', url: 'u', text: 'Новый PR', tone: 'info' as const };
+  assert.deepEqual(dedupeEvents([e, { ...e }, { ...e, at: 7 }]).map(x => x.at), [7, 5]);
+});

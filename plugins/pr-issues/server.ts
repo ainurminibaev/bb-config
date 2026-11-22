@@ -1,10 +1,13 @@
 import { PluginCliError, cliCommand, defineCli, type BbPluginApi } from '@get-bb/plugin-sdk';
-import { rpcContract, type Board, type ItemViewDto } from './contract';
-import { clip, diffEvents, parseSince, recentEnough, firstSeen, ownerOf, repoDefault, repoMode, orgMode, trackedTargets, visible, type SourceChoices, type SourceContext, type SourceMode, githubRepo, parseRepos, sortViews, view, type FeedEvent, type Item, type Mute, type Seen } from './core';
+import { rpcContract, type Board, type BoardQuery, type ItemViewDto } from './contract';
+import { clip, dedupeEvents, diffEvents, parseSince, recentEnough, firstSeen, ownerOf, repoDefault, repoMode, orgMode, trackedTargets, visible, type SourceChoices, type SourceContext, type SourceMode, githubRepo, inScope, pageOf, parseRepos, sortViews, view, type FeedEvent, type Item, type Mute, type Seen } from './core';
 import { act, fetchAll, ghRunner, myOrgs, type Action, type Runner } from './github';
 
 const STALE_MS = 5 * 60 * 1000;
 const EVENTS_LIMIT = 300;
+/** Computed views are reused this long unless something changed: opening the page does not recompute everything. */
+const VIEWS_TTL_MS = 60 * 1000;
+const PROJECTS_TTL_MS = 60 * 1000;
 
 interface Stored { me: string | null; myOrgs?: string[]; items: Record<string, Item>; fetchedAt: number | null; baselineDone: boolean; warnings: string[] }
 
@@ -21,6 +24,10 @@ export function createServer(bb: BbPluginApi, run: Runner) {
   let ignoreRepos: string[] = [];
   let since = parseSince('2025-01-01');
   let choices: SourceChoices = {};
+  let version = 0;
+  let memo: { version: number; at: number; items: ItemViewDto[] } | null = null;
+  let projectsMemo: { at: number; map: Map<string, { id: string; name: string }[]> } | null = null;
+  const changed = (payload: Record<string, unknown> = {}) => { version++; bb.realtime.publish('changed', payload); };
 
   const settings = bb.settings.define({
     extraRepos: {
@@ -38,7 +45,7 @@ export function createServer(bb: BbPluginApi, run: Runner) {
   });
   const applySettings = (v: { extraRepos: string; ignoreRepos: string; since: string }) => { extraRepos = parseRepos(v.extraRepos); ignoreRepos = parseRepos(v.ignoreRepos); since = parseSince(v.since); };
   void settings.get().then(applySettings).catch(() => undefined);
-  settings.onChange(next => { applySettings(next); bb.realtime.publish('changed', {}); });
+  settings.onChange(next => { applySettings(next); changed(); });
 
   // Items live in SQLite: a KV value is capped at 256 KB and whole organizations exceed it.
   const db = bb.storage.database();
@@ -62,18 +69,20 @@ export function createServer(bb: BbPluginApi, run: Runner) {
     if (!Object.keys(stored.items).length && Object.keys(legacy).length) { stored.items = legacy; await saveState(); }
     seen = (await bb.storage.kv.get<Record<string, Seen>>('seen')) ?? {};
     mutes = (await bb.storage.kv.get<Record<string, Mute>>('mutes')) ?? {};
-    events = (await bb.storage.kv.get<FeedEvent[]>('events')) ?? [];
+    events = dedupeEvents((await bb.storage.kv.get<FeedEvent[]>('events')) ?? []);
     choices = (await bb.storage.kv.get<SourceChoices>('sources')) ?? {};
   })();
 
   /** BB projects with a GitHub remote, by repository. */
   async function projectRepos(): Promise<Map<string, { id: string; name: string }[]>> {
+    if (projectsMemo && Date.now() - projectsMemo.at < PROJECTS_TTL_MS) return projectsMemo.map;
     const list = await bb.sdk.projects.list();
     const map = new Map<string, { id: string; name: string }[]>();
     for (const project of list as { id: string; name: string; gitRemoteUrl?: string | null }[]) {
       const repo = githubRepo(project.gitRemoteUrl)?.toLowerCase();
       if (repo) map.set(repo, [...(map.get(repo) ?? []), { id: project.id, name: project.name }]);
     }
+    projectsMemo = { at: Date.now(), map };
     return map;
   }
 
@@ -101,7 +110,7 @@ export function createServer(bb: BbPluginApi, run: Runner) {
     // Items that dropped out of the searches (e.g. closed long ago) stay as they were, so history is kept.
     for (const [key, item] of Object.entries(stored.items)) if (!nextItems[key]) nextItems[key] = item;
     stored = { me: result.me, myOrgs: orgs, items: nextItems, fetchedAt: now, baselineDone: true, warnings: result.errors.slice(0, 5) };
-    if (fresh.length) events = [...fresh, ...events].sort((a, b) => b.at - a.at).slice(0, EVENTS_LIMIT);
+    if (fresh.length) events = dedupeEvents([...fresh, ...events]).slice(0, EVENTS_LIMIT);
     await Promise.all([saveState(), bb.storage.kv.set('seen', seen), bb.storage.kv.set('events', events)]);
   }
 
@@ -110,26 +119,43 @@ export function createServer(bb: BbPluginApi, run: Runner) {
     fetching = sync()
       .then(() => { lastError = null; })
       .catch(error => { lastError = (error as Error).message; bb.log.warn(`PR и Issues: ${lastError}`); })
-      .finally(() => { fetching = null; bb.realtime.publish('changed', {}); });
-    bb.realtime.publish('changed', { fetching: true });
+      .finally(() => { fetching = null; changed(); });
+    changed({ fetching: true });
     return fetching;
   }
 
-  async function board(): Promise<Board> {
+  /** Every visible item as a view, cached until something changes (or a minute passes, for time-based notices). */
+  async function views(): Promise<ItemViewDto[]> {
     await ready;
     if (!fetching && (stored.fetchedAt === null || Date.now() - stored.fetchedAt > STALE_MS)) void refresh();
+    if (memo && memo.version === version && Date.now() - memo.at < VIEWS_TTL_MS) return memo.items;
     const projects = await projectRepos().catch(() => new Map<string, { id: string; name: string }[]>());
     const me = stored.me ?? '';
     const ctx = context([...projects.keys()]);
+    const now = Date.now();
     const items: ItemViewDto[] = sortViews(Object.values(stored.items)
       .filter(item => visible(item, ctx) && recentEnough(item, since))
-      .map(item => view(item, me, seen[item.key], mutes[item.key], Date.now())))
+      .map(item => view(item, me, seen[item.key], mutes[item.key], now)))
       .map(item => ({ ...item, projects: projects.get(item.repo.toLowerCase()) ?? [] }));
+    memo = { version, at: now, items };
+    return items;
+  }
+
+  async function board(query: BoardQuery): Promise<Board> {
+    const all = await views();
+    const page = pageOf(all, query.bucket, query, query.offset, query.limit);
     return {
-      me: stored.me, items, events: events.filter(event => event.at >= since && (stored.items[event.key] ? visible(stored.items[event.key]!, ctx) : repoMode(event.repo, ctx) !== 'hidden')).slice(0, 200), since: since || null,
+      me: stored.me, ...page, since: since || null,
       fetchedAt: stored.fetchedAt, fetching: Boolean(fetching), error: lastError, warnings: stored.warnings,
-      repos: [...new Set([...projects.keys(), ...extraRepos])].sort(),
     };
+  }
+
+  async function feed(kind: 'all' | 'pr' | 'issue', scope: string) {
+    await ready;
+    const projects = await projectRepos().catch(() => new Map<string, { id: string; name: string }[]>());
+    const ctx = context([...projects.keys()]);
+    return events.filter(event => event.at >= since && (kind === 'all' || event.kind === kind) && inScope(event.repo, scope)
+      && (stored.items[event.key] ? visible(stored.items[event.key]!, ctx) : repoMode(event.repo, ctx) !== 'hidden')).slice(0, 200);
   }
 
   /** Every organization and repository the user may want to toggle, with current modes. */
@@ -163,25 +189,33 @@ export function createServer(bb: BbPluginApi, run: Runner) {
 
   bb.rpc.register(rpcContract, {
     board,
+    async summary() {
+      const all = await views();
+      let action = 0; let fresh = 0;
+      for (const item of all) if (item.bucket === 'action') { action++; if (item.unread) fresh++; }
+      return { action, fresh };
+    },
+    async feed({ kind, scope }) { return { events: await feed(kind, scope) }; },
+    async item({ key }) { return { item: (await views()).find(item => item.key === key) ?? null }; },
     async refresh() { const started = !fetching; void refresh(); return { started }; },
     async mark_seen({ keys }) {
       await ready;
-      let changed = 0;
+      let count = 0;
       for (const key of keys) {
         const item = stored.items[key];
         if (!item) continue;
         seen[key] = { at: Date.now(), status: view(item, stored.me ?? '', undefined, undefined).status };
-        changed++;
+        count++;
       }
       await bb.storage.kv.set('seen', seen);
-      bb.realtime.publish('changed', {});
-      return { changed };
+      changed();
+      return { changed: count };
     },
     async mute({ key, muted }) {
       await ready;
       if (muted) mutes[key] = { at: Date.now() }; else delete mutes[key];
       await bb.storage.kv.set('mutes', mutes);
-      bb.realtime.publish('changed', {});
+      changed();
       return { ok: true };
     },
     async act({ key, action, body }) {
@@ -206,7 +240,7 @@ export function createServer(bb: BbPluginApi, run: Runner) {
       const normalized = key.toLowerCase();
       if (mode === null) delete choices[normalized]; else choices[normalized] = mode as SourceMode;
       await bb.storage.kv.set('sources', choices);
-      bb.realtime.publish('changed', {});
+      changed();
       if (mode === 'all') void refresh();
       return { ok: true };
     },
@@ -232,9 +266,10 @@ export function createServer(bb: BbPluginApi, run: Runner) {
           json: { type: 'boolean', description: 'Вывести JSON' },
         },
         async run(input) {
-          const data = await board();
+          const all = await views();
           const bucket = input.options.bucket ?? 'action';
-          const items = data.items.filter(item => bucket === 'all' || item.bucket === bucket).slice(0, Number(input.options.limit ?? 30));
+          const items = all.filter(item => bucket === 'all' || item.bucket === bucket).slice(0, Number(input.options.limit ?? 30));
+          const data = { fetchedAt: stored.fetchedAt, fetching: Boolean(fetching), error: lastError };
           if (input.options.json) return text(JSON.stringify(items.map(({ key, kind, repo, number, title, url, status, reason, bucket: b, unread }) => ({ key, kind, repo, number, title, url, status, reason, bucket: b, unread })), null, 2));
           const head = data.fetchedAt ? `Обновлено ${new Date(data.fetchedAt).toISOString().replace('T', ' ').slice(0, 16)} UTC${data.fetching ? ', идёт обновление' : ''}` : 'Ещё не загружено — идёт первая загрузка';
           return text(`${head}\n${items.length ? items.map(line).join('\n') : 'Пусто'}${data.error ? `\nОшибка последнего обновления: ${data.error}` : ''}`);
@@ -245,8 +280,8 @@ export function createServer(bb: BbPluginApi, run: Runner) {
         async run() {
           await refresh();
           if (lastError) throw new PluginCliError(lastError, { code: 'fetch_failed', hint: 'Проверьте `gh auth status` на сервере BB.' });
-          const data = await board();
-          const count = (b: string) => data.items.filter(item => item.bucket === b).length;
+          const all = await views();
+          const count = (b: string) => all.filter(item => item.bucket === b).length;
           return text(`Готово: нужно ваше действие — ${count('action')}, ждут других — ${count('waiting')}, завершено — ${count('done')}.`);
         },
       }),

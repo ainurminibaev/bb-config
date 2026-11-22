@@ -16,24 +16,46 @@ const itemView = z.object({
 export type ItemViewDto = z.infer<typeof itemView>;
 const feedEvent = z.object({ at: z.number(), key: z.string(), repo: z.string(), number: z.number(), kind: z.enum(['pr', 'issue']), title: z.string(), url: z.string(), text: z.string(), tone });
 export type FeedEventDto = z.infer<typeof feedEvent>;
+const counters = z.object({ action: z.number(), waiting: z.number(), done: z.number() });
 const board = z.object({
   me: z.string().nullable(),
+  /** One page of the requested bucket; the next page is asked for on scroll. */
   items: z.array(itemView),
-  events: z.array(feedEvent),
+  total: z.number(),
+  counts: counters,
+  fresh: counters,
+  kinds: z.object({ all: z.number(), pr: z.number(), issue: z.number() }),
+  scopes: z.array(z.object({ repo: z.string(), count: z.number() })),
+  /** Unread keys of the whole filtered bucket, for "mark all as read". */
+  unread: z.array(z.string()),
   fetchedAt: z.number().nullable(),
   fetching: z.boolean(),
   error: z.string().nullable(),
   warnings: z.array(z.string()),
-  repos: z.array(z.string()),
   since: z.number().nullable(),
 });
+const boardQuery = z.object({
+  bucket: z.enum(['action', 'waiting', 'done']),
+  kind: z.enum(['all', 'pr', 'issue']),
+  scope: z.string().max(300),
+  mine: z.boolean(),
+  q: z.string().max(200),
+  offset: z.number().int().min(0),
+  limit: z.number().int().min(1).max(200),
+}).strict();
+export type BoardQuery = z.infer<typeof boardQuery>;
 export type Board = z.infer<typeof board>;
-const key = z.string().min(3).max(300);
 const sourceMode = z.enum(['all', 'mine', 'hidden']);
 export type SourcesDto = { orgs: { login: string; mode: 'all' | 'mine' | 'hidden'; explicit: boolean; me: boolean; member: boolean; count: number; repos: { repo: string; mode: 'all' | 'mine' | 'hidden'; explicit: boolean; inherited: 'all' | 'mine' | 'hidden'; count: number; projects: string[] }[] }[] };
 
+const key = z.string().min(3).max(300);
+
 export const rpcContract = defineRpcContract({
-  board: { input: z.null(), output: board },
+  board: { input: boardQuery, output: board },
+  /** Tiny payload for the sidebar badge: never the list itself. */
+  summary: { input: z.null(), output: z.object({ action: z.number(), fresh: z.number() }) },
+  feed: { input: z.object({ kind: z.enum(['all', 'pr', 'issue']), scope: z.string().max(300) }).strict(), output: z.object({ events: z.array(feedEvent) }) },
+  item: { input: z.object({ key }).strict(), output: z.object({ item: itemView.nullable() }) },
   refresh: { input: z.null(), output: z.object({ started: z.boolean() }) },
   mark_seen: { input: z.object({ keys: z.array(key).max(1000) }).strict(), output: z.object({ changed: z.number() }) },
   mute: { input: z.object({ key, muted: z.boolean() }).strict(), output: z.object({ ok: z.boolean() }) },

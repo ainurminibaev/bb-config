@@ -14,6 +14,9 @@ const PATHS: Record<string, string> = {
   X: 'M18 6L6 18M6 6l12 12',
   ChevronDown: 'M6 9l6 6 6-6',
   Building: 'M6 21V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v17M3 21h18M10 7h1M13 7h1M10 11h1M13 11h1M10 15h1M13 15h1',
+  ArrowLeft: 'M19 12H5M12 19l-7-7 7-7',
+  Settings: 'M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M16 4v4M10 10v4M18 16v4',
+  CheckAll: 'M2 12l5 5L18 6M12 17l1 1L22 9',
   CircleHelp: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM9.4 9a2.7 2.7 0 0 1 5.2.9c0 1.8-2.6 2.5-2.6 4M12 17.5h.01',
 };
 

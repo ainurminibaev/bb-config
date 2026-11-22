@@ -1,6 +1,6 @@
 {
   "id": "plugin-pr-issues",
-  "title": "PR и Issues 0.3.0: страница в боковом меню с вашими пулреквестами и issue на GitHub",
+  "title": "PR и Issues 0.4.0: страница в боковом меню с вашими пулреквестами и issue на GitHub",
   "component": "pr-issues",
   "where": "server",
   "kind": "local-plugin",
