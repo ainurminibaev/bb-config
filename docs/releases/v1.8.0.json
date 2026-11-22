@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "version": "v1.8.0",
+  "title": "PR и Issues, Fresh Thread Hint, Limit Guard, Machine Tabs, Project Catalog",
+  "steps": [
+    {
+      "id": "bundle",
+      "title": "Полный набор компонентов bb-config",
+      "component": "bb-config",
+      "where": "server",
+      "kind": "bundle",
+      "rerun": "Безопасно: установленное и актуальное только проверяется; повтор доделывает остаток после сбоя.",
+      "rollback": "Компонент, который не нужен, исключите командой python3 scripts/bundle.py exclude <id> и удалите штатно (bb plugin remove <id>); прежнюю версию собственного плагина ставит предыдущий релиз."
+    },
+    {
+      "id": "plugin-fresh-thread-hint",
+      "title": "Fresh Thread Hint 0.1.1: подсказка продолжить в новом треде, когда большой тред Claude остыл",
+      "component": "fresh-thread-hint",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "fresh-thread-hint",
+      "introduces": true,
+      "rerun": "Безопасно: при совпадении версии и источника шаг только проверяется.",
+      "rollback": "bb plugin remove fresh-thread-hint. Данных на сервере у плагина нет; отметки о скрытии остаются в localStorage браузера и ни на что не влияют."
+    },
+    {
+      "id": "plugin-limit-guard",
+      "title": "Limit Guard: агенты видят остаток лимита и сохраняют работу маленькими шагами",
+      "component": "limit-guard",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "limit-guard",
+      "rerun": "Проверяет установленную версию limit-guard; если она совпадает, ничего не переустанавливает.",
+      "rollback": "bb plugin uninstall limit-guard — агенты перестают получать правила, сообщения и снимки. Остаются ссылки снимков refs/wip/bb/* в репозиториях (git for-each-ref refs/wip/bb; убрать: git update-ref -d <ref>, на сервере: git push origin :<ref>) и теневые репозитории в данных плагина на машинах (<dataDir>/shadow)."
+    },
+    {
+      "id": "plugin-machine-tabs-project-menu",
+      "title": "Machine Tabs 0.2.5: меню проектов в поле поиска",
+      "component": "machine-tabs",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "machine-tabs",
+      "rerun": "Проверяет установленную версию machine-tabs; при совпадении ничего не делает.",
+      "rollback": "Установить machine-tabs 0.2.4 из прошлого релиза; кнопка меню проектов пропадёт, остальное без изменений."
+    },
+    {
+      "id": "plugin-machine-tabs-row-marks",
+      "title": "Machine Tabs 0.2.4: значки других плагинов в строке треда",
+      "component": "machine-tabs",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "machine-tabs",
+      "rerun": "Проверяет установленную версию machine-tabs; при совпадении ничего не делает.",
+      "rollback": "Установить machine-tabs 0.2.3 из прошлого релиза; значки других плагинов в строках пропадут, остальное без изменений."
+    },
+    {
+      "id": "plugin-pr-issues",
+      "title": "PR и Issues 0.4.0: страница в боковом меню с вашими пулреквестами и issue на GitHub",
+      "component": "pr-issues",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "pr-issues",
+      "introduces": true,
+      "rerun": "Безопасно: при совпадении версии и источника шаг только проверяется.",
+      "rollback": "bb plugin remove pr-issues. Плагин хранит на сервере только свои отметки (просмотрено, скрыто) и ленту изменений; на GitHub ничего не меняется."
+    },
+    {
+      "id": "plugin-project-catalog-sync",
+      "title": "Project Catalog 0.7.0: синхронизация при старте, изоляция второго треда, история и worktree-копии",
+      "component": "project-catalog",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "project-catalog",
+      "rerun": "Проверяет установленную версию project-catalog; при совпадении ничего не делает. Карточки и история в хранилище BB сохраняются.",
+      "rollback": "Установить предыдущую версию плагина из прошлого релиза bb-config; карточки каталога не теряются. Копии изоляции (ветки bb/iso-*, worktree в данных плагина) остаются: убрать — git worktree remove <путь> и git branch -D bb/iso-<id> в папке проекта."
+    }
+  ]
+}
