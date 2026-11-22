@@ -473,9 +473,11 @@ async function loadNativeList(
         <RealTitle {...props} />
         {thread ? (
           <span data-machine-tabs-row-meta="">
-            {top ? (
-              <span data-machine-tabs-inside="" title={`Внутри подтредов: ${QUICK_STATES.filter((s) => inside!.counts[s] > 0).map((s) => `${STATE_LABEL[s].toLowerCase()} ${inside!.counts[s]}`).join(", ")}`}>
-                ↳<StateMark state={top} small />{inside!.counts[top]}
+            {inside && inside.total > 0 ? (
+              // Always the number of subthreads; with work, a wait or an error inside, that state and its count.
+              <span data-machine-tabs-inside="" data-quiet={top ? undefined : ""}
+                title={`Подтредов: ${inside.total}\n${QUICK_STATES.filter((s) => inside.counts[s] > 0).map((s) => `${STATE_LABEL[s]}: ${inside.counts[s]}`).join("\n")}`}>
+                ↳{top ? <><StateMark state={top} small />{inside.counts[top]}</> : inside.total}
               </span>
             ) : null}
             <ThreadRowMetadata thread={thread} />
@@ -1087,7 +1089,7 @@ const HIDE_EMPTY_GROUPS = `
   line-height: 1;
 }
 [data-machine-tabs-inside] {
-  display: inline-flex; align-items: center; gap: 1px; opacity: .7;
+  display: inline-flex; align-items: center; gap: 1px; opacity: .8;
   font-size: 10.5px; font-variant-numeric: tabular-nums;
 }
 /* With marks on the right, the title stretches across the row so they sit at its right edge,
@@ -1096,6 +1098,7 @@ span:has(> .bb-thread-title > [data-machine-tabs-row-meta]:not(:empty)),
 .bb-thread-title:has(> [data-machine-tabs-row-meta]:not(:empty)) {
   flex: 1 1 auto;
 }
+[data-machine-tabs-inside][data-quiet] { opacity: .5; }
 [data-machine-tabs-row-meta]:empty {
   display: none;
 }

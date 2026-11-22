@@ -37,7 +37,7 @@ export type QuickThread = {
 
 export type QuickProject = { id: string; name: string; isPersonal: boolean };
 
-const BUSY = new Set(["active", "starting", "stopping", "pending", "provisioning", "waiting-for-host"]);
+const BUSY = new Set(["active", "starting", "stopping", "pending", "queued", "provisioning", "waiting-for-host"]);
 const BUSY_INDICATORS = new Set([
   "runtime", "background-agent", "background-command", "workflow", "working-draft",
 ]);
