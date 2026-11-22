@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "version": "v1.9.0",
+  "title": "bb-config v1.9.0: Context Mode Rollout",
+  "steps": [
+    {
+      "id": "bundle",
+      "title": "Полный набор компонентов bb-config",
+      "component": "bb-config",
+      "where": "server",
+      "kind": "bundle",
+      "rerun": "Безопасно: установленное и актуальное только проверяется; повтор доделывает остаток после сбоя.",
+      "rollback": "Компонент, который не нужен, исключите командой python3 scripts/bundle.py exclude <id> и удалите штатно (bb plugin remove <id>); прежнюю версию собственного плагина ставит предыдущий релиз."
+    },
+    {
+      "id": "plugin-context-mode-rollout",
+      "title": "Context Mode Rollout 0.4.0: актуальный context-mode во всех агентах на всех машинах BB, включая новые",
+      "component": "context-mode-rollout",
+      "where": "server",
+      "kind": "local-plugin",
+      "plugin": "context-mode-rollout",
+      "introduces": true,
+      "rerun": "Безопасно: при совпадении версии и источника шаг только проверяется; сам плагин на машинах, где context-mode уже настроен, ничего не меняет.",
+      "rollback": "bb plugin remove context-mode-rollout. Установленный context-mode остаётся; снять его с машины — context-mode setup --remove."
+    }
+  ]
+}
