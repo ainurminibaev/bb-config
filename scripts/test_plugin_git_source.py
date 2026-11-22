@@ -185,5 +185,20 @@ class GitSourceTests(unittest.TestCase):
         self.assertNotIn(('remove', self.plugin_id), self.commands)
 
 
+    def test_a_checkout_path_is_accepted_and_anything_else_is_not(self):
+        checkout = Path(self.directory).parents[3] / 'checkout'
+        plugin_dir = checkout / 'plugins' / self.plugin_id
+        plugin_dir.mkdir(parents=True)
+        (checkout / '.git').mkdir()
+        (checkout / 'scripts').mkdir()
+        (checkout / 'scripts' / 'plugin_git_source.py').write_text('', encoding='utf-8')
+        (checkout / 'config').mkdir()
+        (checkout / 'config' / 'bundle.json').write_text('{}', encoding='utf-8')
+        row = {'rootDir': str(plugin_dir), 'source': f'path:{plugin_dir}'}
+        self.assertEqual(migration.release_path(self.plugin_id, row), f'path:{plugin_dir}')
+        (checkout / 'config' / 'bundle.json').unlink()
+        with self.assertRaises(migration.NotApplicable):
+            migration.release_path(self.plugin_id, row)
+
 if __name__ == '__main__':
     unittest.main()

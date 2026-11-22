@@ -130,9 +130,15 @@ def release_path(plugin_id, row):
     source = row['source']
     release = root.parent.parent
     if (source != f'path:{root}' or root.name != plugin_id or root.parent.name != 'plugins'
-            or not release_location(release)):
-        raise NotApplicable(f'Expected a path installed from a bb-config release, got {source}')
+            or not (release_location(release) or is_checkout(release))):
+        raise NotApplicable(f'Expected a path installed from a bb-config release or checkout, got {source}')
     return source
+
+
+def is_checkout(directory):
+    """A bb-config working copy (the author's install runs some plugins from one)."""
+    return ((directory / 'scripts' / 'plugin_git_source.py').is_file()
+            and (directory / '.git').exists() and (directory / 'config' / 'bundle.json').is_file())
 
 
 def verify_rollback_source(record):
