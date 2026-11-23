@@ -3259,3 +3259,46 @@ Trust чист; `thread_watchdog.py` теперь разбирает событ�
 командой выше и завести роли заново (`bb agent-roster add …` или через меню треда).
 
 Проверка: `bb agent-roster list`; в панели виден блок «Агенты»; тесты — в репозитории плагина (`npm test`).
+
+## Offline Quiet 0.1.0 — без предупреждения об офлайн-машине (23 ноября 2026)
+
+Собственный плагин `plugins/offline-quiet/`. Для машин из списка скрывает
+предупреждение BB «<машина> is offline»: оранжевую карточку в Settings →
+Machines и ссылку внизу боковой панели. Машина остаётся в BB, её вкладка и
+треды не меняются.
+
+- **Зачем:** машина, которая часто выключена (например, Windows), постоянно
+  держит предупреждение. Штатно BB его не скрывает: отметка «прочитано» в
+  боковой панели (`bb.sidebar.machineAttentionAcknowledged`) действует только
+  в одном браузере, а в настройках скрыть карточку нельзя. Удалять машину
+  (`bb machine remove`) не хотелось.
+- **Как:** настройка `machines` (имена или ID через запятую или с новой строки)
+  и CLI `bb offline-quiet status|add|remove`. RPC `state` отдаёт текущие имена
+  машин из списка и признак «все предупреждения — о машинах из списка».
+  Интерфейс — `experimental_appOverlay` без отрисовки: MutationObserver
+  помечает элементы атрибутом `data-offline-quiet-hidden`, правило
+  `display:none` в своём `<style>`; при выгрузке плагина всё снимается.
+  Предупреждение «cleanup failed» не скрывается никогда.
+- **Опирается на:** BB 0.50.1, SDK 0.6.157; `bb.sdk.hosts.list()` (поля `id`,
+  `name`, `status`, `type`, `lifecycle.phase`, `lifecycle.teardown.status` —
+  читаются терпимо); DOM: `section[class*="border-warning-text"]` с `h2`
+  «<машина> is offline» или списком `ul > li > p.font-medium` (несколько
+  машин), `a[aria-label]` «<машина> is offline» / «Machines offline» /
+  «N machines need attention». Логику повторяет `warned()` в `logic.ts`
+  (тест `logic.test.ts`). Если BB изменит тексты или разметку, предупреждение
+  просто снова появится. Если BB научится скрывать его сам — плагин удалить.
+- **Ограничения:** в карточке с несколькими машинами скрываются только строки
+  машин из списка, заголовок «N machines are offline» остаётся. Вкладка Machine
+  Tabs по-прежнему подписана «(offline)». Изменение списка доходит до открытых
+  окон за минуту или при возврате на вкладку.
+- **Установка/обновление:** `cd plugins/offline-quiet && npm ci && npm test &&
+  npm run typecheck && bb plugin build . && bb plugin install . --yes`; на
+  основной установке — из Git-тега `offline-quiet/vX.Y.Z`
+  (`scripts/plugin_git_source.py --apply offline-quiet`). Запись есть в
+  `config/plugins.json`, восстановление — `python3 scripts/restore.py --plugins
+  --apply`. Список машин — личная настройка, хранится в приватном снимке.
+  Удаление: `bb plugin remove offline-quiet`.
+- **Проверка:** `bb offline-quiet status` показывает 🔕 у машины; в Settings →
+  Machines нет оранжевой карточки, в DOM есть `[data-offline-quiet-hidden]`.
+- **Для установивших:** компонент набора `config/bundle.json` (`local`),
+  приходит шагом `bundle` ближайшего релиза; список машин у каждого свой.

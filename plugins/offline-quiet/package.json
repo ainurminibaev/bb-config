@@ -1,0 +1,36 @@
+{
+  "name": "bb-plugin-offline-quiet",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Hides BB's offline warning for machines you chose to be quiet about",
+  "engines": {
+    "bb": ">=0.50",
+    "bbPluginSdk": ">=0.6.157"
+  },
+  "bb": {
+    "name": "Offline Quiet",
+    "description": "No \"<machine> is offline\" warning in Settings and the sidebar for the machines you list. The machine itself stays in BB.",
+    "branding": {
+      "icon": "BellOff"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx",
+    "skills": [
+      "skills"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test logic.test.ts"
+  },
+  "dependencies": {
+    "@get-bb/plugin-sdk": "0.6.157",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.7.0"
+  }
+}

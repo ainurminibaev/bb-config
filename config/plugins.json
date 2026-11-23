@@ -357,6 +357,13 @@
     "source": "builtin:navigation"
   },
   {
+    "id": "offline-quiet",
+    "version": "0.1.0",
+    "enabled": true,
+    "name": "Offline Quiet",
+    "source": "path:plugins/offline-quiet"
+  },
+  {
     "id": "pdf-preview",
     "version": "0.1.0",
     "enabled": true,

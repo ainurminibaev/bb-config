@@ -30,6 +30,7 @@ KodaForge 0.7.0, ChatGPT Realtime 0.1.0; более новая даёт пред
 | `project-catalog` | свой плагин | `plugins/project-catalog` | зависит от `machine-tabs` | — |
 | `project-machine-setup` | свой плагин | `plugins/project-machine-setup` | — | — |
 | `subthread-autocollapse` | свой плагин | `plugins/subthread-autocollapse` | — | — |
+| `offline-quiet` | свой плагин | `plugins/offline-quiet` | — | — |
 | `subthread-error-mark` | свой плагин | `plugins/subthread-error-mark` | — | — |
 | `codex-goal-queue` | свой плагин | `plugins/codex-goal-queue` | — | — |
 | `thread-account-usage` | свой плагин | `plugins/thread-account-usage` | источник usage для `menubar-status` | — |

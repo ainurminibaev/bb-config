@@ -229,6 +229,12 @@
    "description": "Сворачивает раскрытые списки подтредов через 5 минут."
   },
   {
+   "id": "offline-quiet",
+   "kind": "local",
+   "name": "Offline Quiet",
+   "description": "Не показывать предупреждение «машина офлайн» для выбранных машин."
+  },
+  {
    "id": "subthread-error-mark",
    "kind": "local",
    "name": "Subthread Error Mark",
