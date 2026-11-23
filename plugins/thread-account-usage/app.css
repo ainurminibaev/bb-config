@@ -127,3 +127,6 @@
 }
 
 .tau-row-identity .tau-plan{align-self:flex-start;padding:0 4px;border-radius:4px;background:var(--muted);color:var(--muted-foreground);font-size:8px;font-weight:600;line-height:13px;white-space:nowrap}
+.tau-agent-logo{display:inline-block;background-color:currentColor;-webkit-mask:center/contain no-repeat;mask:center/contain no-repeat}
+.tau-grid-logo.tau-agent-logo{color:var(--foreground)}
+.tau-glyph-agent.tau-agent-logo{color:var(--foreground);background:currentColor}

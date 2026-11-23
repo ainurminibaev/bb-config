@@ -32,13 +32,19 @@ function resetText(at: string | null, now: number) {
       : `Сброс через ${Math.floor(minutes / 1440)} д ${Math.floor(minutes % 1440 / 60)} ч`;
   return { relative, exact: new Date(at).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) };
 }
+// Provider logos are monochrome SVGs drawn with currentColor; inside <img> that is
+// always black and vanishes on a dark theme. Paint them as a mask in the text colour.
+function AgentLogo({ src, alt, className }: { src: string; alt?: string; className: string }) {
+  const url = `url("${src.replace(/"/g, '%22')}")`;
+  return <span className={`tau-agent-logo ${className}`} role="img" aria-label={alt ?? ''} style={{ WebkitMaskImage: url, maskImage: url }}/>;
+}
 function QuotaGlyph({ windows, logo, agent, resets=0, blocked=0 }: { windows: QuotaWindow[]; logo?:string|null;agent?:string;resets?:number;blocked?:number }) {
   return <span className="tau-glyph-wrap"><svg className="tau-quota-glyph" viewBox="0 0 32 32" role="img" aria-label={windows.map(w=>`${short(w)}: ${pct(w.usedPercent)}`).join(', ')}>
     {windows.slice(0,2).map((w,i)=><g key={`${w.label}:${i}`} data-level={level(w.usedPercent)}><title>{w.label}: {pct(w.usedPercent)}</title>
       <circle className="tau-track" cx="16" cy="16" r={13-i*5} />
       <circle className="tau-fill" cx="16" cy="16" r={13-i*5} pathLength="100" strokeDasharray={`${Math.min(100,Math.max(0,w.usedPercent))} 100`} transform="rotate(-90 16 16)" />
     </g>)}
-  </svg>{logo&&<img className="tau-glyph-agent" src={logo} alt={agent??''}/>}{resets>0&&<sup className="tau-glyph-credit" title={`Доступно сбросов: ${resets}`}>+{resets}</sup>}{blocked>0&&<span className="tau-account-status-dot" title={`Исчерпан общий лимит у аккаунтов: ${blocked}`} role="img" aria-label={`Исчерпан общий лимит у аккаунтов: ${blocked}`}/>}</span>;
+  </svg>{logo&&<AgentLogo className="tau-glyph-agent" src={logo} alt={agent}/>}{resets>0&&<sup className="tau-glyph-credit" title={`Доступно сбросов: ${resets}`}>+{resets}</sup>}{blocked>0&&<span className="tau-account-status-dot" title={`Исчерпан общий лимит у аккаунтов: ${blocked}`} role="img" aria-label={`Исчерпан общий лимит у аккаунтов: ${blocked}`}/>}</span>;
 }
 function RefreshIcon({loading}:{loading:boolean}) {
   return <svg className="tau-refresh-icon" data-loading={loading} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -67,7 +73,7 @@ function AccountsGrid({ accounts, filter, now, logos, onDetails }: { accounts: A
     const windows = a.windows.filter(w=>filter==='all'||w.kind===filter);
     return <section className="tau-compact-row" key={a.key} data-stale={a.status!=='ok'}>
       <div className="tau-row-identity" title={`${a.email ?? a.providerName}\n${a.hostNames.join(', ')}`}>
-        <strong>{logos[a.providerId]&&<img className="tau-grid-logo" src={logos[a.providerId]!} alt={a.providerName}/>}<span>{a.email?.split('@')[0]??'Аккаунт неизвестен'}</span></strong>
+        <strong>{logos[a.providerId]&&<AgentLogo className="tau-grid-logo" src={logos[a.providerId]!} alt={a.providerName}/>}<span>{a.email?.split('@')[0]??'Аккаунт неизвестен'}</span></strong>
         <small>{a.hostNames.map(n=>n.replace(/\s*[—–].*$/,'').trim()).join(' · ')}</small>
         {a.plan&&<small className="tau-plan" title="Тариф и цена в месяц (справочно)">{planLabel(a.providerId,a.plan)}</small>}
         {(a.resetCount??0)>0&&<sup className="tau-row-reset" title="Доступные сбросы лимита">+{a.resetCount}</sup>}

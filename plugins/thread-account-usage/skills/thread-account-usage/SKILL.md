@@ -20,6 +20,10 @@ its existing CLI and matched by email. Claude reset counts are currently unknown
 a missing badge is not proof of zero. Do not invent a credit count or consume
 credits to inspect it. Full details open on hover or click.
 
+Agent logos (Claude, Codex) are BB's monochrome `currentColor` SVGs painted
+as a CSS mask in the theme text colour (`.tau-agent-logo`); if a logo is
+invisible on a dark theme, check that class rather than the image URL.
+
 Inspect live installation with `bb plugin list --json`. Source, refresh behavior,
 identity limitations, DOM anchors and restoration are described in the plugin
 README.md. After changing source, run TypeScript, `node --test logic.test.ts`,
