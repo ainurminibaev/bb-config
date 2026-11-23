@@ -48,9 +48,11 @@ export function threadState(thread: QuickThread): QuickState {
     thread.indicator === "unread-error" || thread.indicator === "queued-failed") return "error";
   if (BUSY.has(thread.runtimeStatus ?? "") || BUSY.has(thread.status ?? "") ||
     BUSY_INDICATORS.has(thread.indicator ?? "")) return "working";
-  if (thread.indicator === "unread-success" || thread.isUnread) return "unread";
+  if (thread.indicator === "unread-success" || (thread.isUnread && !thread.parentThreadId)) return "unread";
   return "idle";
 }
+// bb marks unread only on top-level threads: a subthread reports to its parent and its row never
+// shows an unread mark. Counting a subthread's isUnread here drew "↳ ● 1" with no visible match.
 
 /** Live means what the sidebar lists: not archived and not a hidden helper thread. */
 export function isLive(thread: QuickThread): boolean {

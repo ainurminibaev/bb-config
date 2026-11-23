@@ -18,6 +18,11 @@ test('one state per thread, waiting for the user first', () => {
   assert.equal(threadState(t('x', 'a', 1, { indicator: 'background-agent' })), 'working');
   assert.equal(threadState(t('x', 'a', 1, { indicator: 'unread-success' })), 'unread');
   assert.equal(threadState(t('x', 'a', 1)), 'idle');
+  assert.equal(threadState(t('x', 'a', 1, { isUnread: true })), 'unread');
+  // bb never marks a subthread unread; neither does the "↳" mark of its parent.
+  assert.equal(threadState(t('x', 'a', 1, { isUnread: true, parentThreadId: 'p' })), 'idle');
+  const inside = insideStates([t('p', 'a', 1), t('k', 'a', 2, { isUnread: true, parentThreadId: 'p' })]).get('p');
+  assert.equal(inside.top, null);
 });
 
 test('projects by latest live thread; archived and hidden threads do not count', () => {
