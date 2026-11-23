@@ -51,7 +51,13 @@ bb plugin install path:"$PWD/plugins/machine-tabs"
   `thread_mark_set { threadId, glyph, tone?, label? }`,
   `thread_mark_clear { threadId }`, `thread_marks_replace { marks: [...] }`
   (все метки вызывающего разом). `glyph` — из закрытого набора (`crown`, `bot`,
-  `link`; расширяется в `lib/thread-marks.ts`), `tone` — `neutral` | `accent`
+  `link`, `telegram`; расширяется в `lib/thread-marks.ts`), `tone` — `neutral` | `accent`
   (один спокойный золотой) | `muted`; цвета плагины не передают.
+- 0.2.11: `place` — `corner` (снизу справа, по умолчанию, как в 0.2.10) или `top`
+  (по центру над значком, как корона на голове; значок проекта чуть уменьшается,
+  чтобы пара уместилась на месте значка, высота строки не меняется); `size` —
+  `normal` | `large`. Один плагин ставит на тред до двух меток, по одной на место;
+  `thread_mark_clear` принимает необязательный `place`. Вызовы без новых полей
+  работают как раньше.
 - Метки отключённого или удалённого плагина не рисуются; хранимые данные читаются
   терпимо. Тесты: `tests/thread-marks.test.mjs`.

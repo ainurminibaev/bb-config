@@ -58,7 +58,13 @@ its corner. Machine Tabs does not know what a mark means.
   `thread_mark_set { threadId, glyph, tone?, label? }`,
   `thread_mark_clear { threadId }`, `thread_marks_replace { marks: [...] }`
   (all marks of the caller at once). `glyph` is one of a closed set
-  (`crown`, `bot`, `link`; extend in `lib/thread-marks.ts`), `tone` is
+  (`crown`, `bot`, `link`, `telegram`; extend in `lib/thread-marks.ts`), `tone` is
   `neutral` | `accent` (one calm gold) | `muted`; plugins cannot pass colours.
+- 0.2.11: `place` — `corner` (bottom right, the default and the 0.2.10 look) or
+  `top` (centred over the icon like a crown on a head; the project mark shrinks a
+  little so the pair keeps the icon's place and the row's height); `size` —
+  `normal` | `large`. One plugin may set up to two marks per thread, one per place;
+  `thread_mark_clear` takes an optional `place`. Calls without these fields work
+  as before.
 - Marks of a disabled or removed plugin are not drawn; stored data is read
   tolerantly. Tests: `tests/thread-marks.test.mjs`.

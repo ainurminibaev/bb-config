@@ -29,7 +29,7 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import type { PluginSidebarThread, PluginThreadListProps } from "@get-bb/plugin-sdk/app";
 import type { rpcContract, TabsState } from "./server";
-import { ACCENT_COLOR, MARK_PATHS, type ThreadMark } from "./lib/thread-marks";
+import { ACCENT_COLOR, FILLED_GLYPHS, MARK_PATHS, type ThreadMark, type VisibleMark } from "./lib/thread-marks";
 import { cn } from "@/lib/utils";
 import { automaticProjectSectionOrder, projectsByLatestThread } from "./lib/project-order";
 import { GROUP_PAGING_CSS, withGroupPaging } from "./lib/group-paging";
@@ -292,7 +292,7 @@ function ProjectBadgeMark({
 }
 
 // ---------- marks other plugins put on a thread's icon ----------
-let threadMarks: Readonly<Record<string, ThreadMark & { pluginId: string }>> = {};
+let threadMarks: Readonly<Record<string, readonly VisibleMark[]>> = {};
 const threadMarkListeners = new Set<() => void>();
 /** Loads the marks once per list; refreshed by the server's signal. */
 function useThreadMarksLoader() {
@@ -310,19 +310,28 @@ function useThreadMarksLoader() {
   }, [load]);
   useRealtime("machine-tabs-thread-marks", load);
 }
-function useThreadMark(threadId: string): (ThreadMark & { pluginId: string }) | undefined {
+function useThreadMarks(threadId: string): readonly VisibleMark[] | undefined {
   return useSyncExternalStore(
     (fn) => { threadMarkListeners.add(fn); return () => threadMarkListeners.delete(fn); },
     () => threadMarks[threadId],
     () => undefined,
   );
 }
-/** A mark on the thread's icon: over the project mark (or bb's icon), larger than the provider glyph. */
+/**
+ * A mark on the thread's icon. `top`: centred over the project mark, like a
+ * crown on a head (the mark shrinks and drops a little so the pair fits the
+ * icon's place); `corner`: bottom right. The provider glyph keeps its corner on top.
+ */
 function ThreadIconMark({ mark }: { mark: ThreadMark }) {
+  const filled = FILLED_GLYPHS.has(mark.glyph);
+  const px = mark.place === "top" ? (mark.size === "large" ? 15 : 12) : (mark.size === "large" ? 11 : 9);
   return (
-    <span data-machine-tabs-thread-mark={mark.tone} role="img" aria-label={mark.label || undefined} title={mark.label || undefined}
+    <span data-machine-tabs-thread-mark={mark.tone} data-place={mark.place} data-size={mark.size} role="img"
+      aria-label={mark.label || undefined} title={mark.label || undefined}
       style={mark.tone === "accent" ? { color: ACCENT_COLOR } : undefined}>
-      <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width={px} height={px} aria-hidden="true"
+        fill={filled ? "currentColor" : "none"} stroke={filled ? "none" : "currentColor"}
+        strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
         <path d={MARK_PATHS[mark.glyph]} />
       </svg>
     </span>
@@ -505,13 +514,13 @@ async function loadNativeList(
   }) {
     const badge = useContext(ProjectBadges)?.get(props.threadId);
     const thread = useContext(RowThreads)?.get(props.threadId);
-    const mark = useThreadMark(props.threadId);
+    const marks = useThreadMarks(props.threadId);
     const inside = useContext(RowInside)?.get(props.threadId);
     const top = inside?.top ?? null;
     return (
       <>
         {badge ? <ProjectBadgeMark badge={badge} /> : null}
-        {mark ? <ThreadIconMark mark={mark} /> : null}
+        {marks?.map((m) => <ThreadIconMark key={m.place} mark={m} />)}
         <RealTitle {...props} />
         {thread ? (
           <span data-machine-tabs-row-meta="">
@@ -1260,21 +1269,43 @@ span:has(> .bb-thread-title > [data-machine-tabs-row-meta]:not(:empty)),
   width: 10px;
   height: 10px;
 }
-/* A mark another plugin put on the thread icon (a role, say): bottom right of
-   the project mark, larger than the provider glyph in the top corner. */
+/* Marks other plugins put on the thread icon. "corner": bottom right of the
+   project mark. "top": centred over it like a crown on a head; the project mark
+   shrinks and drops a little so the pair keeps the icon's place and the row's
+   height. The provider glyph stays in its top corner, above both. */
 [data-machine-tabs-list] [data-machine-tabs-thread-mark] {
   position: absolute;
-  left: 8px;
-  top: calc(50% - 1px);
-  width: 14px;
-  height: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 9999px;
-  background: var(--sidebar, var(--background));
   color: var(--muted-foreground);
   pointer-events: auto;
+  line-height: 0;
+}
+[data-machine-tabs-list] [data-machine-tabs-thread-mark][data-place="corner"] {
+  left: 9px;
+  top: calc(50% + 0px);
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: var(--sidebar, var(--background));
+}
+[data-machine-tabs-list] [data-machine-tabs-thread-mark][data-place="top"] {
+  left: 0;
+  width: 16px;
+  top: calc(50% - 14px);
+  height: 10px;
+}
+[data-machine-tabs-list] [data-machine-tabs-thread-mark][data-place="top"][data-size="large"] {
+  top: calc(50% - 16px);
+  height: 12px;
+}
+[data-machine-tabs-list] .bb-thread-title:has(> [data-machine-tabs-thread-mark][data-place="top"]) > [data-machine-tabs-badge] {
+  width: 12px;
+  height: 12px;
+  margin-top: 6px;
+  margin-left: 2px;
+  margin-right: calc(0.5rem + 2px);
 }
 [data-machine-tabs-list] [data-machine-tabs-thread-mark="muted"] { opacity: .45; }`;
 

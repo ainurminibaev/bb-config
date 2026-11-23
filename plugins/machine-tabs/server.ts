@@ -4,7 +4,7 @@
 // windows), and forwards bb's thread-list preference calls (see rpcContract).
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { clearMark, MARK_GLYPHS, MARK_TONES, parseStore, replaceMarks, setMark, visibleMarks, type MarkStore } from "./lib/thread-marks";
+import { clearMark, MARK_GLYPHS, MARK_PLACES, MARK_SIZES, MARK_TONES, parseStore, replaceMarks, setMark, visibleMarks, type MarkStore } from "./lib/thread-marks";
 
 /** Realtime channel app.tsx listens on after a tab changes. */
 export const TABS_CHANGED = "machine-tabs-changed";
@@ -16,9 +16,11 @@ const markInput = z.object({
   threadId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
   glyph: z.enum(MARK_GLYPHS),
   tone: z.enum(MARK_TONES).default("neutral"),
+  place: z.enum(MARK_PLACES).default("corner"),
+  size: z.enum(MARK_SIZES).default("normal"),
   label: z.string().max(160).default(""),
 });
-const markOutput = z.object({ glyph: z.enum(MARK_GLYPHS), tone: z.enum(MARK_TONES), label: z.string(), pluginId: z.string() });
+const markOutput = z.object({ glyph: z.enum(MARK_GLYPHS), tone: z.enum(MARK_TONES), place: z.enum(MARK_PLACES), size: z.enum(MARK_SIZES), label: z.string(), pluginId: z.string() });
 
 /** Realtime channel: project images were re-read. */
 export const ICONS_CHANGED = "machine-tabs-icons-changed";
@@ -51,9 +53,9 @@ const rowMarkSchema = z.enum(["ask", "project", "topic"]);
 export const rpcContract = defineRpcContract({
   // Marks on a thread's icon, set by other plugins (the caller is the owner).
   thread_mark_set: { input: markInput, output: z.object({ ok: z.literal(true) }) },
-  thread_mark_clear: { input: z.object({ threadId: z.string().max(64) }), output: z.object({ ok: z.literal(true) }) },
-  thread_marks_replace: { input: z.object({ marks: z.array(markInput).max(500) }), output: z.object({ count: z.number() }) },
-  thread_marks: { input: z.null(), output: z.object({ marks: z.record(z.string(), markOutput) }) },
+  thread_mark_clear: { input: z.object({ threadId: z.string().max(64), place: z.enum(MARK_PLACES).optional() }), output: z.object({ ok: z.literal(true) }) },
+  thread_marks_replace: { input: z.object({ marks: z.array(markInput).max(1000) }), output: z.object({ count: z.number() }) },
+  thread_marks: { input: z.null(), output: z.object({ marks: z.record(z.string(), z.array(markOutput)) }) },
   row_mark: { input: z.null(), output: z.object({ rowMark: rowMarkSchema }) },
   set_row_mark: {
     input: z.object({ rowMark: z.enum(["project", "topic"]) }),
@@ -369,12 +371,12 @@ export default async function plugin(bb: BbPluginApi) {
   bb.rpc.register(rpcContract, {
     async thread_mark_set(input, ctx) {
       const owner = markOwner((ctx as { experimental_caller?: unknown } | undefined)?.experimental_caller);
-      await changeMarks((store) => setMark(store, owner, input.threadId, { glyph: input.glyph, tone: input.tone, label: input.label }));
+      await changeMarks((store) => setMark(store, owner, input.threadId, { glyph: input.glyph, tone: input.tone, place: input.place, size: input.size, label: input.label }));
       return { ok: true as const };
     },
-    async thread_mark_clear({ threadId }, ctx) {
+    async thread_mark_clear({ threadId, place }, ctx) {
       const owner = markOwner((ctx as { experimental_caller?: unknown } | undefined)?.experimental_caller);
-      await changeMarks((store) => clearMark(store, owner, threadId));
+      await changeMarks((store) => clearMark(store, owner, threadId, place));
       return { ok: true as const };
     },
     async thread_marks_replace({ marks }, ctx) {
