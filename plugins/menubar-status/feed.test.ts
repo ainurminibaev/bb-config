@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildFeed, chatFromEvents, describeActivity, oneLine, sameContent, stateOf, statusFile, type FeedThread } from "./feed.ts";
+import {
+  buildFeed, chatFromEvents, descendantsFrom, describeActivity, keepRecent, machineNamesFrom, oneLine, sameContent, stateOf,
+  statusFile, THREAD_PAGE, type FeedThread,
+} from "./feed.ts";
 
 const thread = (over: Partial<FeedThread>): FeedThread => ({
   id: "t", projectId: "p", title: "T", status: "idle", updatedAt: 1, ...over,
@@ -135,4 +138,40 @@ test("the status file may be a POSIX path or a Windows drive path", () => {
 
 test("a backslash in a POSIX status path is part of the name", () => {
   assert.equal(statusFile("/Users/example/odd\\name/status.json"), "/Users/example/odd\\name/status.json");
+});
+
+test("keepRecent: keeps the events behind the last N messages, same chat", () => {
+  const ev = (seq: number, kind: "user" | "agent" | "tool") => ({
+    seq, createdAt: seq,
+    type: kind === "user" ? "client/turn/requested" : "item/completed",
+    data: kind === "user" ? { input: [{ type: "text", text: `u${seq}` }] }
+      : { item: { type: kind === "agent" ? "agentMessage" : "commandExecution", text: `a${seq}` } },
+  });
+  const events = Array.from({ length: 120 }, (_, i) => ev(i, i % 3 === 0 ? "user" : i % 3 === 1 ? "agent" : "tool"));
+  const kept = keepRecent(events, 40);
+  assert.deepEqual(chatFromEvents(kept), chatFromEvents(events));
+  assert.ok(kept.length < events.length);
+  assert.equal(keepRecent(events.slice(0, 5), 40).length, 5);
+});
+
+test("descendantsFrom: level by level as the per-parent lists, null on a full page", () => {
+  const rows = [
+    thread({ id: "root" }), thread({ id: "a", parentThreadId: "root" }), thread({ id: "b", parentThreadId: "root" }),
+    thread({ id: "a1", parentThreadId: "a" }), thread({ id: "a11", parentThreadId: "a1" }),
+    thread({ id: "a111", parentThreadId: "a11" }), thread({ id: "x", parentThreadId: "other" }),
+  ];
+  assert.deepEqual(descendantsFrom(rows, "root")!.map((t) => t.id), ["a", "b", "a1", "a11"]);
+  assert.deepEqual(descendantsFrom(rows, "none"), []);
+  const full = Array.from({ length: THREAD_PAGE }, (_, i) => thread({ id: `t${i}` }));
+  assert.equal(descendantsFrom(full, "t0"), null);
+});
+
+test("machineNamesFrom: persistent machines from the row, null without the field", () => {
+  const hosts = [{ id: "h1", name: "Tru", type: "persistent" }, { id: "h2", name: "cloud", type: "ephemeral" }];
+  const names = machineNamesFrom([
+    thread({ id: "t1", environmentHostId: "h1" }), thread({ id: "t2", environmentHostId: "h2" }),
+    thread({ id: "t3", environmentHostId: null }),
+  ], hosts)!;
+  assert.deepEqual([...names], [["t1", "Tru"]]);
+  assert.equal(machineNamesFrom([thread({ id: "t1" })], hosts), null);
 });

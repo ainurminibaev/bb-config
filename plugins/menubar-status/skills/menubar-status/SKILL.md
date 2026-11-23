@@ -59,3 +59,10 @@ token-protected) only reads those files and queues requests; the app is
 LaunchAgent `dev.bb.status`. A reply that never shows up: check the plugin log
 (`bb plugin logs menubar-status`) and `errors.json`. Install or update the Mac
 side with `zsh install.sh` in `macos/` (needs `swiftc`).
+
+Load on the bb server (since 0.3.4): each poll makes one thread list; machine
+names come from the row's `environmentHostId` and subthreads from the same
+list; projects and machines are listed once a minute; a running thread's chat
+reads only events after the cached ones and is read in full again when the
+thread's `updatedAt` changes or every 5 minutes. A chat that looks stale for
+longer than that: `bb plugin reload menubar-status` drops the caches.

@@ -7,7 +7,10 @@
 // credentials on that machine, so they are instant.
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { buildFeed, chatFromEvents, describeActivity, oneLine, sameContent, statusFile, type Feed, type FeedThread } from "./feed.ts";
+import {
+  buildFeed, chatFromEvents, descendantsFrom, describeActivity, keepRecent, machineNamesFrom, oneLine, sameContent,
+  statusFile, type Feed, type FeedThread,
+} from "./feed.ts";
 
 const message = z.object({ role: z.enum(["user", "agent", "thread"]), text: z.string(), at: z.number() });
 // The same data the panel reads from files, for the CLI and diagnostics.
@@ -35,6 +38,11 @@ const HEARTBEAT_MS = 60_000;
 const POLL_MS = 20_000;
 const ACTIVE_POLL_MS = 4_000;
 const OUTBOX_MS = 1_500;
+/** Project names and machines change rarely: listed again this often, or when an unknown one appears. */
+const CATALOG_MS = 60_000;
+const CATALOG_RETRY_MS = 10_000;
+/** A thread's cached conversation is read again in full this often, or when the thread changes. */
+const CHAT_RELOAD_MS = 5 * 60_000;
 
 /**
  * As Thread Account Usage classifies them: a per-model limit (e.g. "Fable",
@@ -60,7 +68,14 @@ export default async function menubarStatus(bb: BbPluginApi) {
     (await bb.storage.kv.get<Record<string, string>>(SNIPPETS_KEY)) ?? {};
   let last: Feed | null = null;
   let lastWriteAt = 0;
-  let madeDirFor = "";
+  // Separate marks: one shared mark made every publish and chat sync redo all mkdirs.
+  let madeStatusDir = "";
+  let madeChatDirs = "";
+  type Host = { id: string; name: string; type?: string };
+  type Project = { id: string; name: string; kind?: string };
+  let catalog: { at: number; projects: Project[]; hosts: Host[]; projectIds: Set<string>; hostIds: Set<string> } | null = null;
+  // The latest feed inputs, so chat files reuse them instead of asking bb again.
+  let known: { threads: FeedThread[]; activities: Record<string, string> } | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running: Promise<void> | null = null;
   let again = false;
@@ -81,23 +96,43 @@ export default async function menubarStatus(bb: BbPluginApi) {
       return "";
     }
   }
+  async function catalogFor(threads: readonly FeedThread[]) {
+    const age = catalog ? Date.now() - catalog.at : Infinity;
+    const unknown = catalog !== null && threads.some((thread) =>
+      !catalog!.projectIds.has(thread.projectId) ||
+      (thread.environmentHostId ? !catalog!.hostIds.has(thread.environmentHostId) : false));
+    if (!catalog || age >= CATALOG_MS || (unknown && age >= CATALOG_RETRY_MS)) {
+      const [projects, hosts] = await Promise.all([
+        bb.sdk.projects.list({ includePersonal: true } as never) as unknown as Promise<Project[]>,
+        bb.sdk.hosts.list() as unknown as Promise<Host[]>,
+      ]);
+      catalog = {
+        at: Date.now(), projects, hosts,
+        projectIds: new Set(projects.map((project) => project.id)),
+        hostIds: new Set(hosts.map((host) => host.id)),
+      };
+    }
+    return catalog;
+  }
+
   async function compute(): Promise<Feed> {
     const { webUrl, maxItems } = await settings.get();
-    const [threads, projects, hosts] = await Promise.all([
-      listThreads({}),
-      bb.sdk.projects.list({ includePersonal: true } as never),
-      bb.sdk.hosts.list(),
-    ]);
-    const machineNames = new Map<string, string>();
-    await Promise.all(
-      hosts
-        .filter((host) => host.type === "persistent")
-        .map(async (host) => {
-          for (const thread of await listThreads({ hostId: host.id })) {
-            machineNames.set(thread.id, host.name);
-          }
-        }),
-    );
+    const threads = await listThreads({});
+    const { projects, hosts } = await catalogFor(threads);
+    let machineNames = machineNamesFrom(threads, hosts);
+    if (!machineNames) {
+      const names = new Map<string, string>();
+      await Promise.all(
+        hosts
+          .filter((host) => host.type === "persistent")
+          .map(async (host) => {
+            for (const thread of await listThreads({ hostId: host.id })) {
+              names.set(thread.id, host.name);
+            }
+          }),
+      );
+      machineNames = names;
+    }
     const activities: Record<string, string> = {};
     await Promise.all(
       threads
@@ -106,13 +141,14 @@ export default async function menubarStatus(bb: BbPluginApi) {
           activities[thread.id] = await activityOf(thread.id);
         }),
     );
+    known = { threads, activities };
     const alive = new Set(threads.map((thread) => thread.id));
     for (const id of Object.keys(snippets)) if (!alive.has(id)) delete snippets[id];
     const build = () =>
       buildFeed({
       threads,
       projectNames: new Map(
-        (projects as { id: string; name: string; kind?: string }[]).map((project) => [
+        projects.map((project) => [
           project.id,
           project.kind === "personal" ? "" : project.name,
         ]),
@@ -156,9 +192,9 @@ export default async function menubarStatus(bb: BbPluginApi) {
     const feed = await compute();
     if (sameContent(last, feed) && Date.now() - lastWriteAt < HEARTBEAT_MS) return;
     const dir = filePath.slice(0, filePath.lastIndexOf("/"));
-    if (madeDirFor !== `${hostId}:${dir}`) {
+    if (madeStatusDir !== `${hostId}:${dir}`) {
       await bb.sdk.files.mkdir({ hostId, path: dir, recursive: true });
-      madeDirFor = `${hostId}:${dir}`;
+      madeStatusDir = `${hostId}:${dir}`;
     }
     await bb.sdk.files.write({ hostId, path: filePath, content: `${JSON.stringify(feed)}\n` });
     last = feed;
@@ -176,13 +212,17 @@ export default async function menubarStatus(bb: BbPluginApi) {
    * - outbox/*.json: replies and "open in bb" requests from the panel.
    */
   const chatSignatures = new Map<string, string>();
+  // Conversation events per listed thread, oldest first: while an agent works
+  // only the new ones are read, not all pages again on every poll.
+  type ChatRow = { seq: number | string; type: string; createdAt: number; data: Record<string, unknown> };
+  const chatEvents = new Map<string, { rows: ChatRow[]; updatedAt: number; at: number }>();
   // Threads the panel currently shows: the only ones a panel request may reach.
   let panelThreads = new Set<string>();
   async function syncChats(feed: Feed, hostId: string, dir: string): Promise<void> {
-    if (madeDirFor !== `${hostId}:${dir}:chats`) {
+    if (madeChatDirs !== `${hostId}:${dir}`) {
       await bb.sdk.files.mkdir({ hostId, path: `${dir}/chats`, recursive: true });
       await bb.sdk.files.mkdir({ hostId, path: `${dir}/outbox`, recursive: true });
-      madeDirFor = `${hostId}:${dir}:chats`;
+      madeChatDirs = `${hostId}:${dir}`;
     }
     const listed = new Set(feed.items.map((item) => item.id));
     panelThreads = listed;
@@ -190,16 +230,18 @@ export default async function menubarStatus(bb: BbPluginApi) {
       const signature = `${item.updatedAt}|${item.state}|${item.activity}`;
       if (chatSignatures.get(item.id) === signature) return;
       try {
-        const chat = await chatOf(item.id);
+        const chat = await chatOf(item.id, known);
         await bb.sdk.files.write({ hostId, path: `${dir}/chats/${item.id}.json`, content: JSON.stringify(chat) });
         chatSignatures.set(item.id, signature);
       } catch (error) {
-        bb.log.warn(`chat ${item.id} not written: ${error instanceof Error ? error.message : String(error)}`);
+        madeChatDirs = ""; // the folder may have been removed on that machine: make it again next time
+        bb.log.warn(`chat ${item.id} not written:${error instanceof Error ? error.message : String(error)}`);
       }
     }));
     for (const id of [...chatSignatures.keys()]) {
       if (listed.has(id)) continue;
       chatSignatures.delete(id);
+      chatEvents.delete(id);
       void bb.sdk.files.remove({ hostId, path: `${dir}/chats/${id}.json` } as never).catch(() => {});
     }
   }
@@ -214,7 +256,7 @@ export default async function menubarStatus(bb: BbPluginApi) {
   let outboxBusy = false;
   async function processOutbox(): Promise<void> {
     const where = await target();
-    if (!where || outboxBusy || madeDirFor !== `${where.hostId}:${where.dir}:chats`) return;
+    if (!where || outboxBusy || madeChatDirs !== `${where.hostId}:${where.dir}`) return;
     outboxBusy = true;
     try {
       const listing = (await bb.sdk.files.list({ hostId: where.hostId, path: `${where.dir}/outbox`, limit: 50 })) as unknown as
@@ -336,6 +378,7 @@ export default async function menubarStatus(bb: BbPluginApi) {
         if (last && where) await syncChats(last, where.hostId, where.dir);
       })
       .catch((error) => {
+        madeStatusDir = "";
         // The machine may be asleep or offline: the next event or poll retries.
         bb.log.warn(`status file not written: ${error instanceof Error ? error.message : String(error)}`);
       })
@@ -378,8 +421,10 @@ export default async function menubarStatus(bb: BbPluginApi) {
   });
   settings.onChange(() => {
     last = null;
-    madeDirFor = "";
+    madeStatusDir = "";
+    madeChatDirs = "";
     chatSignatures.clear();
+    chatEvents.clear();
     schedule();
   });
 
@@ -408,43 +453,84 @@ export default async function menubarStatus(bb: BbPluginApi) {
     if (timer) clearTimeout(timer);
   });
 
-  async function chatOf(threadId: string) {
-      const thread = (await bb.sdk.threads.get({ threadId })) as unknown as FeedThread;
-      // Newest first, a page at a time (bb caps a page at 100), until enough
-      // conversation is collected; tool steps make up most events.
-      type Row = { seq: number | string; type: string; createdAt: number; data: Record<string, unknown> };
-      const events: Row[] = [];
-      let before: string | undefined;
-      for (let page = 0; page < 8; page += 1) {
-        const rows = (await bb.sdk.threads.events.list({
-          threadId, types: ["client/turn/requested", "item/completed"], order: "desc", limit: "100",
-          ...(before ? { beforeSeq: before } : {}),
-        })) as unknown as Row[];
-        events.push(...rows);
-        if (rows.length < 100 || chatFromEvents([...events].reverse()).length >= 30) break;
-        before = String(rows.at(-1)!.seq);
-      }
-      // Subagents count as the thread's own state, as in the list.
-      const subagents: FeedThread[] = [];
-      let level = [threadId];
-      for (let depth = 0; depth < 3 && level.length; depth += 1) {
-        const children = (await Promise.all(level.map((parentThreadId) => listThreads({ parentThreadId })))).flat();
-        subagents.push(...children);
-        level = children.map((child) => child.id);
+  const CHAT_TYPES = ["client/turn/requested", "item/completed"];
+  /** All conversation events needed for the panel, oldest first. */
+  async function loadChatEvents(threadId: string): Promise<ChatRow[]> {
+    // Newest first, a page at a time (bb caps a page at 100), until enough
+    // conversation is collected; tool steps make up most events.
+    const events: ChatRow[] = [];
+    let before: string | undefined;
+    for (let page = 0; page < 8; page += 1) {
+      const rows = (await bb.sdk.threads.events.list({
+        threadId, types: CHAT_TYPES, order: "desc", limit: "100",
+        ...(before ? { beforeSeq: before } : {}),
+      } as never)) as unknown as ChatRow[];
+      events.push(...rows);
+      if (rows.length < 100 || chatFromEvents([...events].reverse()).length >= 30) break;
+      before = String(rows.at(-1)!.seq);
+    }
+    return events.reverse();
+  }
+  /** Only the events after the cached ones; null if more than a few pages came in. */
+  async function newChatEvents(threadId: string, rows: readonly ChatRow[]): Promise<ChatRow[] | null> {
+    const fresh: ChatRow[] = [];
+    let after = rows.length ? String(rows.at(-1)!.seq) : "0";
+    for (let page = 0; page < 8; page += 1) {
+      const next = (await bb.sdk.threads.events.list({
+        threadId, types: CHAT_TYPES, order: "asc", afterSeq: after, limit: "100",
+      } as never)) as unknown as ChatRow[];
+      fresh.push(...next);
+      if (next.length < 100) return fresh;
+      after = String(next.at(-1)!.seq);
+    }
+    return null;
+  }
+  async function chatRows(thread: FeedThread): Promise<ChatRow[]> {
+    const cached = chatEvents.get(thread.id);
+    let rows: ChatRow[] | null = null;
+    if (cached && cached.updatedAt === thread.updatedAt && Date.now() - cached.at < CHAT_RELOAD_MS) {
+      const fresh = await newChatEvents(thread.id, cached.rows);
+      if (fresh) rows = keepRecent([...cached.rows, ...fresh]);
+    }
+    if (!rows) {
+      rows = keepRecent(await loadChatEvents(thread.id));
+      chatEvents.set(thread.id, { rows, updatedAt: thread.updatedAt, at: Date.now() });
+    } else {
+      chatEvents.set(thread.id, { rows, updatedAt: thread.updatedAt, at: cached!.at });
+    }
+    return rows;
+  }
+
+  async function chatOf(threadId: string, feed?: typeof known) {
+      const thread = feed?.threads.find((row) => row.id === threadId) ??
+        (await bb.sdk.threads.get({ threadId })) as unknown as FeedThread;
+      // Cached only for the threads the panel lists (a CLI/RPC call reads afresh).
+      const events = feed ? await chatRows(thread) : await loadChatEvents(threadId);
+      // Subagents count as the thread's own state, as in the list. From the
+      // feed's own thread list when it is complete, else asked level by level.
+      let subagents = feed ? descendantsFrom(feed.threads, threadId) : null;
+      if (!subagents) {
+        subagents = [];
+        let level = [threadId];
+        for (let depth = 0; depth < 3 && level.length; depth += 1) {
+          const children = (await Promise.all(level.map((parentThreadId) => listThreads({ parentThreadId })))).flat();
+          subagents.push(...children);
+          level = children.map((child) => child.id);
+        }
       }
       const waiting = thread.hasPendingInteraction ? thread : subagents.find((child) => child.hasPendingInteraction);
       const working = thread.status === "active" ? null : subagents.find((child) => child.status === "active");
       const status = thread.status === "active" || working ? "active" : thread.status;
       const activity = thread.status === "active"
-        ? await activityOf(threadId)
-        : working ? `Субагент: ${await activityOf(working.id)}` : "";
+        ? (feed && threadId in feed.activities ? feed.activities[threadId]! : await activityOf(threadId))
+        : working ? `Субагент: ${feed && working.id in feed.activities ? feed.activities[working.id] : await activityOf(working.id)}` : "";
       return {
         title: oneLine(thread.title, 80) || oneLine(thread.titleFallback, 80) || "Без названия",
         status,
         activity,
         pending: Boolean(waiting),
         pendingThreadId: waiting?.id ?? null,
-        messages: chatFromEvents([...events].reverse()),
+        messages: chatFromEvents(events),
       };
     }
   async function sendTo(threadId: string, text: string) {

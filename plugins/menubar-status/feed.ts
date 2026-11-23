@@ -15,6 +15,8 @@ export interface FeedThread {
   lastReadAt?: number | null;
   latestAttentionAt?: number;
   updatedAt: number;
+  /** The machine of the thread's environment, as bb reports it on the row. */
+  environmentHostId?: string | null;
 }
 
 export interface FeedItem {
@@ -211,6 +213,66 @@ export function chatFromEvents(events: readonly RawEvent[], limit = 40): ChatMes
     }
   }
   return out.slice(-limit);
+}
+
+/**
+ * The newest events that still hold the last `limit` conversation messages
+ * (oldest first in and out). Keeps the per-thread event cache small without
+ * changing what chatFromEvents shows.
+ */
+export function keepRecent<T extends RawEvent>(events: readonly T[], limit = 40): T[] {
+  let messages = 0;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (chatFromEvents([events[index]!]).length > 0) messages += 1;
+    if (messages >= limit) return events.slice(index);
+  }
+  return [...events];
+}
+
+/** bb's page limit for the thread list: a full page may be cut short. */
+export const THREAD_PAGE = 200;
+
+/**
+ * Subthreads of `rootId` down to `depth` levels, level by level, taken from
+ * one complete thread list instead of one list call per parent. Null when the
+ * list may be incomplete (a full page): the caller asks bb per parent then.
+ */
+export function descendantsFrom(threads: readonly FeedThread[], rootId: string, depth = 3): FeedThread[] | null {
+  if (threads.length >= THREAD_PAGE) return null;
+  const byParent = new Map<string, FeedThread[]>();
+  for (const thread of threads) {
+    if (!thread.parentThreadId) continue;
+    const siblings = byParent.get(thread.parentThreadId) ?? [];
+    siblings.push(thread);
+    byParent.set(thread.parentThreadId, siblings);
+  }
+  const out: FeedThread[] = [];
+  let level = [rootId];
+  for (let step = 0; step < depth && level.length; step += 1) {
+    const children = level.flatMap((id) => byParent.get(id) ?? []);
+    out.push(...children);
+    level = children.map((child) => child.id);
+  }
+  return out;
+}
+
+/**
+ * Machine name of each thread from the host bb already reports on the thread
+ * row, so the machines need not be listed one by one. Null when a row has no
+ * such field (an older bb): the caller lists threads per machine then.
+ */
+export function machineNamesFrom(
+  threads: readonly FeedThread[],
+  hosts: readonly { id: string; name: string; type?: string }[],
+): Map<string, string> | null {
+  if (threads.some((thread) => thread.environmentHostId === undefined)) return null;
+  const persistent = new Map(hosts.filter((host) => host.type === "persistent").map((host) => [host.id, host.name]));
+  const names = new Map<string, string>();
+  for (const thread of threads) {
+    const name = thread.environmentHostId ? persistent.get(thread.environmentHostId) : undefined;
+    if (name !== undefined) names.set(thread.id, name);
+  }
+  return names;
 }
 
 /**
