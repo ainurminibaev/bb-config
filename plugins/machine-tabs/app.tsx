@@ -324,7 +324,7 @@ function useThreadMarks(threadId: string): readonly VisibleMark[] | undefined {
  */
 function ThreadIconMark({ mark }: { mark: ThreadMark }) {
   const filled = FILLED_GLYPHS.has(mark.glyph);
-  const px = mark.place === "top" ? (mark.size === "large" ? 14 : 12) : (mark.size === "large" ? 11 : 9);
+  const px = mark.place === "top" ? (mark.size === "large" ? 19 : 16) : (mark.size === "large" ? 10 : 8);
   return (
     <span data-machine-tabs-thread-mark={mark.tone} data-place={mark.place} data-size={mark.size} role="img"
       aria-label={mark.label || undefined} title={mark.label || undefined}
@@ -1283,33 +1283,36 @@ span:has(> .bb-thread-title > [data-machine-tabs-row-meta]:not(:empty)),
   line-height: 0;
 }
 [data-machine-tabs-list] [data-machine-tabs-thread-mark][data-place="corner"] {
-  left: 9px;
-  top: calc(50% + 0px);
-  width: 12px;
-  height: 12px;
+  left: 5px;
+  top: calc(50% + 3px);
+  width: 10px;
+  height: 10px;
   border-radius: 9999px;
   background: var(--sidebar, var(--background));
+  z-index: 32;
 }
+/* "top": the project mark (13px, at the bottom of the row) wears the mark like a
+   crown, overlapping it by 1px; the pair sits a little left so the provider glyph
+   (top right, above) only covers the crown's edge. The row keeps its height. */
 [data-machine-tabs-list] [data-machine-tabs-thread-mark][data-place="top"] {
-  left: -2px;
-  width: 14px;
-  top: calc(50% - 13px);
-  height: 9px;
+  left: -5px;
+  top: calc(50% - 11.7px);
+  color: var(--sidebar-foreground, var(--foreground));
+  opacity: .8;
 }
 [data-machine-tabs-list] [data-machine-tabs-thread-mark][data-place="top"][data-size="large"] {
-  width: 15px;
-  top: calc(50% - 15px);
-  height: 11px;
+  left: -6.5px;
+  top: calc(50% - 14px);
 }
-/* The crown keeps left of the provider glyph (top right), so both stay readable. */
+[data-machine-tabs-list] [data-machine-tabs-thread-mark][data-place="top"][data-machine-tabs-thread-mark="accent"] { opacity: 1; }
 [data-machine-tabs-list] .bb-thread-title:has(> [data-machine-tabs-thread-mark][data-place="top"]) > [data-machine-tabs-badge] {
-  width: 12px;
-  height: 12px;
-  margin-top: 7px;
-  margin-left: -1px;
-  margin-right: calc(0.5rem + 5px);
+  width: 13px;
+  height: 13px;
+  margin-top: 13px;
+  margin-left: -3.5px;
+  margin-right: 14.5px;
 }
-[data-machine-tabs-list] [data-machine-tabs-thread-mark="muted"] { opacity: .45; }`;
+[data-machine-tabs-list] [data-machine-tabs-thread-mark][data-machine-tabs-thread-mark="muted"] { opacity: .45; }`;
 
 function MachineThreadList(props: PluginThreadListProps) {
   useThreadMarksLoader();
