@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Observe BB queues across projects; alert only, never send/retry/stop turns."""
+"""Observe BB queues across projects; alert only, never send/retry/stop turns.
+
+One `bb thread queue list` per run; schedule it every 5 minutes, not every minute.
+"""
 import json
 import os
 from pathlib import Path
@@ -43,28 +46,33 @@ def main():
         grouped.setdefault(row['threadId'], []).append(row)
     records = []
     for thread_id, queue in grouped.items():
-        thread = bb('thread', 'show', thread_id)['thread']
-        if thread.get('archivedAt') or thread.get('deletedAt'):
-            continue
+        # Queue rows alone decide whether anything looks stuck. `bb thread show`
+        # starts a whole CLI process, so it runs only for a thread that is about
+        # to be reported, never for every thread on every run.
         # Drop message text, attachment paths, titles and failure text entirely.
         metadata = [{'id': q['id'], 'createdAt': q['createdAt'], 'state': q.get('state'),
                      'waitingOn': (q.get('waitingOn') or {}).get('kind'),
                      'scheduled': bool(q.get('sendAt'))} for q in queue]
         previous = state.get(thread_id, {})
-        snapshot = {'status': thread['status'], 'queue': metadata}
+        snapshot = {'queue': metadata}
         if snapshot != previous.get('snapshot') or now - previous.get('recordedAt', 0) >= 900000:
             records.append({'at': now, 'thread': thread_id, **snapshot})
             previous.update(snapshot=snapshot, recordedAt=now)
         suspects = [(q, suspicion(q, now)) for q in queue]
         suspects = [(q, why) for q, why in suspects if why]
         if suspects and now - previous.get('notifiedAt', 0) >= 1800000:
+            thread = bb('thread', 'show', thread_id)['thread']
+            if thread.get('archivedAt') or thread.get('deletedAt'):
+                state[thread_id] = previous
+                continue
+            status = thread['status']
             row, why = min(suspects, key=lambda pair: pair[0]['createdAt'])
             minutes = (now - row['createdAt']) // 60000
-            body = f'Сообщение ждёт {minutes} мин; причина: {why}, статус: {thread["status"]}. Проверка без перезапуска.'
+            body = f'Сообщение ждёт {minutes} мин; причина: {why}, статус: {status}. Проверка без перезапуска.'
             result = bb('push-notifications', 'send', '--title', 'BB: проверь очередь треда',
                         '--body', body, '--thread', thread_id)
             previous['notifiedAt'] = now
-            records.append({'at': now, 'thread': thread_id, 'alert': why,
+            records.append({'at': now, 'thread': thread_id, 'alert': why, 'status': status,
                             'ageMinutes': minutes, 'channels': result.get('channels', [])})
             print(json.dumps({'thread': thread_id, 'alert': why, 'ageMinutes': minutes}))
         state[thread_id] = previous
