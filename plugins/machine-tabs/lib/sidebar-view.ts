@@ -75,10 +75,48 @@ export function installSidebarView(signal: AbortSignal) {
     } catch { /* A later refresh retries; never create an unhandled rejection. */ }
   }
   paint();
-  const observer = new MutationObserver(attach);
+  // Look for the header again only when a change can move it; chat output and
+  // other page updates elsewhere leave it alone (see mayMoveControl).
+  const observer = new MutationObserver((records) => {
+    if (mayMoveControl(records, control)) attach();
+  });
   observer.observe(document.body, { childList: true, subtree: true });
   attach();
   void refresh();
-  const timer = window.setInterval(() => void refresh(), 5000);
-  return () => { observer.disconnect(); window.clearInterval(timer); control.remove(); };
+  // A hidden browser tab does not ask; it asks at once when it is shown again.
+  const timer = window.setInterval(() => { if (document.visibilityState !== "hidden") void refresh(); }, 5000);
+  const onVisible = () => { if (document.visibilityState !== "hidden") void refresh(); };
+  document.addEventListener("visibilitychange", onVisible);
+  return () => {
+    observer.disconnect();
+    window.clearInterval(timer);
+    document.removeEventListener("visibilitychange", onVisible);
+    control.remove();
+  };
+}
+
+const NAVIGATION = '[data-bb-plugin="navigation"]';
+
+function touchesNavigation(node: Node): boolean {
+  if (node.nodeType !== 1) return false;
+  const element = node as Element;
+  return element.closest(NAVIGATION) !== null || element.querySelector(NAVIGATION) !== null;
+}
+
+/**
+ * Whether these changes can make attach() choose another place: the control
+ * left the page or its header changed, or a navigation header (or something
+ * inside one) was added or removed. Everything else leaves the first matching
+ * header where it was.
+ */
+export function mayMoveControl(records: readonly MutationRecord[], control: Element): boolean {
+  if (!control.isConnected) return true;
+  const header = control.previousSibling;
+  if (!header || header.nodeType !== 1 || !(header as Element).matches(NAVIGATION)) return true;
+  for (const record of records) {
+    if (touchesNavigation(record.target)) return true;
+    for (const node of record.addedNodes) if (touchesNavigation(node)) return true;
+    for (const node of record.removedNodes) if (touchesNavigation(node)) return true;
+  }
+  return false;
 }

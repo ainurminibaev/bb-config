@@ -9,6 +9,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -40,6 +41,7 @@ import { FILTER_PICKER_CSS, FilterPicker, type FilterOption } from "./lib/filter
 import { textMatches } from "./lib/text-match";
 import { installSidebarView } from "./lib/sidebar-view";
 import { waitForThreadListBundle } from "./lib/thread-list-bundle";
+import { loadToken } from "./lib/load-token";
 import { SearchExtras, SearchSettings, type SearchOptions } from "./lib/thread-search";
 import { PROJECT_QUICK_CSS, ProjectQuickMenu, StateMark } from "./lib/project-quick";
 import { REVEAL_CSS, revealProject, revealThread } from "./lib/sidebar-reveal";
@@ -157,6 +159,19 @@ function dayLabel(bucket: number, todayStart: number): string {
     day: "numeric",
     month: "short",
   });
+}
+
+/** dayLabel for one day's buckets, each formatted once: a search reads it for every thread. */
+function dayLabels(todayStart: number): (bucket: number) => string {
+  const labels = new Map<number, string>();
+  return (bucket) => {
+    let label = labels.get(bucket);
+    if (label === undefined) {
+      label = dayLabel(bucket, todayStart);
+      labels.set(bucket, label);
+    }
+    return label;
+  };
 }
 
 /** The threads a view shows, and only the projects that have some of them. */
@@ -466,6 +481,16 @@ const RECENT_PREFERENCES: AnyRecord = {
 };
 
 const nativeListPromises = new Map<ListKind, Promise<ThreadListComponent>>();
+/** Names this evaluation of the plugin in the native list's URL (see loadToken). */
+const LOAD_TOKEN = loadToken(readModuleUrl());
+
+function readModuleUrl(): unknown {
+  try {
+    return import.meta.url;
+  } catch {
+    return undefined;
+  }
+}
 /** Loads run one at a time: each swaps the shared SDK while its bundle evaluates. */
 let loadQueue: Promise<unknown> = Promise.resolve();
 
@@ -522,8 +547,10 @@ async function loadNativeList(
   };
 
   const separator = bundle.jsUrl.includes("?") ? "&" : "?";
-  // A fresh URL every time: after a hot reload of this plugin the browser
-  // would otherwise return the instance bound to the previous load.
+  // A URL of its own for every evaluation of this plugin (see LOAD_TOKEN):
+  // after a hot reload the browser would otherwise return the instance bound
+  // to the previous load. Within one build it stays the same, so the browser
+  // reuses its cached copy instead of downloading the list on every page load.
   const RealTitle = base.ThreadTitle as ComponentType<{ threadId: string }>;
   wrapped.ThreadTitle = function TitleWithProjectBadge(props: {
     threadId: string;
@@ -623,7 +650,7 @@ async function loadNativeList(
     });
   }
 
-  const url = `${bundle.jsUrl}${separator}machine_tabs=${kind}-${Date.now().toString(36)}`;
+  const url = `${bundle.jsUrl}${separator}machine_tabs=${kind}-${LOAD_TOKEN}`;
   let module: { default?: unknown };
   // The bundle reads the SDK from the shared runtime once, while it
   // evaluates. Swap the SDK in for that moment; if the runtime object is
@@ -1389,6 +1416,19 @@ function MachineThreadList(props: PluginThreadListProps) {
   const byDay = state?.byDay ?? false;
   const outer: Grouping = state?.outer ?? "none";
   const dayField: DayField = sort === "created" ? "createdAt" : "updatedAt";
+  // The field, the tabs and the filter buttons answer at once; the lists, which
+  // bb redraws in full for every change, follow a moment later and give way to
+  // the next key press. Everything that shapes the lists reads these values.
+  const listInput = useMemo(
+    () => ({ query, topicFilter, projectFilter, selectedId }),
+    [query, topicFilter, projectFilter, selectedId],
+  );
+  const listState = useDeferredValue(listInput);
+  const listQuery = listState.query;
+  const listTopic = listState.topicFilter;
+  const listProject = listState.projectFilter;
+  const listMachineId = listState.selectedId;
+  const listFiltering = listTopic !== "all" || listProject !== "all";
 
   const live = useMemo(
     () => threads.filter((thread) => !thread.isArchived && !thread.isHidden),
@@ -1410,37 +1450,38 @@ function MachineThreadList(props: PluginThreadListProps) {
     [projects],
   );
   const needles = useMemo(() => {
-    const typed = query.trim().toLowerCase();
+    const typed = listQuery.trim().toLowerCase();
     return [...new Set([typed, swapLayout(typed, EN_TO_RU), swapLayout(typed, RU_TO_EN)])];
-  }, [query]);
+  }, [listQuery]);
 
   // The search filter: thread ids whose title matches, or whose group header
   // would: project, machine, or day ("today", "yesterday", "12 nov").
   const matchIds = useMemo(() => {
-    const typed = query.trim().toLowerCase();
-    if (typed === "" && !filtering) return null;
+    const typed = listQuery.trim().toLowerCase();
+    if (typed === "" && !listFiltering) return null;
     // Also what the same keys spell in the other keyboard layout.
     const todayStart = startOfToday();
+    const labelOf = dayLabels(todayStart);
     // A matching child keeps its parents, so bb can still draw the path to it.
     return withAncestors(threads, new Set(
       threads
         .filter((thread) =>
-          matchesFilters(thread.displayTitle, thread.projectId, topicFilter, projectFilter) &&
+          matchesFilters(thread.displayTitle, thread.projectId, listTopic, listProject) &&
           [
             thread.displayTitle,
             projectNames.get(thread.projectId)?.name ?? "",
             thread.host?.name ?? "",
-            dayLabel(dayBucket(thread, dayField, todayStart), todayStart),
+            labelOf(dayBucket(thread, dayField, todayStart)),
           ].some((text) => textMatches(text, needles)),
         )
         .map((thread) => thread.id),
     ));
-  }, [threads, projectNames, query, dayField, needles, filtering, topicFilter, projectFilter]);
+  }, [threads, projectNames, listQuery, dayField, needles, listFiltering, listTopic, listProject]);
 
   /** Live threads of the selected tab before search and filters: the "of N" in the counter. */
   const tabTotal = useMemo(
-    () => live.filter((thread) => selectedId === null || thread.host?.id === selectedId).length,
-    [live, selectedId],
+    () => live.filter((thread) => listMachineId === null || thread.host?.id === listMachineId).length,
+    [live, listMachineId],
   );
 
   /** Live threads of the selected tab that pass the search filter. */
@@ -1448,21 +1489,22 @@ function MachineThreadList(props: PluginThreadListProps) {
     () =>
       live.filter(
         (thread) =>
-          (selectedId === null || thread.host?.id === selectedId) &&
+          (listMachineId === null || thread.host?.id === listMachineId) &&
           (matchIds === null || matchIds.has(thread.id)),
       ),
-    [live, selectedId, matchIds],
+    [live, listMachineId, matchIds],
   );
+  const shownIds = useMemo(() => new Set(shown.map((thread) => thread.id)), [shown]);
 
   const baseView = useMemo<ListView>(
     () => ({
       ...DEFAULT_VIEW,
-      machineId: selectedId,
+      machineId: listMachineId,
       byDay,
       dayField,
       ids: matchIds,
     }),
-    [selectedId, byDay, dayField, matchIds],
+    [listMachineId, byDay, dayField, matchIds],
   );
 
   // Include descendants: BB owns the hierarchy, expander and child activity.
@@ -1516,22 +1558,22 @@ function MachineThreadList(props: PluginThreadListProps) {
 
   // Each filter's list counts what it would leave with the other filter as it is now.
   const facets = useMemo(() => {
-    const onTab = live.filter((thread) => selectedId === null || thread.host?.id === selectedId);
+    const onTab = live.filter((thread) => listMachineId === null || thread.host?.id === listMachineId);
     const topics = new Map<string, number>(), perProject = new Map<string, number>();
     let forTopics = 0, forProjects = 0;
     for (const thread of onTab) {
       const topic = topicForTitle(thread.displayTitle).id;
-      if (projectFilter === "all" || projectFilter === thread.projectId) {
+      if (listProject === "all" || listProject === thread.projectId) {
         forTopics += 1;
         topics.set(topic, (topics.get(topic) ?? 0) + 1);
       }
-      if (topicFilter === "all" || topicFilter === topic) {
+      if (listTopic === "all" || listTopic === topic) {
         forProjects += 1;
         perProject.set(thread.projectId, (perProject.get(thread.projectId) ?? 0) + 1);
       }
     }
     return { topics, perProject, forTopics, forProjects };
-  }, [live, selectedId, topicFilter, projectFilter]);
+  }, [live, listMachineId, listTopic, listProject]);
   const topicOptions = useMemo<FilterOption[]>(() => TOPICS.map((topic) => ({
     value: topic.id, label: topic.label, count: facets.topics.get(topic.id) ?? 0,
     mark: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8"
@@ -1562,7 +1604,7 @@ function MachineThreadList(props: PluginThreadListProps) {
     if (outer === "none") return [];
     const count = new Map<string, number>();
     const bump = (key: string) => count.set(key, (count.get(key) ?? 0) + 1);
-    const none = { machineId: selectedId, projectId: null, day: null };
+    const none = { machineId: listMachineId, projectId: null, day: null };
     if (outer === "project") {
       for (const thread of shown) bump(thread.projectId);
       return projectsByLatestThread(projects, shown)
@@ -1598,7 +1640,7 @@ function MachineThreadList(props: PluginThreadListProps) {
         count: count.get(String(bucket)) ?? 0,
         filter: { ...none, day: bucket },
       }));
-  }, [outer, shown, selectedId, projects, machines, dayField]);
+  }, [outer, shown, listMachineId, projects, machines, dayField]);
 
   const navigate = useBbNavigate();
   /**
@@ -1634,7 +1676,7 @@ function MachineThreadList(props: PluginThreadListProps) {
   }, [navigate, selectedId, select, matchIds]);
 
   const hideEmpty =
-    selectedId !== null || byDay || outer !== "none" || matchIds !== null;
+    listMachineId !== null || byDay || outer !== "none" || matchIds !== null;
 
   const emptyCss = useMemo(() => {
     if (hideEmpty) return "";
@@ -1646,6 +1688,107 @@ function MachineThreadList(props: PluginThreadListProps) {
         .map((project) => project.id),
     );
   }, [hideEmpty, shown, projects]);
+
+  const ready = state !== null;
+  const changeList = useCallback(() => setListKey((key) => key + 1), []);
+  const projectMark = useCallback((projectId: string) => {
+    const badge = projectBadges.get(projectId);
+    return badge ? <ProjectBadgeMark badge={badge} header /> : null;
+  }, [projectBadges]);
+
+  // bb's lists are kept as elements that change only with what they show, so a
+  // key press in the field or a click on a tab does not redraw them right away.
+  const recentBlock = useMemo(() => (
+    <RowThreads.Provider value={threadsById}><RowInside.Provider value={insideById}><ProjectBadges.Provider value={badges}>
+      {RecentList && recentView && ready ? (
+        <>
+          <div
+            data-machine-tabs-list=""
+            data-machine-tabs-hide-empty=""
+            data-machine-tabs-recent=""
+          >
+            <MachineFilter.Provider value={recentView}>
+              <RecentList {...props} />
+            </MachineFilter.Provider>
+          </div>
+          <div className="mx-3 mb-1.5 mt-1 border-b border-border" />
+        </>
+      ) : null}
+    </ProjectBadges.Provider></RowInside.Provider></RowThreads.Provider>
+  ), [threadsById, insideById, badges, RecentList, recentView, ready, props]);
+
+  const mainBlock = useMemo(() => (
+    NativeList && ready ? (
+      <RowThreads.Provider value={threadsById}><RowInside.Provider value={insideById}><ProjectBadges.Provider value={badges}>
+      <div data-machine-tabs-list="" data-machine-tabs-host-id={baseView.machineId ?? undefined} data-machine-tabs-hide-empty={hideEmpty ? "" : undefined}>
+        {outer === "none" ? (
+          <MachineFilter.Provider value={baseView}>
+            <NativeList key={listKey} {...props} />
+          </MachineFilter.Provider>
+        ) : groups.length === 0 ? (
+          <p className="px-4 py-2 text-xs text-muted-foreground">
+            No threads
+          </p>
+        ) : (
+          groups.map((group) => {
+            const isCollapsed = collapsed.has(group.id);
+            return (
+              <section
+                key={group.id}
+                data-machine-tabs-host-id={group.filter.machineId ?? undefined}
+                className="mt-1 border-t border-border pb-1 pt-1 first:mt-0 first:border-t-0 first:pt-0"
+              >
+                <button
+                  type="button"
+                  aria-expanded={!isCollapsed}
+                  onClick={() => toggle(group.id)}
+                  className="group/outer mx-2 flex h-7 w-[calc(100%-1rem)] items-center gap-1.5 rounded-md px-2 text-left text-[13px] font-semibold text-sidebar-foreground outline-none hover:bg-state-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                >
+                  <BbIcon
+                    name={isCollapsed ? "ChevronRight" : "ChevronDown"}
+                    className="size-3.5 shrink-0 text-muted-foreground"
+                  />
+                  {outer === "project" &&
+                  group.filter.projectId !== null &&
+                  projectBadges.has(group.filter.projectId) ? (
+                    <ProjectBadgeMark
+                      badge={projectBadges.get(group.filter.projectId)!}
+                      header
+                    />
+                  ) : null}
+                  <span className="min-w-0 truncate">{group.label}</span>
+                  <span className="shrink-0 font-normal tabular-nums text-muted-foreground">
+                    {group.count}
+                  </span>
+                </button>
+                {isCollapsed ? null : (
+                  <div className="ml-3 border-l border-border-hairline">
+                    <FilteredList
+                      key={listKey}
+                      List={NativeList}
+                      base={baseView}
+                      group={group}
+                      listProps={props}
+                    />
+                  </div>
+                )}
+              </section>
+            );
+          })
+        )}
+      </div>
+      </ProjectBadges.Provider></RowInside.Provider></RowThreads.Provider>
+    ) : error ? (
+      <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
+        Machine Tabs could not load bb’s thread list. {error}
+      </p>
+    ) : (
+      <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
+        Waiting for bb’s thread list…
+      </p>
+    )
+  ), [NativeList, ready, threadsById, insideById, badges, baseView, hideEmpty, outer, groups,
+    collapsed, toggle, listKey, props, projectBadges, error]);
 
   return (
     <>
@@ -1680,7 +1823,7 @@ function MachineThreadList(props: PluginThreadListProps) {
             onView={setView}
             onSort={setSort}
             onMode={setInnerMode}
-            onChanged={() => setListKey((key) => key + 1)}
+            onChanged={changeList}
           />
         </div>
       )}
@@ -1734,14 +1877,11 @@ function MachineThreadList(props: PluginThreadListProps) {
         <ProjectQuickMenu
           projects={projects}
           threads={threads as readonly QuickThread[]}
-          mark={(projectId) => {
-            const badge = projectBadges.get(projectId);
-            return badge ? <ProjectBadgeMark badge={badge} header /> : null;
-          }}
+          mark={projectMark}
           onProject={showProject}
           onThread={openThread}
           field={searchRow}
-          searchQuery={query}
+          searchQuery={listQuery}
           turnStarts={turnStarts}
         />
         <SearchSettings options={searchOptions} onChange={setSearchOptions} />
@@ -1807,100 +1947,17 @@ function MachineThreadList(props: PluginThreadListProps) {
       `}</style>
       <style>{headerCss}</style>
       <style>{emptyCss}</style>
-      {query.trim() !== "" ? <SearchExtras query={query} needles={needles}
-        options={searchOptions} machineId={selectedId} topicFilter={topicFilter} projectFilter={projectFilter} localIds={new Set(shown.map((thread) => thread.id))} /> : null}
-      <RowThreads.Provider value={threadsById}><RowInside.Provider value={insideById}><ProjectBadges.Provider value={badges}>
-        {RecentList && recentView && state !== null ? (
-          <>
-            <div
-              data-machine-tabs-list=""
-              data-machine-tabs-hide-empty=""
-              data-machine-tabs-recent=""
-            >
-              <MachineFilter.Provider value={recentView}>
-                <RecentList {...props} />
-              </MachineFilter.Provider>
-            </div>
-            <div className="mx-3 mb-1.5 mt-1 border-b border-border" />
-          </>
-        ) : null}
-      </ProjectBadges.Provider></RowInside.Provider></RowThreads.Provider>
+      {listQuery.trim() !== "" ? <SearchExtras query={listQuery} needles={needles}
+        options={searchOptions} machineId={listMachineId} topicFilter={listTopic} projectFilter={listProject} localIds={shownIds} /> : null}
+      {recentBlock}
       {matchIds !== null && shown.length === 0 ? (
         <p className="px-4 py-2 text-xs text-muted-foreground">
-          {!query.trim() ? "По выбранным фильтрам тредов нет." : searchOptions.archive || searchOptions.messages
+          {!listQuery.trim() ? "По выбранным фильтрам тредов нет." : searchOptions.archive || searchOptions.messages
             ? "В названиях активных тредов совпадений нет."
-            : `Ничего не найдено по запросу «${query.trim()}».`}
+            : `Ничего не найдено по запросу «${listQuery.trim()}».`}
         </p>
       ) : null}
-      {NativeList && state !== null ? (
-        <RowThreads.Provider value={threadsById}><RowInside.Provider value={insideById}><ProjectBadges.Provider value={badges}>
-        <div data-machine-tabs-list="" data-machine-tabs-host-id={baseView.machineId ?? undefined} data-machine-tabs-hide-empty={hideEmpty ? "" : undefined}>
-          {outer === "none" ? (
-            <MachineFilter.Provider value={baseView}>
-              <NativeList key={listKey} {...props} />
-            </MachineFilter.Provider>
-          ) : groups.length === 0 ? (
-            <p className="px-4 py-2 text-xs text-muted-foreground">
-              No threads
-            </p>
-          ) : (
-            groups.map((group) => {
-              const isCollapsed = collapsed.has(group.id);
-              return (
-                <section
-                  key={group.id}
-                  data-machine-tabs-host-id={group.filter.machineId ?? undefined}
-                  className="mt-1 border-t border-border pb-1 pt-1 first:mt-0 first:border-t-0 first:pt-0"
-                >
-                  <button
-                    type="button"
-                    aria-expanded={!isCollapsed}
-                    onClick={() => toggle(group.id)}
-                    className="group/outer mx-2 flex h-7 w-[calc(100%-1rem)] items-center gap-1.5 rounded-md px-2 text-left text-[13px] font-semibold text-sidebar-foreground outline-none hover:bg-state-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring"
-                  >
-                    <BbIcon
-                      name={isCollapsed ? "ChevronRight" : "ChevronDown"}
-                      className="size-3.5 shrink-0 text-muted-foreground"
-                    />
-                    {outer === "project" &&
-                    group.filter.projectId !== null &&
-                    projectBadges.has(group.filter.projectId) ? (
-                      <ProjectBadgeMark
-                        badge={projectBadges.get(group.filter.projectId)!}
-                        header
-                      />
-                    ) : null}
-                    <span className="min-w-0 truncate">{group.label}</span>
-                    <span className="shrink-0 font-normal tabular-nums text-muted-foreground">
-                      {group.count}
-                    </span>
-                  </button>
-                  {isCollapsed ? null : (
-                    <div className="ml-3 border-l border-border-hairline">
-                      <FilteredList
-                        key={listKey}
-                        List={NativeList}
-                        base={baseView}
-                        group={group}
-                        listProps={props}
-                      />
-                    </div>
-                  )}
-                </section>
-              );
-            })
-          )}
-        </div>
-        </ProjectBadges.Provider></RowInside.Provider></RowThreads.Provider>
-      ) : error ? (
-        <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
-          Machine Tabs could not load bb’s thread list. {error}
-        </p>
-      ) : (
-        <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
-          Waiting for bb’s thread list…
-        </p>
-      )}
+      {mainBlock}
     </>
   );
 }
