@@ -51,28 +51,29 @@ if (new URLSearchParams(location.search).get("ui") === "windows") { document.doc
   .live i { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
   .live.off i { background: var(--orange); }
 
-  /* Accounts as an even table under the title: one line per account, limits in
-     aligned columns, two or more accounts per row as the width allows. */
-  .usage { flex: 1 1 100%; display: grid; grid-template-columns: repeat(auto-fill, minmax(390px, 1fr)); gap: 4px 6px; min-width: 0; }
+  /* Accounts as equal cards under the title: a name line, then one line per limit
+     (5-hour, week) with a small horizontal battery; as many cards per row as fit. */
+  .usage { flex: 1 1 100%; display: grid; grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); gap: 5px; min-width: 0; }
   .usage[hidden] { display: none; }
-  .acct {
-    display: grid; grid-template-columns: 15px minmax(0, 1fr) auto 108px 108px; align-items: center; column-gap: 7px; row-gap: 2px;
-    padding: 4px 8px; border-radius: 9px; background: var(--card); border: 1px solid var(--line); min-width: 0;
-  }
-  .acct .g { position: relative; line-height: 0; }
-  .acct .g svg { width: 13px; height: 13px; }
-  .acct sup { position: absolute; left: 10px; top: -5px; font-size: 8.5px; font-weight: 800; color: var(--green); line-height: 1; }
-  .acct .where { font-size: 11px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .acct .plan { font-size: 9px; font-weight: 700; padding: 0 5px; border-radius: 5px; background: var(--card-2); color: var(--muted); line-height: 14px; white-space: nowrap; }
-  .acct .plan:empty { display: none; }
-  .win { display: grid; grid-template-columns: 20px 30px 1fr; align-items: center; column-gap: 4px; min-width: 0; }
-  .win:empty { visibility: hidden; }
-  .win.extra { grid-column: 4 / -1; grid-template-columns: auto 30px auto; }
+  .acct { display: flex; flex-direction: column; gap: 3px; padding: 5px 8px 6px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); min-width: 0; }
+  .acct .top { display: flex; align-items: center; gap: 5px; min-width: 0; }
+  .acct .g { position: relative; line-height: 0; flex: none; }
+  .acct .g svg { width: 12px; height: 12px; }
+  .acct sup { position: absolute; left: 9px; top: -6px; font-size: 8.5px; font-weight: 800; color: var(--green); line-height: 1; }
+  .acct .where { flex: 1; min-width: 0; font-size: 11px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .acct .plan { flex: none; font-size: 8.5px; font-weight: 700; padding: 0 4px; border-radius: 5px; background: var(--card-2); color: var(--muted); line-height: 13px; white-space: nowrap; }
+  .win { display: grid; grid-template-columns: 20px minmax(18px, 1fr) 31px auto; align-items: center; column-gap: 5px; min-width: 0; height: 14px; }
   .win .k { font-size: 9.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* battery: outlined body with a nub, filled by the share used */
+  .batt { position: relative; height: 8px; border: 1px solid var(--faint); border-radius: 2.5px; padding: 1px; margin-right: 2px; }
+  .batt::after { content: ""; position: absolute; right: -3px; top: 1.5px; width: 1.5px; height: 3px; border-radius: 0 1px 1px 0; background: var(--faint); }
+  .batt i { display: block; height: 100%; border-radius: 1px; background: var(--muted); }
+  .batt.none { border-style: dashed; opacity: .5; }
   .win b { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
-  .win small { font-size: 9.5px; color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }
-  .win [data-level=warning] { color: var(--orange); }
-  .win [data-level=blocked] { color: var(--red); }
+  .win small { font-size: 9px; color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 40px; }
+  .win [data-level=warning] { color: var(--orange); } .batt i[data-level=warning] { background: var(--orange); }
+  .win [data-level=blocked] { color: var(--red); } .batt i[data-level=blocked] { background: var(--red); }
+  .win .none-b { color: var(--faint); font-weight: 600; }
 
   main { flex: 1; overflow-y: auto; padding: 12px 14px 14px; }
   main::-webkit-scrollbar { width: 0; }
@@ -345,7 +346,8 @@ function renderUsage(data) {
     const cell = (w, label, extra) => {
       const p = Math.round(w.usedPercent), level = usageLevel(w.usedPercent);
       const tip = `${w.label}: ${p}% использовано${w.resetsAt ? ` · сброс через ${until(w.resetsAt)}` : ""}`;
-      return `<span class="win${extra ? " extra" : ""}" title="${esc(tip)}"><span class="k">${esc(label)}</span>` +
+      return `<span class="win" title="${esc(tip)}"><span class="k">${esc(label)}</span>` +
+        `<span class="batt"><i data-level="${level}" style="width:${Math.min(100, p)}%"></i></span>` +
         `<b data-level="${level}">${p}%</b><small>${compactReset(w.resetsAt)}</small></span>`;
     };
     const rows = ["five-hour", "weekly"].map((k) => {
@@ -353,7 +355,8 @@ function renderUsage(data) {
       const label = k === "five-hour" ? "5ч" : "Нед";
       // An empty cell keeps the columns aligned. The Windows client says that bb has
       // no figure for a limit (the service did not report it for this account).
-      if (!w) return isWin ? `<span class="win" title="Сервис аккаунта не сообщает bb этот лимит"><span class="k">${label}</span><b>—</b><small>нет данных</small></span>` : `<span class="win"></span>`;
+      // Both lines are always there, so every card has the same height.
+      if (!w) return `<span class="win" title="Сервис аккаунта не сообщает bb этот лимит"><span class="k">${label}</span><span class="batt none"></span><b class="none-b">—</b><small>${isWin ? "нет данных" : ""}</small></span>`;
       return cell(w, label, false);
     }).join("") + (!isWin ? "" :
       // Windows client: every other limit bb reports (a model's week, a daily or shorter window) by its own name.
@@ -363,8 +366,8 @@ function renderUsage(data) {
     const resets = a.resets > 0 ? `<sup title="Доступно сбросов лимита: ${a.resets}">+${a.resets}</sup>` : "";
     const tip = [name, a.plan && `${planName(a.provider, a.plan)}${price ? ` (${price}/мес)` : ""}`, hosts.join(", "),
       a.resets > 0 && `сбросов лимита: ${a.resets}`].filter(Boolean).join(" · ");
-    return `<div class="acct" title="${esc(tip)}"><span class="g">${glyph}${resets}</span>` +
-      `<span class="where">${esc(where)}</span>${plan || '<span class="plan"></span>'}${rows}</div>`;
+    return `<div class="acct" title="${esc(tip)}"><div class="top"><span class="g">${glyph}${resets}</span>` +
+      `<span class="where">${esc(where)}</span>${plan}</div>${rows}</div>`;
   }).join("");
   box.hidden = !accounts.length;
 }
