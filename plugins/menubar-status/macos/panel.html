@@ -40,7 +40,7 @@ if (new URLSearchParams(location.search).get("ui") === "windows") { document.doc
 
   /* ---------- list ---------- */
   #list { width: var(--list-w); flex: none; display: flex; flex-direction: column; min-height: 0; }
-  header { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 16px; border-bottom: 1px solid var(--line); flex: none; min-width: 0; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 10px 8px 16px; border-bottom: 1px solid var(--line); flex: none; min-width: 0; }
   body { overflow-x: hidden; }
   .logo {
     width: 28px; height: 28px; border-radius: 9px; background: var(--text); color: var(--bg);
@@ -51,10 +51,12 @@ if (new URLSearchParams(location.search).get("ui") === "windows") { document.doc
   .live i { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
   .live.off i { background: var(--orange); }
 
-  /* Accounts in one line beside the title, like bb's own usage list. */
-  .usage { flex: 1; display: flex; justify-content: flex-end; gap: 5px; min-width: 0; overflow: hidden; }
+  /* Accounts beside the title, like bb's own usage list. When they do not fit they
+     wrap (first under the title, then onto further rows) instead of being cut off:
+     with justify-content: flex-end an overflowing row is clipped from the left. */
+  .usage { flex: 1 1 360px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; min-width: 0; }
   .acct {
-    flex: none; display: flex; align-items: center; gap: 7px; padding: 4px 8px 4px 6px; border-radius: 10px;
+    flex: none; max-width: 100%; display: flex; align-items: center; gap: 7px; padding: 4px 8px 4px 6px; border-radius: 10px;
     background: var(--card); border: 1px solid var(--line);
   }
   .who { display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 26px; flex: none; }
@@ -63,6 +65,7 @@ if (new URLSearchParams(location.search).get("ui") === "windows") { document.doc
   .who sup { position: absolute; left: 12px; top: -4px; font-size: 8.5px; font-weight: 800; color: var(--green); line-height: 1; }
   .who .plan { font-size: 8px; font-weight: 700; padding: 0 4px; border-radius: 5px; background: var(--card-2); color: var(--muted); line-height: 12px; }
   .who span { font-size: 9px; font-weight: 700; color: var(--muted); letter-spacing: .2px; white-space: nowrap; }
+  .who > span:not(.g):not(.plan) { max-width: 90px; overflow: hidden; text-overflow: ellipsis; }
   .wins { display: grid; grid-template-columns: auto 30px auto auto; align-items: center; column-gap: 5px; row-gap: 1px; }
   .wins .k { font-size: 9.5px; color: var(--muted); }
   .wins .bar { width: 30px; height: 3px; border-radius: 2px; background: var(--card-2); overflow: hidden; }
