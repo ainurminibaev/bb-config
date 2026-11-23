@@ -51,8 +51,11 @@ anything itself.
   - weekly and model windows: 90% / 97%.
 
   A poll every 2 minutes sends one note per window and reset into a running
-  turn (`steer-if-active`); the plugin's own dispatch hook refuses it if the
-  turn has ended, so it never starts a new turn.
+  turn (`steer-if-active`). If the turn has ended before delivery, the plugin's
+  own dispatch hook parks the queued note and deletes it (0.9.2), so it never
+  starts a new turn and never stays as a failed row with bb's error glyph; only
+  if the delete fails is it refused: "ход уже закончился — напоминание о лимите
+  не понадобилось".
 - Stuck threads:
   - after a rate-limit failure, the plugin waits up to a minute for
     provider-retry's decision;

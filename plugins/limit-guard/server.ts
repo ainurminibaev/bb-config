@@ -8,6 +8,7 @@ import {
   type Assessment, type Mode, type QuotaWindow, type RetryState, type StuckThread, type Thresholds,
 } from './logic.ts';
 import { snapshotMessage, snapshotRef } from './snapshot-logic.ts';
+import { staleNoteDecision } from './note-dispatch.ts';
 import { accountPlan, claudeProfilePlan, DEFAULT_ACCOUNT_RULES, parseAccountRules, policiesForAccount, ruleFor, thresholdsFor, type AccountInfo, type AccountRule } from './account-logic.ts';
 import {
   decideHold, DEFAULT_POLICIES, holdReason, mergePolicies, MODE_LABEL, nextCheckAt, normalizePolicy, parseMode, parsePolicySpec, POLICY_LABEL, priorityStatus,
@@ -472,6 +473,8 @@ export default function plugin(bb: BbPluginApi) {
   bb.events.on('message.dispatched', ({ entry }) => { void forgetResume((entry as { id: string }).id); });
   bb.events.on('message.cancelled', ({ entry }) => { void forgetResume((entry as { id: string }).id); });
 
+  /** Stale limit notes being dropped: a row that comes back is refused instead. */
+  const droppingNotes = new Set<string>();
   bb.experimental_hooks.on('message.dispatch', async ctx => {
     // A resume row waits for its reset, then goes like any message (priority rules still apply below).
     await resumesReady;
@@ -481,7 +484,22 @@ export default function plugin(bb: BbPluginApi) {
     // A batch of rows reports originPluginId "mixed": look at the rows themselves too.
     const rows = ctx.queuedMessages as { originPluginId?: string | null }[];
     const ours = ctx.originPluginId === bb.pluginId || (rows.length > 0 && rows.every(m => m.originPluginId === bb.pluginId));
-    if (!resume && ours && ctx.attempt === 'start-turn') return { action: 'reject', message: 'limit-guard: тред уже не работает — сообщение о лимите не нужно' };
+    if (!resume && ours && ctx.attempt === 'start-turn') {
+      // The turn it was meant for has ended: park the row and delete it, so it
+      // never shows as a failed message (bb's error glyph on a healthy thread).
+      const ids = (ctx.queuedMessages as { id?: string }[]).map(m => m.id ?? '');
+      const d = staleNoteDecision(ids, droppingNotes, Date.now());
+      if (d.action === 'reject') return d;
+      const threadId = ctx.thread.id;
+      for (const id of d.ids) droppingNotes.add(id);
+      setTimeout(() => {
+        for (const id of d.ids) {
+          void bb.sdk.threads.queuedMessages.delete({ threadId, queuedMessageId: id })
+            .then(() => { droppingNotes.delete(id); }, (e: unknown) => bb.log.warn(`Limit Guard: could not drop a stale limit note ${id}: ${String(e)}`));
+        }
+      }, 0);
+      return { action: 'wait', reason: d.reason, sendAt: d.sendAt };
+    }
     // A steer into a running turn is the user talking to work already under way.
     if (ctx.attempt !== 'start-turn') return { action: 'proceed' };
     try {
