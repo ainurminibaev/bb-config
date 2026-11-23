@@ -1,0 +1,22 @@
+{
+  "name": "bb-plugin-image-gen",
+  "version": "0.1.4",
+  "private": true,
+  "type": "module",
+  "bb": {
+    "name": "Image Gen",
+    "description": "Генерация и правка изображений для всех агентов BB: Codex рисует сам, остальные — через Codex на подходящей машине (без служебных тредов); платный OpenAI API — по желанию.",
+    "branding": { "icon": "Image" },
+    "server": "./server.ts",
+    "host": "./host.ts",
+    "skills": ["skills"]
+  },
+  "dependencies": { "zod": "^4.0.0" },
+  "devDependencies": { "@get-bb/plugin-sdk": "0.6.132" },
+  "engines": { "bb": ">=0.48.0", "bbPluginSdk": ">=0.6.132 <0.7.0" },
+  "scripts": {
+    "sync": "node scripts/sync_runtime.mjs",
+    "build": "node scripts/sync_runtime.mjs && bb plugin build .",
+    "test": "node --test core/*.test.mjs test/*.test.mjs && python3 -m unittest discover -s runner -p 'test_*.py'"
+  }
+}

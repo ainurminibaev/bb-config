@@ -26,6 +26,7 @@ Full list with sources and dependencies: [docs/components.md](docs/components.md
 | [Web BB Button](plugins/web-bb-button) | A globe in the left rail that opens BB in the browser | Your public BB address |
 | [Open on Desktop](plugins/file-local-open) | Open a file from chat on your Mac or Windows PC, or save it to Downloads; PDF fitted to width | `macHostId` with several desktops |
 | [Browser Page](plugins/browser-page) | An agent skill for the built-in browser where Browser Automation does not run (Windows) | None |
+| [Image Gen](plugins/image-gen) | Picture generation and editing for every agent: Codex draws itself, other agents call it through Codex on a suitable machine; paid OpenAI API optional | Codex CLI with `codex login` on executor machines |
 | [Local Transcribe](plugins/local-transcribe) | Local transcription of recordings with speakers on a Mac GPU or Linux | Executor machines (`workerHosts`), Python and ffmpeg on them |
 | [Subthread Autocollapse](plugins/subthread-autocollapse) | Folds expanded subthread lists after 5 minutes | None |
 | [Project Machine Setup](plugins/project-machine-setup) | "Connect project" beside a blocked send button | None |
