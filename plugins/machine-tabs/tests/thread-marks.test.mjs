@@ -57,3 +57,9 @@ test('tolerant reading: 0.2.10 data (one mark, no place/size) still loads as a c
   assert.equal(store.roster.thr_a[0].label.length, 160);
   assert.deepEqual(parseStore(null), {});
 });
+
+import { CROWN } from '../lib/thread-marks.ts';
+test('the crown is one drawing with balls on its three points; a row crown is ~60% of the 16px project mark', () => {
+  assert.equal(CROWN.tips.length, 3);
+  assert.ok(CROWN.rowWidth <= 16 * 0.62 && CROWN.rowWidth >= 16 * 0.55);
+});

@@ -29,7 +29,7 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import type { PluginSidebarThread, PluginThreadListProps } from "@get-bb/plugin-sdk/app";
 import type { rpcContract, TabsState } from "./server";
-import { ACCENT_COLOR, FILLED_GLYPHS, MARK_PATHS, type ThreadMark, type VisibleMark } from "./lib/thread-marks";
+import { ACCENT_COLOR, ACCENT_HI, ACCENT_LO, CROWN, FILLED_GLYPHS, MARK_PATHS, type ThreadMark, type VisibleMark } from "./lib/thread-marks";
 import { cn } from "@/lib/utils";
 import { automaticProjectSectionOrder, projectsByLatestThread } from "./lib/project-order";
 import { GROUP_PAGING_CSS, withGroupPaging } from "./lib/group-paging";
@@ -318,21 +318,37 @@ function useThreadMarks(threadId: string): readonly VisibleMark[] | undefined {
   );
 }
 /**
- * A mark on the thread's icon. `top`: centred over the project mark, like a
- * crown on a head (the mark shrinks and drops a little so the pair fits the
- * icon's place); `corner`: bottom right. The provider glyph keeps its corner on top.
+ * A mark on the thread's icon. "top": the crown, worn on the project mark —
+ * centred on its axis, a third of its height over the mark's top, two tones
+ * with balls on the points and a thin contour in the background colour.
+ * "corner": a small glyph (Telegram) in the same 10px frame and on the same
+ * vertical as the provider glyph, bottom right. Same size for every tone.
  */
 function ThreadIconMark({ mark }: { mark: ThreadMark }) {
+  const label = mark.label || undefined;
+  if (mark.glyph === "crown" && mark.place === "top") {
+    const accent = mark.tone === "accent";
+    const k = CROWN.rowWidth / 12;
+    const halo = 1.1 / k;
+    return (
+      <span data-machine-tabs-thread-mark={mark.tone} data-place="top" data-size={mark.size} role="img" aria-label={label} title={label}>
+        <svg viewBox={CROWN.viewBox} width={14 * k} height={11.5 * k} aria-hidden="true">
+          <path d={CROWN.outline} fill="none" stroke="var(--mt-mark-bg)" strokeWidth={2 * halo} strokeLinejoin="round" />
+          {CROWN.tips.map(([x, y]) => <circle key={x} cx={x} cy={y} r={0.95 + halo} fill="var(--mt-mark-bg)" />)}
+          <path d={CROWN.body} fill={accent ? ACCENT_HI : "var(--mt-crown-hi)"} stroke={accent ? ACCENT_LO : "var(--mt-crown-lo)"} strokeWidth=".45" strokeLinejoin="round" />
+          <path d={CROWN.band} fill={accent ? ACCENT_LO : "var(--mt-crown-lo)"} />
+          {CROWN.tips.map(([x, y]) => <circle key={`b${x}`} cx={x} cy={y} r=".95" fill={accent ? ACCENT_HI : "var(--mt-crown-hi)"} stroke={accent ? ACCENT_LO : "var(--mt-crown-lo)"} strokeWidth=".35" />)}
+        </svg>
+      </span>
+    );
+  }
   const filled = FILLED_GLYPHS.has(mark.glyph);
-  const px = mark.place === "top" ? (mark.size === "large" ? 19 : 16) : (mark.size === "large" ? 10 : 8);
   return (
-    <span data-machine-tabs-thread-mark={mark.tone} data-place={mark.place} data-size={mark.size} role="img"
-      aria-label={mark.label || undefined} title={mark.label || undefined}
+    <span data-machine-tabs-thread-mark={mark.tone} data-place={mark.place} data-size={mark.size} role="img" aria-label={label} title={label}
       style={mark.tone === "accent" ? { color: ACCENT_COLOR } : undefined}>
-      <svg viewBox="0 0 24 24" width={px} height={px} aria-hidden="true"
-        fill={filled ? "currentColor" : "none"} stroke={filled ? "none" : "currentColor"}
-        strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-        <path d={MARK_PATHS[mark.glyph]} />
+      <svg viewBox="0 0 24 24" width={mark.place === "corner" ? 9 : 12} height={mark.place === "corner" ? 9 : 12} aria-hidden="true" style={{ overflow: "visible" }}>
+        <path d={MARK_PATHS[mark.glyph]} fill={filled ? "currentColor" : "none"} stroke="var(--mt-mark-bg)" strokeWidth={filled ? 3 : 5} strokeLinejoin="round" strokeLinecap="round" paintOrder="stroke" />
+        <path d={MARK_PATHS[mark.glyph]} fill={filled ? "currentColor" : "none"} stroke={filled ? "none" : "currentColor"} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     </span>
   );
@@ -1256,23 +1272,30 @@ span:has(> .bb-thread-title > [data-machine-tabs-row-meta]:not(:empty)),
    every span on the page, including each line of a code editor, a candidate. */
 [data-machine-tabs-list] [data-sidebar-thread-provider]:has(+ .bb-thread-title > [data-machine-tabs-badge]) {
   position: absolute;
-  left: 9px;
+  left: 12px;
   top: calc(50% - 13px);
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   margin: 0;
-  border-radius: 9999px;
-  background: var(--sidebar, var(--background));
-  box-shadow: 0 0 0 1px var(--sidebar, var(--background));
+  /* No plate under the provider glyph (0.2.14): cleaner, same as the Telegram mark below it. */
+  background: none;
+  box-shadow: none;
 }
 [data-machine-tabs-list] [data-sidebar-thread-provider]:has(+ .bb-thread-title > [data-machine-tabs-badge]) > span {
   width: 10px;
   height: 10px;
 }
-/* Marks other plugins put on the thread icon. "corner": bottom right of the
-   project mark. "top": centred over it like a crown on a head; the project mark
-   shrinks and drops a little so the pair keeps the icon's place and the row's
-   height. The provider glyph stays in its top corner, above both. */
+/* Marks other plugins put on the thread icon (0.2.14). The project mark keeps
+   its size and place, the same as on every other row. "top": the crown worn on
+   it — centred on its axis, a third of the crown over its top. "corner": a small
+   glyph (Telegram) in the provider glyph's 10px frame, on the same vertical,
+   bottom right. Nothing has a plate; a thin contour in the background colour
+   follows the glyph. The row keeps its height. */
+[data-machine-tabs-list] {
+  --mt-mark-bg: var(--sidebar, var(--background));
+  --mt-crown-lo: color-mix(in srgb, var(--sidebar-foreground, currentColor) 82%, transparent);
+  --mt-crown-hi: color-mix(in srgb, var(--sidebar-foreground, currentColor) 32%, var(--sidebar, #fff));
+}
 [data-machine-tabs-list] [data-machine-tabs-thread-mark] {
   position: absolute;
   display: flex;
@@ -1283,34 +1306,16 @@ span:has(> .bb-thread-title > [data-machine-tabs-row-meta]:not(:empty)),
   line-height: 0;
 }
 [data-machine-tabs-list] [data-machine-tabs-thread-mark][data-place="corner"] {
-  left: 5px;
+  left: 12px;
   top: calc(50% + 3px);
   width: 10px;
   height: 10px;
-  border-radius: 9999px;
-  background: var(--sidebar, var(--background));
-  z-index: 32;
+  /* optical correction: the plane reads lower and heavier than the provider glyph */
+  padding-bottom: 1px;
 }
-/* "top": the project mark (13px, at the bottom of the row) wears the mark like a
-   crown, overlapping it by 1px; the pair sits a little left so the provider glyph
-   (top right, above) only covers the crown's edge. The row keeps its height. */
 [data-machine-tabs-list] [data-machine-tabs-thread-mark][data-place="top"] {
-  left: -5px;
-  top: calc(50% - 11.7px);
-  color: var(--sidebar-foreground, var(--foreground));
-  opacity: .8;
-}
-[data-machine-tabs-list] [data-machine-tabs-thread-mark][data-place="top"][data-size="large"] {
-  left: -6.5px;
-  top: calc(50% - 14px);
-}
-[data-machine-tabs-list] [data-machine-tabs-thread-mark][data-place="top"][data-machine-tabs-thread-mark="accent"] { opacity: 1; }
-[data-machine-tabs-list] .bb-thread-title:has(> [data-machine-tabs-thread-mark][data-place="top"]) > [data-machine-tabs-badge] {
-  width: 13px;
-  height: 13px;
-  margin-top: 13px;
-  margin-left: -3.5px;
-  margin-right: 14.5px;
+  left: 2.4px;
+  top: calc(50% - 13.9px);
 }
 [data-machine-tabs-list] [data-machine-tabs-thread-mark][data-machine-tabs-thread-mark="muted"] { opacity: .45; }`;
 

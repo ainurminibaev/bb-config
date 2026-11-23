@@ -131,3 +131,21 @@ export function visibleMarks(store: MarkStore, enabled: ReadonlySet<string>): Re
   }
   return out;
 }
+
+/**
+ * The crown (0.2.14): two tones and balls on the points, on a 12×12 grid;
+ * viewBox "-1 -0.5 14 11.5" keeps the balls and the contour inside.
+ * `body` takes the light tone, `band` and ball outlines the dark one.
+ */
+export const CROWN = {
+  viewBox: "-1 -0.5 14 11.5",
+  outline: "M1 4.2 3.3 6.2 6 1.8 8.7 6.2 11 4.2 9.8 10H2.2Z",
+  body: "M1 4.2 3.3 6.2 6 1.8 8.7 6.2 11 4.2 10.1 8.2H1.9Z",
+  band: "M1.9 8.2H10.1L9.8 10H2.2Z",
+  tips: [[1, 4], [6, 1.6], [11, 4]] as const,
+  /** Visible width of a top crown in a row: ~60% of the 16px project mark. */
+  rowWidth: 9.6,
+} as const;
+/** Gold for the accent tone: light face and dark base. */
+export const ACCENT_HI = "#e8c24a";
+export const ACCENT_LO = "#8f6c0e";
