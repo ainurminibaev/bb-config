@@ -45,7 +45,7 @@ import { loadToken } from "./lib/load-token";
 import { SearchExtras, SearchSettings, type SearchOptions } from "./lib/thread-search";
 import { PROJECT_QUICK_CSS, ProjectQuickMenu, StateMark } from "./lib/project-quick";
 import { REVEAL_CSS, revealProject, revealThread } from "./lib/sidebar-reveal";
-import { QUICK_STATES, STATE_LABEL, insideStates, type Inside, type QuickThread } from "./lib/project-quick-model";
+import { QUICK_STATES, STATE_LABEL, errorHiddenByRow, insideStates, type Inside, type QuickThread } from "./lib/project-quick-model";
 
 const TABS_CHANGED = "machine-tabs-changed";
 const ICONS_CHANGED = "machine-tabs-icons-changed";
@@ -567,6 +567,10 @@ async function loadNativeList(
         <RealTitle {...props} />
         {thread ? (
           <span data-machine-tabs-row-meta="">
+            {errorHiddenByRow(thread as unknown as QuickThread) ? (
+              // bb's row shows a clock or nothing for a read error; the project still counts it as one.
+              <span data-machine-tabs-error="" title={STATE_LABEL.error}><StateMark state="error" small /></span>
+            ) : null}
             {inside && inside.total > 0 ? (
               // Always the number of subthreads; with work, a wait or an error inside, that state and its count.
               <span data-machine-tabs-inside="" data-quiet={top ? undefined : ""}

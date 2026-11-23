@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { threadTree, ago, duration, filterCounts, insideStates, passesFilter, projectThreads, summarizeProjects, threadState } from '../lib/project-quick-model.ts';
+import { threadTree, ago, errorHiddenByRow, duration, filterCounts, insideStates, passesFilter, projectThreads, summarizeProjects, threadState } from '../lib/project-quick-model.ts';
 
 const projects = [
   { id: 'a', name: 'Alpha', isPersonal: false },
@@ -23,6 +23,17 @@ test('one state per thread, waiting for the user first', () => {
   assert.equal(threadState(t('x', 'a', 1, { isUnread: true, parentThreadId: 'p' })), 'idle');
   const inside = insideStates([t('p', 'a', 1), t('k', 'a', 2, { isUnread: true, parentThreadId: 'p' })]).get('p');
   assert.equal(inside.top, null);
+});
+
+test('an error bb draws as a clock or nothing gets its own mark', () => {
+  // A read error with a waiting message: bb's row shows the clock, the project counts an error.
+  assert.equal(errorHiddenByRow(t('x', 'a', 1, { status: 'error', indicator: 'queued-waiting' })), true);
+  assert.equal(errorHiddenByRow(t('x', 'a', 1, { status: 'error' })), true);
+  // bb already shows the error mark.
+  assert.equal(errorHiddenByRow(t('x', 'a', 1, { status: 'error', indicator: 'unread-error' })), false);
+  assert.equal(errorHiddenByRow(t('x', 'a', 1, { indicator: 'queued-failed' })), false);
+  assert.equal(errorHiddenByRow(t('x', 'a', 1, { indicator: 'queued-waiting' })), false);
+  assert.equal(errorHiddenByRow(t('x', 'a', 1, { status: 'error', hasPendingInteraction: true })), false);
 });
 
 test('projects by latest live thread; archived and hidden threads do not count', () => {

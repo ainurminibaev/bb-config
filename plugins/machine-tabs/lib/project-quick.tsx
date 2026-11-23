@@ -132,7 +132,9 @@ function ThreadMark({ thread }: { thread: QuickThread }) {
     runtime: ["working", "Loading"], "working-draft": ["working", "Loading"],
   };
   const state = threadState(thread);
-  const [kind, icon] = byIndicator[indicator]
+  // An error always shows as an error, even when bb's row shows a waiting message's clock:
+  // the project's «Ошибки» count must have a visible match in the list.
+  const [kind, icon] = (state === "error" ? (["error", "CircleX"] as [string, string]) : undefined) ?? byIndicator[indicator]
     ?? (state === "input" ? ["input", "CircleQuestion"] : state === "error" ? ["error", "CircleX"]
       : state === "working" ? ["working", "Loading"] : state === "idle" ? ["idle", "CircleCheck"] : [state, ""]);
   return (

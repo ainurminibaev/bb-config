@@ -92,7 +92,10 @@ thread shows its current turn's duration, and the subthread fold button carries 
 descendants' top state and count. In the sidebar a parent with unfinished
 subthreads gets a quiet "↳⟳1"/"↳✕2" mark. A subthread is never counted as unread
 (0.2.9): bb marks unread only on top-level threads, so an unread child would draw
-"↳●1" with no matching row mark. Turn start comes from RPC
+"↳●1" with no matching row mark. A thread in error always shows ✕ (0.2.16): bb's own
+row draws a read error with no mark and an error with a queued message as a clock, so
+the thread list shows ✕ instead and the sidebar row gets an extra ✕ at its right edge;
+otherwise the project's "Ошибки" count would have no visible match. Turn start comes from RPC
 `turn_started` (`bb plugin rpc call machine-tabs turn_started` with
 `{"threadIds":[...]}`), cached 30 s, only for running threads while the menu is open.
 

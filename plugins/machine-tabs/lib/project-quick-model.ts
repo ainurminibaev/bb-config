@@ -51,6 +51,16 @@ export function threadState(thread: QuickThread): QuickState {
   if (thread.indicator === "unread-success" || (thread.isUnread && !thread.parentThreadId)) return "unread";
   return "idle";
 }
+/**
+ * A thread in error whose bb row shows no error mark: bb draws ⊗ only for an unread error or a
+ * failed send, so a read error, or one with a waiting message (clock), looks fine in its row
+ * while the project counts it under «Ошибки».
+ */
+export function errorHiddenByRow(thread: QuickThread): boolean {
+  return threadState(thread) === "error" &&
+    thread.indicator !== "unread-error" && thread.indicator !== "queued-failed";
+}
+
 // bb marks unread only on top-level threads: a subthread reports to its parent and its row never
 // shows an unread mark. Counting a subthread's isUnread here drew "↳ ● 1" with no visible match.
 
