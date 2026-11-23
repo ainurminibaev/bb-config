@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent, type SVGProps } from 'react';
+import { startVisibleInterval } from './lib/visible-interval';
 import { definePluginApp, useRealtime, useRpc, useComposer, useBbNavigate } from '@get-bb/plugin-sdk/app';
 import { createPortal } from 'react-dom';
 import { installComposerFooter, registerFooterRoute } from './composer-footer';
@@ -83,7 +84,7 @@ function ProxiesPage() {
     } catch (e) { report(e); }
     finally { setLoading(false); }
   }, [rpc, report]);
-  useEffect(() => { void refresh(); void discover(); const timer = setInterval(() => { tick(x => x + 1); void refresh(); }, 5000); return () => clearInterval(timer); }, [refresh, discover]);
+  useEffect(() => { void refresh(); void discover(); return startVisibleInterval(() => { tick(x => x + 1); void refresh(); }, 5000); }, [refresh, discover]);
   useRealtime('changed', refresh);
   const action = async (key: string, fn: () => Promise<unknown>) => {
     if (pending[key]) return; setPending(old => ({ ...old, [key]: true })); setError('');
@@ -189,7 +190,7 @@ function RouteBadge() {
     try { const next = await rpc.call('route_context', { threadId, hostId, environmentId, providerId }); setResolved({ key: contextKey, route: next, error: false }); }
     catch { setResolved({ key: contextKey, route: null, error: true }); }
   }, [rpc, threadId, hostId, environmentId, providerId, contextKey]);
-  useEffect(() => { void refresh(); const timer = setInterval(() => void refresh(), 5000); return () => clearInterval(timer); }, [refresh]);
+  useEffect(() => { void refresh(); return startVisibleInterval(() => void refresh(), 5000); }, [refresh]);
   useRealtime('changed', refresh);
   const codex = (route?.providerId ?? providerId) === 'codex';
   const claude = (route?.providerId ?? providerId) === 'claude-code';
