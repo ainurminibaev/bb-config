@@ -324,7 +324,7 @@ function useThreadMarks(threadId: string): readonly VisibleMark[] | undefined {
  */
 function ThreadIconMark({ mark }: { mark: ThreadMark }) {
   const filled = FILLED_GLYPHS.has(mark.glyph);
-  const px = mark.place === "top" ? (mark.size === "large" ? 15 : 12) : (mark.size === "large" ? 11 : 9);
+  const px = mark.place === "top" ? (mark.size === "large" ? 14 : 12) : (mark.size === "large" ? 11 : 9);
   return (
     <span data-machine-tabs-thread-mark={mark.tone} data-place={mark.place} data-size={mark.size} role="img"
       aria-label={mark.label || undefined} title={mark.label || undefined}
@@ -1291,21 +1291,23 @@ span:has(> .bb-thread-title > [data-machine-tabs-row-meta]:not(:empty)),
   background: var(--sidebar, var(--background));
 }
 [data-machine-tabs-list] [data-machine-tabs-thread-mark][data-place="top"] {
-  left: 0;
-  width: 16px;
-  top: calc(50% - 14px);
-  height: 10px;
+  left: -2px;
+  width: 14px;
+  top: calc(50% - 13px);
+  height: 9px;
 }
 [data-machine-tabs-list] [data-machine-tabs-thread-mark][data-place="top"][data-size="large"] {
-  top: calc(50% - 16px);
-  height: 12px;
+  width: 15px;
+  top: calc(50% - 15px);
+  height: 11px;
 }
+/* The crown keeps left of the provider glyph (top right), so both stay readable. */
 [data-machine-tabs-list] .bb-thread-title:has(> [data-machine-tabs-thread-mark][data-place="top"]) > [data-machine-tabs-badge] {
   width: 12px;
   height: 12px;
-  margin-top: 6px;
-  margin-left: 2px;
-  margin-right: calc(0.5rem + 2px);
+  margin-top: 7px;
+  margin-left: -1px;
+  margin-right: calc(0.5rem + 5px);
 }
 [data-machine-tabs-list] [data-machine-tabs-thread-mark="muted"] { opacity: .45; }`;
 
