@@ -1832,6 +1832,7 @@ function MachineThreadList(props: PluginThreadListProps) {
         </div>
       )}
       <div ref={searchRowRef} onPointerEnter={keepFilters} onPointerLeave={filtering ? undefined : leaveFilters}
+        data-query={query === "" ? undefined : ""}
         className="machine-tabs-search sticky top-0 z-[100] bg-sidebar px-2 pb-1.5 pt-0.5">
         <BbIcon
           name="Search"
@@ -1948,6 +1949,11 @@ function MachineThreadList(props: PluginThreadListProps) {
         .machine-tabs-filter-toggle:hover, .machine-tabs-filter-toggle:focus-visible { opacity: 1; }
         .machine-tabs-filter-toggle[data-active] { opacity: 1; color: var(--sidebar-foreground); background: var(--state-active); }
         @media (hover: none) { .machine-tabs-filter-toggle { opacity: .7; } }
+        /* With text in the field its buttons stay: otherwise the clear cross hangs alone
+           in the middle of the field once the pointer leaves. */
+        :where(.machine-tabs-search[data-query]) .machine-tabs-search-settings,
+        :where(.machine-tabs-search[data-query]) .machine-tabs-filter-toggle,
+        :where(.machine-tabs-search[data-query]) .mt-pq-button { opacity: .7; }
       `}</style>
       <style>{headerCss}</style>
       <style>{emptyCss}</style>
