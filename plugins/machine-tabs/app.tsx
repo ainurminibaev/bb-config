@@ -13,6 +13,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import type { ComponentType } from "react";
 import * as zod from "zod";
@@ -28,6 +29,7 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import type { PluginSidebarThread, PluginThreadListProps } from "@get-bb/plugin-sdk/app";
 import type { rpcContract, TabsState } from "./server";
+import { ACCENT_COLOR, MARK_PATHS, type ThreadMark } from "./lib/thread-marks";
 import { cn } from "@/lib/utils";
 import { automaticProjectSectionOrder, projectsByLatestThread } from "./lib/project-order";
 import { GROUP_PAGING_CSS, withGroupPaging } from "./lib/group-paging";
@@ -289,6 +291,44 @@ function ProjectBadgeMark({
   );
 }
 
+// ---------- marks other plugins put on a thread's icon ----------
+let threadMarks: Readonly<Record<string, ThreadMark & { pluginId: string }>> = {};
+const threadMarkListeners = new Set<() => void>();
+/** Loads the marks once per list; refreshed by the server's signal. */
+function useThreadMarksLoader() {
+  const rpc = useRpc<typeof rpcContract>();
+  const load = useCallback(() => {
+    rpc.call("thread_marks", null).then(
+      (result) => { threadMarks = result.marks; for (const fn of [...threadMarkListeners]) fn(); },
+      () => undefined,
+    );
+  }, [rpc]);
+  useEffect(() => {
+    load();
+    const timer = window.setInterval(load, 60_000);
+    return () => window.clearInterval(timer);
+  }, [load]);
+  useRealtime("machine-tabs-thread-marks", load);
+}
+function useThreadMark(threadId: string): (ThreadMark & { pluginId: string }) | undefined {
+  return useSyncExternalStore(
+    (fn) => { threadMarkListeners.add(fn); return () => threadMarkListeners.delete(fn); },
+    () => threadMarks[threadId],
+    () => undefined,
+  );
+}
+/** A mark on the thread's icon: over the project mark (or bb's icon), larger than the provider glyph. */
+function ThreadIconMark({ mark }: { mark: ThreadMark }) {
+  return (
+    <span data-machine-tabs-thread-mark={mark.tone} role="img" aria-label={mark.label || undefined} title={mark.label || undefined}
+      style={mark.tone === "accent" ? { color: ACCENT_COLOR } : undefined}>
+      <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d={MARK_PATHS[mark.glyph]} />
+      </svg>
+    </span>
+  );
+}
+
 /** Project images by project id; re-read on a timer and on `bb machine-tabs icons`. */
 function useProjectIcons(): Readonly<Record<string, string>> {
   const rpc = useRpc<typeof rpcContract>();
@@ -465,11 +505,13 @@ async function loadNativeList(
   }) {
     const badge = useContext(ProjectBadges)?.get(props.threadId);
     const thread = useContext(RowThreads)?.get(props.threadId);
+    const mark = useThreadMark(props.threadId);
     const inside = useContext(RowInside)?.get(props.threadId);
     const top = inside?.top ?? null;
     return (
       <>
         {badge ? <ProjectBadgeMark badge={badge} /> : null}
+        {mark ? <ThreadIconMark mark={mark} /> : null}
         <RealTitle {...props} />
         {thread ? (
           <span data-machine-tabs-row-meta="">
@@ -1217,9 +1259,27 @@ span:has(> .bb-thread-title > [data-machine-tabs-row-meta]:not(:empty)),
 [data-machine-tabs-list] [data-sidebar-thread-provider]:has(+ .bb-thread-title > [data-machine-tabs-badge]) > span {
   width: 10px;
   height: 10px;
-}`;
+}
+/* A mark another plugin put on the thread icon (a role, say): bottom right of
+   the project mark, larger than the provider glyph in the top corner. */
+[data-machine-tabs-list] [data-machine-tabs-thread-mark] {
+  position: absolute;
+  left: 8px;
+  top: calc(50% - 1px);
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: var(--sidebar, var(--background));
+  color: var(--muted-foreground);
+  pointer-events: auto;
+}
+[data-machine-tabs-list] [data-machine-tabs-thread-mark="muted"] { opacity: .45; }`;
 
 function MachineThreadList(props: PluginThreadListProps) {
+  useThreadMarksLoader();
   const { state, select, setView } = useTabs();
   const { bundle, error: bundleError } = useNativeListBundle();
   const { component: NativeList, error: listError } = useNativeList("main", bundle);

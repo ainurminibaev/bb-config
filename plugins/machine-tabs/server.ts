@@ -4,9 +4,21 @@
 // windows), and forwards bb's thread-list preference calls (see rpcContract).
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import { clearMark, MARK_GLYPHS, MARK_TONES, parseStore, replaceMarks, setMark, visibleMarks, type MarkStore } from "./lib/thread-marks";
 
 /** Realtime channel app.tsx listens on after a tab changes. */
 export const TABS_CHANGED = "machine-tabs-changed";
+
+/** Realtime channel: another plugin changed its marks on thread icons. */
+export const MARKS_CHANGED = "machine-tabs-thread-marks";
+const MARKS_KEY = "thread-marks";
+const markInput = z.object({
+  threadId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+  glyph: z.enum(MARK_GLYPHS),
+  tone: z.enum(MARK_TONES).default("neutral"),
+  label: z.string().max(160).default(""),
+});
+const markOutput = z.object({ glyph: z.enum(MARK_GLYPHS), tone: z.enum(MARK_TONES), label: z.string(), pluginId: z.string() });
 
 /** Realtime channel: project images were re-read. */
 export const ICONS_CHANGED = "machine-tabs-icons-changed";
@@ -37,6 +49,11 @@ const ROW_MARK_CHANGED = "row-mark-changed";
 const rowMarkSchema = z.enum(["ask", "project", "topic"]);
 
 export const rpcContract = defineRpcContract({
+  // Marks on a thread's icon, set by other plugins (the caller is the owner).
+  thread_mark_set: { input: markInput, output: z.object({ ok: z.literal(true) }) },
+  thread_mark_clear: { input: z.object({ threadId: z.string().max(64) }), output: z.object({ ok: z.literal(true) }) },
+  thread_marks_replace: { input: z.object({ marks: z.array(markInput).max(500) }), output: z.object({ count: z.number() }) },
+  thread_marks: { input: z.null(), output: z.object({ marks: z.record(z.string(), markOutput) }) },
   row_mark: { input: z.null(), output: z.object({ rowMark: rowMarkSchema }) },
   set_row_mark: {
     input: z.object({ rowMark: z.enum(["project", "topic"]) }),
@@ -316,7 +333,59 @@ export default async function plugin(bb: BbPluginApi) {
     return at;
   }
 
+  // ---------- marks other plugins put on thread icons ----------
+  let markWrite: Promise<unknown> = Promise.resolve();
+  function changeMarks(change: (store: MarkStore) => MarkStore): Promise<MarkStore> {
+    const run = markWrite.then(async () => {
+      const next = change(parseStore(await bb.storage.kv.get<unknown>(MARKS_KEY)));
+      await bb.storage.kv.set(MARKS_KEY, next);
+      bb.realtime.publish(MARKS_CHANGED, null);
+      return next;
+    });
+    markWrite = run.catch(() => undefined);
+    return run;
+  }
+  function markOwner(caller: unknown): string {
+    const c = caller as { kind?: string; pluginId?: string } | undefined;
+    if (c?.kind !== "plugin" || !c.pluginId) throw new Error("thread marks are set by plugins through bb.sdk.plugins.callRpc");
+    return c.pluginId;
+  }
+  let enabledCache: { at: number; ids: Set<string> } | null = null;
+  async function enabledPlugins(): Promise<Set<string>> {
+    if (enabledCache && Date.now() - enabledCache.at < 15_000) return enabledCache.ids;
+    try {
+      const list = (await bb.sdk.plugins.list()) as unknown as { id?: string; enabled?: boolean }[] | { plugins?: { id?: string; enabled?: boolean }[] };
+      const items = Array.isArray(list) ? list : list.plugins ?? [];
+      enabledCache = { at: Date.now(), ids: new Set(items.filter((p) => p.enabled !== false && typeof p.id === "string").map((p) => p.id!)) };
+    } catch {
+      enabledCache = { at: Date.now(), ids: enabledCache?.ids ?? new Set() };
+    }
+    return enabledCache.ids;
+  }
+  for (const event of ["experimental_plugin.enabled", "experimental_plugin.disabled", "experimental_plugin.removed"] as const) {
+    try { bb.events.on(event as never, (() => { enabledCache = null; bb.realtime.publish(MARKS_CHANGED, null); }) as never); } catch { /* older bb: the 15 s cache covers it */ }
+  }
+
   bb.rpc.register(rpcContract, {
+    async thread_mark_set(input, ctx) {
+      const owner = markOwner((ctx as { experimental_caller?: unknown } | undefined)?.experimental_caller);
+      await changeMarks((store) => setMark(store, owner, input.threadId, { glyph: input.glyph, tone: input.tone, label: input.label }));
+      return { ok: true as const };
+    },
+    async thread_mark_clear({ threadId }, ctx) {
+      const owner = markOwner((ctx as { experimental_caller?: unknown } | undefined)?.experimental_caller);
+      await changeMarks((store) => clearMark(store, owner, threadId));
+      return { ok: true as const };
+    },
+    async thread_marks_replace({ marks }, ctx) {
+      const owner = markOwner((ctx as { experimental_caller?: unknown } | undefined)?.experimental_caller);
+      const next = await changeMarks((store) => replaceMarks(store, owner, marks));
+      return { count: Object.keys(next[owner] ?? {}).length };
+    },
+    async thread_marks() {
+      const store = parseStore(await bb.storage.kv.get<unknown>(MARKS_KEY));
+      return { marks: visibleMarks(store, await enabledPlugins()) };
+    },
     async turn_started({ threadIds }) {
       const starts: Record<string, number> = {};
       await Promise.all([...new Set(threadIds)].map(async (id) => {

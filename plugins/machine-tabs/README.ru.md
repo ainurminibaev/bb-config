@@ -39,3 +39,19 @@ bb plugin install path:"$PWD/plugins/machine-tabs"
 ```
 
 Проверки: `npm run typecheck`, `npm test`.
+
+## Метки других плагинов на значке треда (0.2.10)
+
+Другой плагин может поставить маленькую монохромную метку на значок треда:
+поверх значка проекта (или штатного значка), крупнее значка провайдера, который
+остаётся в своём углу. Machine Tabs не знает, что метка значит.
+
+- RPC через `bb.sdk.plugins.callRpc` (метки принадлежат вызвавшему плагину —
+  по `experimental_caller`; вызовы из приложения и CLI отклоняются):
+  `thread_mark_set { threadId, glyph, tone?, label? }`,
+  `thread_mark_clear { threadId }`, `thread_marks_replace { marks: [...] }`
+  (все метки вызывающего разом). `glyph` — из закрытого набора (`crown`, `bot`,
+  `link`; расширяется в `lib/thread-marks.ts`), `tone` — `neutral` | `accent`
+  (один спокойный золотой) | `muted`; цвета плагины не передают.
+- Метки отключённого или удалённого плагина не рисуются; хранимые данные читаются
+  терпимо. Тесты: `tests/thread-marks.test.mjs`.

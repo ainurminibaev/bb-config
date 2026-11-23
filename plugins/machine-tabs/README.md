@@ -46,3 +46,19 @@ Rows draw the marks other plugins register with `experimental_threadRowMetadata`
 (for example Limit Guard's low-priority arrow, or its pause mark while work
 waits), through the SDK's `experimental_ThreadRowMetadata`, at the right end of
 the title next to bb's own status. Nothing changes on rows without marks.
+
+## Marks on a thread's icon from other plugins (0.2.10)
+
+Another plugin can put a small monochrome mark on a thread's icon: over the
+project mark (or bb's own icon), larger than the provider glyph, which stays in
+its corner. Machine Tabs does not know what a mark means.
+
+- RPC, called through `bb.sdk.plugins.callRpc` (the caller plugin, known from
+  `experimental_caller`, owns its marks; app and CLI calls are refused):
+  `thread_mark_set { threadId, glyph, tone?, label? }`,
+  `thread_mark_clear { threadId }`, `thread_marks_replace { marks: [...] }`
+  (all marks of the caller at once). `glyph` is one of a closed set
+  (`crown`, `bot`, `link`; extend in `lib/thread-marks.ts`), `tone` is
+  `neutral` | `accent` (one calm gold) | `muted`; plugins cannot pass colours.
+- Marks of a disabled or removed plugin are not drawn; stored data is read
+  tolerantly. Tests: `tests/thread-marks.test.mjs`.

@@ -124,3 +124,10 @@ when disabled, BB can omit a section before this renderer is reached.
 
 Rows also show other plugins' row marks (`experimental_threadRowMetadata`), such as
 Limit Guard's arrow for a low-priority thread, at the right end of the title.
+
+## Marks on thread icons from other plugins (0.2.10)
+
+Plugins put a monochrome mark on a thread's icon through Machine Tabs' RPC
+(`thread_mark_set`, `thread_mark_clear`, `thread_marks_replace`; glyph from a
+closed set, tone `neutral` | `accent` | `muted`). The mark sits over the project
+mark, larger than the provider glyph. Marks of disabled plugins are not drawn.
