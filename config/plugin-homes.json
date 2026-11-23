@@ -1,4 +1,11 @@
 {
+  "agent-roster": {
+    "home": "project",
+    "project": "bb-agent-roster",
+    "source": "https://github.com/ainurminibaev/bb-agent-roster",
+    "install": "bb plugin install 'git:https://github.com/ainurminibaev/bb-agent-roster.git@semver:^0.3.0' --yes",
+    "note": "Agents: roster of agent and orchestrator roles; installed from its own repository"
+  },
   "codex-hook-trust": {
     "home": "project",
     "project": "bb-codex-hook-trust",
