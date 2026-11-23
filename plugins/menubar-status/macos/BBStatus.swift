@@ -92,8 +92,26 @@ final class Controller: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     var loaded = false
     var panelURL = URL(string: "about:blank")!
 
+    /// macOS erases a status item's saved place when it is hidden, so the item
+    /// came back leftmost after every restart — behind a long app menu, i.e. gone.
+    /// Keep our own copy of the place and put it back before showing the item.
+    var positionKey: String { "NSStatusItem Preferred Position \(item.autosaveName ?? "Item-0")" }
+    let savedPositionKey = "bbSavedStatusItemPosition"
+    func savePosition() {
+        if let place = UserDefaults.standard.object(forKey: positionKey) {
+            UserDefaults.standard.set(place, forKey: savedPositionKey)
+        }
+    }
+    func restorePosition() {
+        if UserDefaults.standard.object(forKey: positionKey) == nil,
+           let place = UserDefaults.standard.object(forKey: savedPositionKey) {
+            UserDefaults.standard.set(place, forKey: positionKey)
+        }
+    }
+
     func start() {
         // launchd keeps the observer alive; the menu item follows BB Desktop.
+        savePosition()
         item.isVisible = false
         for event in [NSWorkspace.didLaunchApplicationNotification,
                       NSWorkspace.didTerminateApplicationNotification] {
@@ -286,6 +304,7 @@ final class Controller: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             lastSignature = ""
             draw()
         }
+        if desktopRunning { restorePosition() } else { savePosition() }
         item.isVisible = desktopRunning
         NSLog("bb Status: BB Desktop %@; menu item %@", desktopRunning ? "running" : "stopped",
               desktopRunning ? "shown" : "hidden")
