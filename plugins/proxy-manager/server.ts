@@ -1,5 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { createRouting } from './routing';
+import { TtlCache, cachedLoad } from './lib/ttl-cache';
+import { isBusyStatus, THREAD_ACTIVITY_CHANNEL } from './lib/route-poll';
 import { randomUUID } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
@@ -214,23 +216,53 @@ export default async function plugin(bb: BbPluginApi) {
     claudeChecks.set(key, { at: Date.now(), result });
     return result;
   }
+  // The route badge asks route_context every few seconds. What a thread runs on
+  // (provider, environment → machine and folder) does not change between turns,
+  // so it is reused for a minute; the machine's name and connection only briefly,
+  // because the badge shows when a machine goes offline.
+  const threadInfo = new TtlCache<Promise<{ providerId: string; environmentId: string | null }>>(60_000, 200);
+  const environmentInfo = new TtlCache<Promise<{ hostId: string; path: string }>>(60_000, 200);
+  const machineInfo = new TtlCache<Promise<{ name: string; status: string }>>(10_000, 50);
+  const machineOf = (hostId: string) => cachedLoad(machineInfo, hostId, () => bb.sdk.hosts.get({ hostId }).then(h => ({ name: h.name, status: h.status })));
+  const environmentOf = (environmentId: string) => cachedLoad(environmentInfo, environmentId, () => bb.sdk.environments.get({ environmentId }).then(e => ({ hostId: e.hostId, path: e.path })));
+  // Threads with a running turn, from thread.active/idle/failed and corrected by
+  // the thread's status whenever it is read anyway. A restart forgets it; the
+  // next read of the thread fills it in again.
+  const busyThreads = new Set<string>();
+  function markBusy(threadId: string, busy: boolean) {
+    if (busy) { if (busyThreads.size >= 1000) busyThreads.clear(); busyThreads.add(threadId); }
+    else busyThreads.delete(threadId);
+  }
+  const threadOf = (threadId: string) => cachedLoad(threadInfo, threadId, async () => {
+    const thread = await bb.sdk.threads.get({ threadId });
+    markBusy(threadId, isBusyStatus(thread.status));
+    return { providerId: thread.providerId, environmentId: thread.environmentId ?? null };
+  });
+  function announceActivity(threadId: string, busy: boolean) {
+    markBusy(threadId, busy);
+    bb.realtime.publish(THREAD_ACTIVITY_CHANNEL, { threadId, busy });
+  }
+  bb.events.on('thread.active', ({ thread }) => { announceActivity(thread.id, true); });
+  bb.events.on('thread.idle', ({ thread }) => { announceActivity(thread.id, false); });
+  bb.events.on('thread.failed', ({ thread }) => { announceActivity(thread.id, false); });
+  bb.events.on('thread.archived', ({ thread }) => { busyThreads.delete(thread.id); threadInfo.delete(thread.id); });
   bb.rpc.register(rpcContract, {
     route_context: async (input): Promise<RouteContext | null> => {
       let hostId = input.hostId, providerId = input.providerId;
       let path: string | null = null;
       if (input.threadId) {
-        const thread = await bb.sdk.threads.get({ threadId: input.threadId });
+        const thread = await threadOf(input.threadId);
         providerId = thread.providerId;
         if (thread.environmentId) {
-          const environment = await bb.sdk.environments.get({ environmentId: thread.environmentId });
+          const environment = await environmentOf(thread.environmentId);
           hostId = environment.hostId; path = environment.path;
         }
       } else if (input.environmentId) {
-        const environment = await bb.sdk.environments.get({ environmentId: input.environmentId });
+        const environment = await environmentOf(input.environmentId);
         hostId = environment.hostId; path = environment.path;
       }
       if (!hostId || !providerId) return null;
-      const machine = await bb.sdk.hosts.get({ hostId });
+      const machine = await machineOf(hostId);
       const modelMode = (await bb.storage.kv.get<ModelRouteState>(modelKey(hostId, providerId)))?.mode ?? null;
       const binding = (await bindings()).find(b => b.hostId === hostId && b.providerId === providerId);
       const proxyId = binding?.proxyId ?? null;
@@ -240,7 +272,7 @@ export default async function plugin(bb: BbPluginApi) {
       const warning = route ? applied ? null : route.phase === 'ready' ? 'Файлы настроек изменены или машина недоступна' : route.message : binding?.proxyId ? 'Настройка ещё не применена' : null;
       const claudeRoute = providerId === 'claude-code' && machine.status === 'connected'
         ? await inspectClaude(hostId, path, input.threadId) : null;
-      return { modelMode, claudeRoute, hostId, hostName: machine.name, providerId, proxyId, proxyName: proxyId ? proxy?.name ?? 'Прокси не найден' : null, connected: machine.status === 'connected', check: providerId === 'codex' ? (await bb.storage.kv.get<Check>(`check:${hostId}:${proxyId ?? 'direct'}`)) ?? null : null, applied, warning };
+      return { modelMode, claudeRoute, hostId, hostName: machine.name, providerId, proxyId, proxyName: proxyId ? proxy?.name ?? 'Прокси не найден' : null, connected: machine.status === 'connected', check: providerId === 'codex' ? (await bb.storage.kv.get<Check>(`check:${hostId}:${proxyId ?? 'direct'}`)) ?? null : null, applied, warning, ...(input.threadId ? { busy: busyThreads.has(input.threadId) } : {}) };
     },
     gateway_status: async input => {
       const machine = await bb.sdk.hosts.get({ hostId: input.hostId });

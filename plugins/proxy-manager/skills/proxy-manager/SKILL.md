@@ -27,8 +27,12 @@ Credentials live in BB secret settings and the private native .env; never print
 secrets or dump those files. No app artifacts are patched and no custom API gateway
 is used. Version updates require native routing behavior to be revalidated.
 
-Claude route observation is read-only and runs from the composer badge every
-5 seconds. It uses the actual thread's host/directory, Linux /proc or macOS
+Claude route observation is read-only and runs from the composer badge: every
+5 seconds while a turn runs in the thread, every 30 seconds when it is idle or
+for a new thread, never while the browser tab is hidden (at once when shown
+again). The server announces turn start/end on the `thread-activity` realtime
+channel and returns `busy` in `route_context`; it reuses a thread's provider,
+environment and folder for 60 seconds and the machine's name/status for 10. It uses the actual thread's host/directory, Linux /proc or macOS
 ps/lsof. A confirmed direct/proxy label requires a matching established
 process socket. Missing/ambiguous processes or unsupported/custom routes
 remain unconfirmed. Green means observed route, not API health or absence

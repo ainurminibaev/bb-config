@@ -69,7 +69,11 @@ no second machine label is added beside the route. Touch events preserve horizon
 
 ## Claude route observation
 
-The composer checks Claude every 5 seconds while its badge is mounted. A host
+The composer checks Claude every 5 seconds while a turn runs in the thread and
+every 30 seconds when it is idle (or for a new thread); a hidden browser tab does
+not poll and refreshes at once when shown again. The server tells the badge when a
+turn starts or ends, so the switch is immediate. It remembers which machine and
+folder a thread runs in for 60 seconds and the machine's online status for 10. A host
 entry reads Linux `/proc` or macOS `ps`/`lsof` for the Claude CLI or BB Claude
 worker in the thread's actual directory. Multiple candidates, unreadable
 settings, custom/cloud gateways and missing live sockets stay unconfirmed.

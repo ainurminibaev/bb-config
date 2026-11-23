@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState, type FormEvent, type SVGProps } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent, type SVGProps } from 'react';
 import { startVisibleInterval } from './lib/visible-interval';
+import { activityThreadId, claudeFreshMs, pollInterval, THREAD_ACTIVITY_CHANNEL } from './lib/route-poll';
 import { definePluginApp, useRealtime, useRpc, useComposer, useBbNavigate } from '@get-bb/plugin-sdk/app';
 import { createPortal } from 'react-dom';
 import { installComposerFooter, registerFooterRoute } from './composer-footer';
@@ -186,16 +187,33 @@ function RouteBadge() {
   const [resolved, setResolved] = useState<{ key: string; route: RouteContext | null; error: boolean } | null>(null);
   const route = resolved?.key === contextKey ? resolved.route : null;
   const error = resolved?.key === contextKey && resolved.error;
+  // A turn start/end signalled by the server; the next answer replaces it.
+  const [signalledBusy, setSignalledBusy] = useState<{ threadId: string; busy: boolean } | null>(null);
   const refresh = useCallback(async () => {
-    try { const next = await rpc.call('route_context', { threadId, hostId, environmentId, providerId }); setResolved({ key: contextKey, route: next, error: false }); }
+    try { const next = await rpc.call('route_context', { threadId, hostId, environmentId, providerId }); setResolved({ key: contextKey, route: next, error: false }); setSignalledBusy(null); }
     catch { setResolved({ key: contextKey, route: null, error: true }); }
   }, [rpc, threadId, hostId, environmentId, providerId, contextKey]);
-  useEffect(() => { void refresh(); return startVisibleInterval(() => void refresh(), 5000); }, [refresh]);
+  // Every 5 seconds while a turn runs in this thread, every 30 otherwise; the
+  // server signals a turn starting or ending, so the switch does not wait a cycle.
+  const busy = signalledBusy?.threadId === threadId ? signalledBusy.busy : route?.busy ?? false;
+  const interval = pollInterval(threadId, busy);
+  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => startVisibleInterval(() => void refresh(), interval), [refresh, interval]);
   useRealtime('changed', refresh);
+  // Read through a ref: the signal must reach the badge's current thread even if the subscription keeps its first handler.
+  const latest = useRef({ threadId, refresh });
+  latest.current = { threadId, refresh };
+  const onActivity = useCallback((payload: unknown) => {
+    const { threadId: own, refresh: update } = latest.current;
+    if (!own || activityThreadId(payload) !== own) return;
+    setSignalledBusy({ threadId: own, busy: (payload as { busy?: unknown }).busy === true });
+    void update();
+  }, []);
+  useRealtime(THREAD_ACTIVITY_CHANNEL, onActivity);
   const codex = (route?.providerId ?? providerId) === 'codex';
   const claude = (route?.providerId ?? providerId) === 'claude-code';
   const claudeCheck = route?.claudeRoute;
-  const claudeFresh = !!claudeCheck && Date.now() - Date.parse(claudeCheck.checkedAt) < 15_000;
+  const claudeFresh = !!claudeCheck && Date.now() - Date.parse(claudeCheck.checkedAt) < claudeFreshMs(busy);
   const claudeConfirmed = claudeFresh && ['direct', 'proxy'].includes(claudeCheck!.state);
   const providerName = (route?.providerId ?? providerId) === 'claude-code' ? 'Claude Code' : codex ? 'Codex' : route?.providerId ?? providerId ?? 'Агент';
   const warning = error ? 'Не удалось проверить подключение' : route && !route.connected ? 'Машина офлайн' : codex && route ? route.warning || (route.check && !route.check.ok ? route.check.message : null) : null;

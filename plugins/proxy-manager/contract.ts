@@ -45,6 +45,8 @@ export const routeContextSchema = z.object({
   modelMode: z.enum(['direct', 'opencodex']).nullable().optional(),
   hostId: z.string(), hostName: z.string(), providerId: z.string(), proxyId: z.string().nullable(), proxyName: z.string().nullable(), connected: z.boolean(),
   claudeRoute: claudeRouteSchema.nullable().optional(), check: checkSchema.nullable(), applied: z.boolean(), warning: z.string().nullable(),
+  /** A turn is running in the thread (only for a thread id). Older servers omit it. */
+  busy: z.boolean().optional(),
 });
 export type RouteContext = z.infer<typeof routeContextSchema>;
 export const rpcContract = defineRpcContract({
