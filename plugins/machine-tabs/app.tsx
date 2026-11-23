@@ -42,6 +42,7 @@ import { textMatches } from "./lib/text-match";
 import { installSidebarView } from "./lib/sidebar-view";
 import { waitForThreadListBundle } from "./lib/thread-list-bundle";
 import { loadToken } from "./lib/load-token";
+import { LOGO_INK, useLogoMasks } from "./lib/logo-tone";
 import { SearchExtras, SearchSettings, type SearchOptions } from "./lib/thread-search";
 import { PROJECT_QUICK_CSS, ProjectQuickMenu, StateMark } from "./lib/project-quick";
 import { REVEAL_CSS, revealProject, revealThread } from "./lib/sidebar-reveal";
@@ -96,6 +97,8 @@ interface ProjectBadge {
   personal: boolean;
   /** The project's own image (a data URL), drawn instead of the letters. */
   image: string | null;
+  /** The image as a one-colour mask, so every logo has the same tone. */
+  mask?: string;
 }
 
 /** Badges by thread id; null draws none. */
@@ -278,7 +281,17 @@ function ProjectBadgeMark({
           : { backgroundColor: GREY_MARK_BG, color: GREY_MARK_FG }
       }
     >
-      {badge.image !== null ? (
+      {badge.mask ? (
+        <span
+          aria-hidden="true"
+          className="size-full"
+          style={{
+            backgroundColor: LOGO_INK,
+            WebkitMask: `center / contain no-repeat url("${badge.mask}")`,
+            mask: `center / contain no-repeat url("${badge.mask}")`,
+          }}
+        />
+      ) : badge.image !== null ? (
         <img
           src={badge.image}
           alt=""
@@ -410,7 +423,9 @@ function projectHeaderCss(badges: ReadonlyMap<string, ProjectBadge>): string {
   for (const [id, badge] of badges) {
     if (badge.personal) continue;
     const mark =
-      badge.image !== null
+      badge.mask
+        ? `content: ""; background: ${LOGO_INK}; -webkit-mask: center / contain no-repeat url("${badge.mask}"); mask: center / contain no-repeat url("${badge.mask}");`
+        : badge.image !== null
         ? `content: ""; background: center / contain no-repeat url("${badge.image}"); filter: grayscale(1); opacity: 0.8;`
         : `content: ${JSON.stringify(badge.letters)}; background: ${GREY_MARK_BG}; color: ${GREY_MARK_FG};`;
     rules.push(
@@ -1521,6 +1536,7 @@ function MachineThreadList(props: PluginThreadListProps) {
   }, [shown]);
 
   const projectIcons = useProjectIcons();
+  const logoMasks = useLogoMasks(projectIcons);
   const projectBadges = useMemo(() => {
     const map = new Map<string, ProjectBadge>();
     for (const project of projects) {
@@ -1533,11 +1549,12 @@ function MachineThreadList(props: PluginThreadListProps) {
               name: project.name,
               personal: false,
               image: projectIcons[project.id] ?? null,
+              mask: logoMasks[project.id],
             },
       );
     }
     return map;
-  }, [projects, projectIcons]);
+  }, [projects, projectIcons, logoMasks]);
   const badges = useMemo(() => {
     const map = new Map<string, ProjectBadge>();
     for (const thread of threads) {

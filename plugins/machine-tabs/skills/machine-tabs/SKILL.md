@@ -106,7 +106,11 @@ The search row stays pinned at the top of the sidebar while the list scrolls.
 A thread row and a project header show the project's mark: two letters, or
 the project's own image when its root holds one of `.bb/icon.png`,
 `.bb/icon.svg`, `favicon.png`, `favicon.svg`, `favicon.ico` (first found, up
-to 256 KB). Images are drawn grey. They are re-read every five minutes;
+to 256 KB). Since 0.2.18 every image is drawn as a one-colour silhouette in
+the theme's muted text colour, so all marks share one tone whatever the
+file's colours (`currentColor`, black, a coloured plate); a plate keeps its
+shape and its contrasting lines are cut out. An image that cannot be read is
+drawn grey as before. They are re-read every five minutes;
 `bb machine-tabs icons` re-reads them now and lists the projects that have one.
 
 
