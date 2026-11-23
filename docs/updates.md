@@ -39,7 +39,7 @@
 Чистая машина (на машине сервера BB, нужны Node.js 22+, npm, Python 3.11+, git):
 
 ```sh
-git clone https://github.com/ainurminibaev/bb-config.git
+git clone https://github.com/ainurminibaev/mission-control-kit.git bb-config
 cd bb-config
 python3 scripts/updates.py apply
 ```

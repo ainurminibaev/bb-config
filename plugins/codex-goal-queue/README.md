@@ -27,7 +27,7 @@ Behaviour and limits for agents: `skills/codex-goal-queue/SKILL.md`.
 From the BB plugin store (Codex Goal Queue), or directly:
 
 ```sh
-bb plugin install git:https://github.com/ainurminibaev/bb-config.git@^0.2.0 --subdirectory plugins/codex-goal-queue --tag-prefix codex-goal-queue/ --yes
+bb plugin install git:https://github.com/ainurminibaev/mission-control-kit.git@^0.2.0 --subdirectory plugins/codex-goal-queue --tag-prefix codex-goal-queue/ --yes
 ```
 
 Requires BB 0.49 or newer.

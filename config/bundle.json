@@ -373,5 +373,5 @@
    "description": "Актуальный context-mode во всех агентах на всех машинах BB: setup для Claude Code, Codex и других, MCP для Antigravity и Cursor."
   }
  ],
- "repository": "https://github.com/ainurminibaev/bb-config"
+ "repository": "https://github.com/ainurminibaev/mission-control-kit"
 }

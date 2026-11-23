@@ -3143,7 +3143,7 @@ Realtime 2.1 по подписке) и голос Codex Live `codexLiveVoice = "
   handoff-button, project-machine-setup, shared-guides, git-thread-provenance,
   codex-goal-queue, fresh-thread-hint, project-open, code-open,
   thread-account-usage, push-button) стоят из Git-источника
-  `git:https://github.com/ainurminibaev/bb-config.git@^X.Y.0 --subdirectory
+  `git:https://github.com/ainurminibaev/mission-control-kit.git@^X.Y.0 --subdirectory
   plugins/<id> --tag-prefix <id>/`. Новая версия такого плагина — тег
   `<id>/vX.Y.Z` на коммите main с той же версией в `package.json`; BB сам
   показывает её (Settings → Updates, `bb plugin outdated`) и ставит

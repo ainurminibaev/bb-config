@@ -1,6 +1,10 @@
 **English** · [Русский](README.ru.md)
 
-# bb-config: plugins and customizations for BB
+# Mission Control Kit for BB
+
+BB turned into a workstation for developers and founders who run dozens of
+agents and orchestrators across several machines. Formerly `bb-config`; the old
+address still works.
 
 A set of add-ons for [BB](https://getbb.app), the agentic IDE: machine tabs for
 the thread list, a project catalog, proxy management, a voice mode, account
@@ -43,7 +47,7 @@ and the catalog plugins the set builds on: Handoff, Needs You, Tokenomics, KodaF
 On the BB server machine (BB 0.49+, Node.js 22+, npm, Python 3.11+, git):
 
 ```sh
-git clone https://github.com/ainurminibaev/bb-config.git
+git clone https://github.com/ainurminibaev/mission-control-kit.git bb-config
 cd bb-config
 python3 scripts/updates.py apply
 ```
@@ -60,7 +64,7 @@ components out. A repeated run is safe and finishes what a failure left.
 ## Install one plugin
 
 ```sh
-git clone https://github.com/ainurminibaev/bb-config.git
+git clone https://github.com/ainurminibaev/mission-control-kit.git bb-config
 cd bb-config
 npm --prefix plugins/machine-tabs ci --include=dev
 bb plugin build plugins/machine-tabs
@@ -80,7 +84,7 @@ and lists what is left for you. **Ask AI** appears only if something failed. The
 same by hand:
 
 ```sh
-python3 scripts/updates.py apply vX.Y.Z --commit <sha> --repository ainurminibaev/bb-config
+python3 scripts/updates.py apply vX.Y.Z --commit <sha> --repository ainurminibaev/mission-control-kit
 ```
 
 An update installs missing components of the set and updates older ones,

@@ -1,6 +1,10 @@
 [English](README.md) · **Русский**
 
-# Плагины для BB
+# Mission Control Kit для BB
+
+BB как рабочее место для разработчиков и предпринимателей, которые ведут десятки
+агентов и оркестраторов на нескольких машинах. Раньше назывался `bb-config`;
+старый адрес продолжает работать.
 
 Набор дополнений для [BB](https://getbb.app): вкладки машин, управление прокси,
 голосовой режим, каталог проектов и небольшие кнопки к существующим
@@ -35,7 +39,7 @@
 плагины из каталога. Нужны BB 0.49+, Node.js 22+, npm, Python 3.11+ и git.
 
 ```sh
-git clone https://github.com/ainurminibaev/bb-config.git
+git clone https://github.com/ainurminibaev/mission-control-kit.git bb-config
 cd bb-config
 python3 scripts/updates.py apply
 ```
@@ -56,7 +60,7 @@ Git for Windows и Python 3.11+; подробности — раздел «Windo
 Локальный путь установки должен быть доступен самому серверу BB.
 
 ```sh
-git clone https://github.com/ainurminibaev/bb-config.git
+git clone https://github.com/ainurminibaev/mission-control-kit.git bb-config
 cd bb-config
 npm --prefix plugins/machine-tabs ci --include=dev
 bb plugin build plugins/machine-tabs
@@ -87,7 +91,7 @@ Web BB Button без адреса показывает **«Требуется н
 вручную:
 
 ```sh
-python3 scripts/updates.py apply vX.Y.Z --commit <sha> --repository ainurminibaev/bb-config
+python3 scripts/updates.py apply vX.Y.Z --commit <sha> --repository ainurminibaev/mission-control-kit
 ```
 
 Обновление ставит недостающие компоненты набора и обновляет устаревшие, в том
