@@ -223,7 +223,10 @@ function RouteBadge() {
 }
 export default definePluginApp(app => {
   app.contentScripts.register({ id: 'composer-route-footer', mount: ({ signal }) => installComposerFooter(signal) });
-  app.composer.customize({ id: 'proxy-route', scopes: ['thread', 'new-thread'], actions: [{ id: 'route', component: RouteBadge }] });
+  // A bare banner, not a composer action: the chip is portaled into the footer,
+  // and bb shows only three plugin action groups inline before a "…" overflow,
+  // so an invisible anchor there pushed a real action (voice mode) into "…".
+  app.composer.customize({ id: 'proxy-route', scopes: ['thread', 'new-thread'], banners: [{ id: 'route', chrome: 'bare', component: RouteBadge }] });
   app.slots.navPanel({ id: 'proxies', title: 'Прокси', icon: 'Network', path: 'proxies', component: ProxiesPage });
   app.slots.settingsSection({ id: 'connections', title: 'Прокси и подключения', component: ProxiesPage });
 });
