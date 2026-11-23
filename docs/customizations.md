@@ -2733,7 +2733,15 @@ BB сам переспрашивает плагин о ждущем сообще
 `thread.failed` и один раз при запуске. Если проверка в плагине падает,
 сообщение уходит без изменений, в журнал пишется предупреждение.
 
-Настроек, данных и команд нет. Установка и обновление из `plugins/codex-goal-queue`:
+С 0.2.0 (подготовка к каталогу BB) тексты карточки и отказов по умолчанию на
+английском; настройка `language` (`en`/`ru`) возвращает русский:
+`bb plugin config codex-goal-queue set language ru` — на установке автора
+выставлена `ru`, снимок настроек её сохраняет. Данных и команд нет; лицензия
+MIT (`LICENSE` и `license` в package.json), длинное описание для каталога —
+`PLUGIN_OVERVIEW.md`. Тест `server.test.ts` проверяет оба языка и откат на
+английский при неизвестном значении.
+
+Установка и обновление из `plugins/codex-goal-queue`:
 `npm ci --include=dev`, `npm test`, `npm run typecheck`, `bb plugin build .`,
 `bb plugin install .` (первый раз) или `bb plugin reload codex-goal-queue`.
 Восстановление: запись в `config/plugins.json`, `scripts/restore.py --plugins

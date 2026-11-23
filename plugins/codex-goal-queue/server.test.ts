@@ -1,14 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CLEAR_MESSAGE, PAUSE_MESSAGE, RESUME_REASON, decide, hasHeldResume, parseGoalCommand } from "./policy.ts";
+import { decide, hasHeldResume, parseGoalCommand, texts } from "./policy.ts";
+
+const en = texts("en");
 
 const text = (value: string) => ({ blocks: [{ type: "text" }], text: value });
 const running = (value: string, providerId = "codex") =>
   decide({ providerId, attempt: "join-turn", fromUser: true, ...text(value) });
 
 test("/goal resume sent into a running Codex turn waits for the turn to end", () => {
-  assert.deepEqual(running("/goal resume"), { action: "wait", reason: RESUME_REASON });
-  assert.deepEqual(running("  /goal   Resume \n"), { action: "wait", reason: RESUME_REASON });
+  assert.deepEqual(running("/goal resume"), { action: "wait", reason: en.resume });
+  assert.deepEqual(running("  /goal   Resume \n"), { action: "wait", reason: en.resume });
 });
 
 test("the held command proceeds once it starts a turn, so Codex runs it", () => {
@@ -16,8 +18,8 @@ test("the held command proceeds once it starts a turn, so Codex runs it", () => 
 });
 
 test("/goal pause and /goal clear sent into a running turn are refused with what to do instead", () => {
-  assert.deepEqual(running("/goal pause"), { action: "reject", message: PAUSE_MESSAGE });
-  assert.deepEqual(running("/goal clear"), { action: "reject", message: CLEAR_MESSAGE });
+  assert.deepEqual(running("/goal pause"), { action: "reject", message: en.pause });
+  assert.deepEqual(running("/goal clear"), { action: "reject", message: en.clear });
 });
 
 test("ordinary messages, natural-language requests and other /goal text are never held", () => {
@@ -50,4 +52,13 @@ test("a repeat is recognised only by a resume this plugin is already holding", (
   assert.equal(hasHeldResume([row({ kind: "thread-busy" }, "/goal resume")], "codex-goal-queue"), false);
   assert.equal(hasHeldResume([row({ kind: "plugin", pluginId: "other" }, "/goal resume")], "codex-goal-queue"), false);
   for (const rows of [undefined, null, {}, [null, 1, {}]]) assert.equal(hasHeldResume(rows, "codex-goal-queue"), false);
+});
+
+test("messages are English by default and Russian when chosen; unknown values fall back to English", () => {
+  const ru = texts("ru");
+  assert.deepEqual(decide({ providerId: "codex", attempt: "join-turn", fromUser: true, language: "ru", ...text("/goal pause") }), { action: "reject", message: ru.pause });
+  assert.deepEqual(decide({ providerId: "codex", attempt: "join-turn", fromUser: true, language: "ru", ...text("/goal resume") }), { action: "wait", reason: ru.resume });
+  assert.equal(texts(undefined), en);
+  assert.equal(texts("de"), en);
+  assert.match(en.pause, /^[\x20-\x7E]+$/u);
 });
