@@ -140,3 +140,11 @@ closed set incl. `telegram`, tone `neutral` | `accent` | `muted`, place `corner`
 `top`, size `normal` | `large`; up to two marks per thread per plugin, one per
 place). `top` sits over the project mark like a crown; `corner` bottom right. The
 provider glyph keeps its corner. Marks of disabled plugins are not drawn.
+
+Machine Tabs 0.2.19 поднимает активные треды ролей в группах проектов. Агенты
+идут перед оркестраторами, внутри каждой категории — по свежести. Все роли
+помещаются на первой странице. Остальные строки сохраняют порядок BB. Источник —
+RPC agent-roster 0.5.0 `roster_list`, поля `kind` и `active.threadId` для
+`active.kind=thread`. При недоступности плагина действует обычный порядок.
+Тест — `tests/project-roles.test.mjs`. В «Last 5» стрелка раскрытого родителя
+появляется поверх счётчика при наведении. Обновление — `bb plugin update machine-tabs`.

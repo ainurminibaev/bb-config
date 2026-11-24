@@ -33,7 +33,7 @@ import type { rpcContract, TabsState } from "./server";
 import { ACCENT_COLOR, ACCENT_HI, ACCENT_LO, CROWN, FILLED_GLYPHS, MARK_PATHS, type ThreadMark, type VisibleMark } from "./lib/thread-marks";
 import { cn } from "@/lib/utils";
 import { automaticProjectSectionOrder, projectsByLatestThread } from "./lib/project-order";
-import { GROUP_PAGING_CSS, withGroupPaging } from "./lib/group-paging";
+import { GROUP_PAGING_CSS, ProjectRoleRanks, withGroupPaging } from "./lib/group-paging";
 import { withProjectAliases } from "./lib/project-alias-view";
 import { TOPICS, matchesFilters, shownOfTotal, topicForTitle, withAncestors, type RowMark, type Topic } from "./lib/thread-topics";
 import { ROW_MARK_CSS, RowMarkChooser } from "./lib/row-mark-chooser";
@@ -1303,6 +1303,19 @@ span:has(> .bb-thread-title > [data-machine-tabs-row-meta]:not(:empty)),
 [data-machine-tabs-list] [data-sidebar-rename-row] > span:has(> a[data-sidebar-thread-id]) button[aria-expanded][data-sidebar-rename-anchor] {
   margin-left: auto;
 }
+/* BB hides the expanded row's chevron on pointer devices. Overlay its
+   count when the control is revealed, keeping the clock and title in place. */
+@media (hover: hover) {
+  [data-machine-tabs-recent] [data-sidebar-rename-row]:has([data-machine-tabs-inside]) > span:has(> a[data-sidebar-thread-id]):has(button.bb-sidebar-hover-actions[aria-expanded]) {
+    position: relative; padding-right: 0;
+  }
+  [data-machine-tabs-recent] [data-sidebar-rename-row]:has([data-machine-tabs-inside]) > span:has(> a[data-sidebar-thread-id]) button.bb-sidebar-hover-actions[aria-expanded] {
+    position: absolute; right: 0;
+  }
+  [data-machine-tabs-recent] [data-sidebar-rename-row]:is(:hover, :focus-within):has(button.bb-sidebar-hover-actions[aria-expanded]) [data-machine-tabs-inside] {
+    visibility: hidden;
+  }
+}
 /* The same column for bb's "thread of another project" folder mark: a short
    title no longer pulls it to the middle of the row. An expander before it keeps
    the auto margin, so the mark follows right after the arrow. */
@@ -1412,6 +1425,23 @@ function MachineThreadList(props: PluginThreadListProps) {
   // Project marks stay until the user picks topic icons. The question comes once the list first
   // draws a mark before a title, and again with the filters if it was put off.
   const markRpc = useRpc<typeof rpcContract>();
+  const [roleRanks, setRoleRanks] = useState<Record<string, number>>({});
+  useEffect(() => {
+    let current = true;
+    let timer: number;
+    async function refresh() {
+      try {
+        const ranks = await markRpc.call("project_roles", null);
+        if (current) setRoleRanks(ranks);
+      } catch {
+        if (current) setRoleRanks({});
+      } finally {
+        if (current) timer = window.setTimeout(refresh, 60_000);
+      }
+    }
+    void refresh();
+    return () => { current = false; window.clearTimeout(timer); };
+  }, [markRpc]);
   const turnStarts = useCallback(
     (threadIds: string[]) => markRpc.call("turn_started", { threadIds }).then((result) => result.starts),
     [markRpc],
@@ -1740,7 +1770,7 @@ function MachineThreadList(props: PluginThreadListProps) {
 
   const mainBlock = useMemo(() => (
     NativeList && ready ? (
-      <RowThreads.Provider value={threadsById}><RowInside.Provider value={insideById}><ProjectBadges.Provider value={badges}>
+      <ProjectRoleRanks.Provider value={roleRanks}><RowThreads.Provider value={threadsById}><RowInside.Provider value={insideById}><ProjectBadges.Provider value={badges}>
       <div data-machine-tabs-list="" data-machine-tabs-host-id={baseView.machineId ?? undefined} data-machine-tabs-hide-empty={hideEmpty ? "" : undefined}>
         {outer === "none" ? (
           <MachineFilter.Provider value={baseView}>
@@ -1798,7 +1828,7 @@ function MachineThreadList(props: PluginThreadListProps) {
           })
         )}
       </div>
-      </ProjectBadges.Provider></RowInside.Provider></RowThreads.Provider>
+      </ProjectBadges.Provider></RowInside.Provider></RowThreads.Provider></ProjectRoleRanks.Provider>
     ) : error ? (
       <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
         Machine Tabs could not load bb’s thread list. {error}
@@ -1808,7 +1838,7 @@ function MachineThreadList(props: PluginThreadListProps) {
         Waiting for bb’s thread list…
       </p>
     )
-  ), [NativeList, ready, threadsById, insideById, badges, baseView, hideEmpty, outer, groups,
+  ), [roleRanks, NativeList, ready, threadsById, insideById, badges, baseView, hideEmpty, outer, groups,
     collapsed, toggle, listKey, props, projectBadges, error]);
 
   return (

@@ -3436,3 +3436,11 @@ Project Open 0.3.2 и обработчик 0.3.0 выделяют сам фай�
 6 секунд показывается выделенной в родительской. Обновить на Mac:
 `python3 plugins/project-open/macos/install.py --config <действующий config.json>`.
 Тесты: `plugins/project-open/macos/test_open_folder.py`.
+
+Machine Tabs 0.2.19 поднимает активные треды ролей в группах проектов. Агенты
+идут перед оркестраторами, внутри каждой категории — по свежести. Все роли
+помещаются на первой странице. Остальные строки сохраняют порядок BB. Источник —
+RPC agent-roster 0.5.0 `roster_list`, поля `kind` и `active.threadId` для
+`active.kind=thread`. При недоступности плагина действует обычный порядок.
+Тест — `tests/project-roles.test.mjs`. В «Last 5» стрелка раскрытого родителя
+появляется поверх счётчика при наведении. Обновление — `bb plugin update machine-tabs`.

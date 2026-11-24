@@ -1,3 +1,4 @@
+import { activeRoles } from "./lib/project-roles";
 // bb-plugin-machine-tabs — backend.
 //
 // Keeps the machine list and the selected machine tab (synced across
@@ -55,6 +56,7 @@ export const rpcContract = defineRpcContract({
   thread_mark_set: { input: markInput, output: z.object({ ok: z.literal(true) }) },
   thread_mark_clear: { input: z.object({ threadId: z.string().max(64), place: z.enum(MARK_PLACES).optional() }), output: z.object({ ok: z.literal(true) }) },
   thread_marks_replace: { input: z.object({ marks: z.array(markInput).max(1000) }), output: z.object({ count: z.number() }) },
+  project_roles: { input: z.null(), output: z.record(z.string(), z.number()) },
   thread_marks: { input: z.null(), output: z.object({ marks: z.record(z.string(), z.array(markOutput)) }) },
   row_mark: { input: z.null(), output: z.object({ rowMark: rowMarkSchema }) },
   set_row_mark: {
@@ -383,6 +385,15 @@ export default async function plugin(bb: BbPluginApi) {
       const owner = markOwner((ctx as { experimental_caller?: unknown } | undefined)?.experimental_caller);
       const next = await changeMarks((store) => replaceMarks(store, owner, marks));
       return { count: Object.keys(next[owner] ?? {}).length };
+    },
+    async project_roles() {
+      try {
+        const result = await bb.sdk.plugins.callRpc({ pluginId: "agent-roster", method: "roster_list",
+          input: null, outputSchema: z.object({ roles: z.array(z.unknown()) }) });
+        return activeRoles(result.roles);
+      } catch {
+        return {};
+      }
     },
     async thread_marks() {
       const store = parseStore(await bb.storage.kv.get<unknown>(MARKS_KEY));

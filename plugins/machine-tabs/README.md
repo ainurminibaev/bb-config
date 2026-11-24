@@ -68,3 +68,8 @@ its corner. Machine Tabs does not know what a mark means.
   as before.
 - Marks of a disabled or removed plugin are not drawn; stored data is read
   tolerantly. Tests: `tests/thread-marks.test.mjs`.
+
+Project groups show active Agent Roster threads first (agents, then orchestrators,
+newest activity first in each category). All roles fit on the first page, even
+when there are more than five. Other threads retain BB's ordering. Last 5 uses
+its usual activity order. On desktop its hover-only chevron shares the count's space.

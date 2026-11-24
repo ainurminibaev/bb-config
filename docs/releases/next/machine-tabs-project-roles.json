@@ -1,0 +1,24 @@
+{
+  "id": "machine-tabs-project-roles",
+  "title": "Machine Tabs 0.2.19 — роли на первой странице проекта",
+  "component": "machine-tabs",
+  "where": "server",
+  "kind": "command",
+  "applies": [
+    "{python}",
+    "scripts/machine_tabs_roles_update.py",
+    "applicable"
+  ],
+  "apply": [
+    "{python}",
+    "scripts/machine_tabs_roles_update.py",
+    "apply"
+  ],
+  "verify": [
+    "{python}",
+    "scripts/machine_tabs_roles_update.py",
+    "check"
+  ],
+  "rerun": "Актуальная работающая версия проходит проверку без установки.",
+  "rollback": "Установите Machine Tabs из предыдущего тега machine-tabs/v0.2.18."
+}

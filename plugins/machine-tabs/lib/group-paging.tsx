@@ -1,5 +1,17 @@
-import { createElement, useId, useState } from "react";
+import { projectRolesFirst } from "./project-roles";
+import { createContext, createElement, useContext, useMemo, useId, useState } from "react";
 import type { ComponentType } from "react";
+
+export const ProjectRoleRanks = createContext<Record<string, number>>({});
+const ProjectPage = createContext<{ firstKey: string; size: number } | null>(null);
+
+function ProjectItems({ Component, nativeProps }: { Component: ComponentType<any>; nativeProps: Props }) {
+  const ranks = useContext(ProjectRoleRanks);
+  const ordered = useMemo(() => projectRolesFirst(nativeProps.items, ranks), [nativeProps.items, ranks]);
+  const thread = ordered.items[0]?.node?.thread;
+  const page = thread ? { firstKey: "thread:" + thread.id, size: ordered.firstPage } : null;
+  return <ProjectPage.Provider value={page}>{createElement(Component, { ...nativeProps, items: ordered.items })}</ProjectPage.Provider>;
+}
 
 const PAGE_SIZE = 5;
 type Props = Record<string, any>;
@@ -17,7 +29,9 @@ function PagedList({ Component, nativeProps, pinned }: {
   const id = useId();
   const items = pinned ? nativeProps.rootItems : nativeProps.itemKeys;
   const count = items.length;
-  const visible = Math.min(limit, count);
+  const project = useContext(ProjectPage);
+  const firstPage = project && items[0] === project.firstKey ? project.size : PAGE_SIZE;
+  const visible = Math.min(firstPage + limit - PAGE_SIZE, count);
   const pagedProps = pinned
     ? {
         ...nativeProps,
@@ -32,15 +46,15 @@ function PagedList({ Component, nativeProps, pinned }: {
   return (
     <div data-machine-tabs-page="">
       <div id={id}>{createElement(Component, pagedProps)}</div>
-      {count > PAGE_SIZE ? (
+      {count > firstPage ? (
         <div className="machine-tabs-pager">
           {visible < count ? (
             <button type="button" aria-controls={id}
-              onClick={() => setLimit(visible + PAGE_SIZE)}>
+              onClick={() => setLimit(limit + PAGE_SIZE)}>
               <span aria-hidden="true">↓</span> Показать ещё
             </button>
           ) : null}
-          {visible > PAGE_SIZE ? (
+          {visible > firstPage ? (
             <button type="button" aria-controls={id}
               onClick={() => setLimit(PAGE_SIZE)}>
               <span aria-hidden="true">↑</span> Свернуть
@@ -64,6 +78,10 @@ export function withGroupPaging(runtime: Record<string, any>) {
     const list = props && typeof type !== "string" &&
       typeof props.onToggleThreadCollapsed === "function" &&
       props.collapsedThreadIds instanceof Set;
+    if (list && Array.isArray(props.items) && typeof props.projectId === "string" &&
+        props.sortableParentKey === props.projectId) {
+      return factory(ProjectItems, { Component: type, nativeProps: props }, key);
+    }
     const pinned = list && Array.isArray(props.rootItems) &&
       Array.isArray(props.rootNodes) && "onReorderPinnedRoot" in props;
     const normal = props && typeof type !== "string" &&
