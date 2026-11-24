@@ -124,5 +124,88 @@ class SelectedFile(unittest.TestCase):
             self.assertIsNone(handler.selected_entry('server', Path('/Volumes/x/app'), '/srv/projects/app', 'a', settings))
 
 
+class AutomaticMachines(unittest.TestCase):
+    KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB0000000000000000000000000000000000000000000'
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.base = Path(directory.name).resolve()
+        patch = mock.patch.object(handler, 'BASE', self.base)
+        patch.start(); self.addCleanup(patch.stop)
+
+    def settings(self, **extra):
+        return {'bb': {'self': 'mac', 'machines': {
+            'mac': {'name': 'Mac', 'roots': [str(self.base)]},
+            'srv': {'name': 'Сервер — (1)', 'roots': ['/srv/a', '/srv/a/nested', '/', '/srv/../etc'], 'hostKeys': [self.KEY]},
+            'bare': {'name': 'x', 'roots': ['/srv/a'], 'hostKeys': []}}}, **extra}
+
+    def test_roots_come_only_from_bb(self):
+        with mock.patch.object(handler, 'pick_alias', return_value='srv-alias'):
+            profile = handler.profile_for('srv', '/srv/a/nested/deep', self.settings())
+        self.assertEqual((profile['root'], profile['sshProfile'], profile['hostKeys']), ('/srv/a', 'srv-alias', [self.KEY]))
+        self.assertRegex(profile['label'], r'^[\w .-]{1,80}$')
+        for path in ('/etc', '/srv', '/srv/ab'):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                handler.profile_for('srv', path, self.settings())
+        with self.assertRaises(ValueError):
+            handler.profile_for('missing', '/srv/a', self.settings())
+        with self.assertRaisesRegex(ValueError, 'Open on Desktop'):
+            handler.profile_for('bare', '/srv/a', self.settings())
+
+    def test_this_mac_and_manual_records(self):
+        self.assertEqual(mounted_folder('mac', str(self.base), self.settings()), self.base)
+        manual = {'mode': 'sftp', 'sshProfile': 'mine', 'root': '/srv', 'label': 'Mine'}
+        profile = handler.profile_for('srv', '/srv/a', self.settings(hosts={'srv': manual}))
+        self.assertEqual(profile, {**manual, 'key': 'srv'})
+        bound = handler.profile_for('srv', '/srv/a', self.settings(bindings={'srv': 'chosen'}))
+        self.assertEqual((bound['sshProfile'], bound['hostKeys']), ('chosen', [self.KEY]))
+
+    def test_alias_is_matched_by_host_key_not_by_name(self):
+        config = self.base / 'config'
+        (self.base / 'known').write_text('10.0.0.1 ' + self.KEY + '\n10.0.0.2 ' + self.KEY[:-1] + '1\n[10.0.0.3]:2222 ' + self.KEY + '\n')
+        (self.base / 'more.conf').write_text('Host other srv\n')
+        config.write_text('Host one\nHost same\nInclude more.conf\nHost *.wild !no\n')
+        self.assertEqual(handler.ssh_aliases(config), ['one', 'same', 'other', 'srv'])
+        hosts = {'one': ('10.0.0.1', '22'), 'same': ('10.0.0.1', '22'), 'other': ('10.0.0.2', '22'), 'srv': ('10.0.0.2', '22')}
+        options = lambda alias: {'hostname': hosts[alias][0], 'port': hosts[alias][1], 'user': 'u', 'userknownhostsfile': str(self.base / 'known')}
+        with mock.patch.object(handler, 'ssh_options', side_effect=options):
+            self.assertEqual(handler.pick_alias([self.KEY], config), 'one')
+            hosts['other'] = ('10.0.0.3', '2222')
+            with self.assertRaisesRegex(ValueError, 'bindings'):
+                handler.pick_alias([self.KEY], config)
+            with self.assertRaisesRegex(ValueError, 'нет SSH'):
+                handler.pick_alias(['ssh-ed25519 AAAAnone'], config)
+
+    def test_pinned_connection_and_breaker(self):
+        profile = {'key': 'srv-1', 'sshProfile': 'a', 'hostKeys': [self.KEY], 'root': '/srv/a'}
+        command = handler.ssh_command(profile)
+        self.assertIn('-oStrictHostKeyChecking=yes', command)
+        self.assertIn('-oServerAliveInterval=4', command)
+        self.assertEqual((self.base / 'State/srv-1.known_hosts').read_text(), 'bb-machine ' + self.KEY + '\n')
+        fake = self.base / 'ssh'
+        fake.write_text('#!/bin/sh\necho run >> ' + str(self.base / 'runs') + '\nexit 255\n'); fake.chmod(0o700)
+        with mock.patch.object(handler, 'ssh_command', return_value=[str(fake)]):
+            script = handler.ssh_wrapper(profile)
+        for _ in range(3):
+            self.assertEqual(subprocess.run(['/bin/sh', str(script), '-s', 'sftp']).returncode, 255)
+        self.assertEqual((self.base / 'runs').read_text().count('run'), 1)
+
+    def test_files_and_busy_machine_are_explained(self):
+        file = self.base / 'a.txt'; file.write_text('x')
+        with self.assertRaisesRegex(ValueError, 'файл'):
+            mounted_folder('mac', str(file), self.settings())
+        import fcntl
+        with (self.base / 'lock').open('a') as one, (self.base / 'lock').open('a') as two:
+            fcntl.flock(one, fcntl.LOCK_EX)
+            with self.assertRaisesRegex(ValueError, 'ещё выполняется'):
+                handler.lock_within(two, 0.3)
+
+    def test_finder_that_does_not_answer_is_refused(self):
+        with mock.patch.object(handler.subprocess, 'run', side_effect=subprocess.TimeoutExpired('open', 1)):
+            with self.assertRaisesRegex(ValueError, 'Finder не отвечает'):
+                handler.show(Path('/tmp'), None)
+
+
 if __name__ == '__main__':
     unittest.main()
