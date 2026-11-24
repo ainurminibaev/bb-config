@@ -151,12 +151,13 @@ function ExplorerMenu() {
   const { values } = useSettings();
   const navigate = useBbNavigate();
   const finderHelper = values?.finderHelper === true;
+  const finderSelect = values?.finderSelect === true;
   useEffect(() => {
     if (!finderHelper) return;
-    const listen = (event: Event) => addFinderItem(event, clientMode(finderHelper), url => navigate.openUrl(url));
+    const listen = (event: Event) => addFinderItem(event, clientMode(finderHelper), url => navigate.openUrl(url), finderSelect);
     window.addEventListener(EXPLORER_MENU_EVENT, listen);
     return () => window.removeEventListener(EXPLORER_MENU_EVENT, listen);
-  }, [finderHelper, navigate]);
+  }, [finderHelper, finderSelect, navigate]);
   return null;
 }
 

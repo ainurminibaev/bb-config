@@ -35,7 +35,7 @@ def main():
         with info.open('rb') as stream:
             plist = plistlib.load(stream)
         plist.update(CFBundleIdentifier='app.getbb.project-folder', CFBundleName='BB Project Folder',
-                     CFBundleShortVersionString='0.2.0', CFBundleVersion='2',
+                     CFBundleShortVersionString='0.3.0', CFBundleVersion='3',
                      LSUIElement=True, CFBundleURLTypes=[{'CFBundleURLName': 'BB project folder',
                      'CFBundleURLSchemes': ['bb-project-folder'], 'CFBundleTypeRole': 'Viewer'}])
         folder_icon = Path('/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericFolderIcon.icns')

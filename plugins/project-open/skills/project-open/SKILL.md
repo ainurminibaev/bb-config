@@ -45,3 +45,9 @@ docs/explorer-menu.md). It shows only on a desktop Mac with `finderHelper` on; a
 opens its folder. The link is built by `finderFolderUrl`; keep that logic in one place.
 Without KodaForge nothing changes; if the item is missing, check that KodaForge is the
 fork (`bb plugin source kodaforge`) and that `finderHelper` is on.
+
+Selecting the file itself (`open -R`) needs handler 0.3.0 on every Mac and
+`bb plugin config project-open set finderSelect true`; older handlers reject the
+`select=1` parameter. After a handler update macOS asks again for access to Documents
+and network volumes for “BB Project Folder”; until it is answered a folder is shown
+selected in its parent after six seconds.

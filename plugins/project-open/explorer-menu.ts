@@ -4,24 +4,28 @@ import { finderFolderUrl } from './folder-target';
 export const EXPLORER_MENU_EVENT = 'kodaforge:explorer-menu';
 
 /** The folder an Explorer entry points at: itself, or a file's parent. Null for anything unexpected. */
-export function explorerFolder(detail: unknown): { hostId: string; path: string } | null {
+export function explorerFolder(detail: unknown): { hostId: string; path: string; file?: string } | null {
   if (!detail || typeof detail !== 'object') return null;
   const { version, hostId, path, kind } = detail as Record<string, unknown>;
   if (version !== 1 || typeof hostId !== 'string' || typeof path !== 'string' || (kind !== 'file' && kind !== 'directory')) return null;
   const folder = kind === 'file' ? path.slice(0, path.lastIndexOf('/')) || '/' : path;
   try { finderFolderUrl(hostId, folder, 'check'); } catch { return null; }
-  return { hostId, path: folder };
+  return { hostId, path: folder, ...(kind === 'file' ? { file: path } : {}) };
 }
 
-/** Adds the Finder item to an Explorer menu that is opening; does nothing for other modes or events. */
-export function addFinderItem(event: Event, mode: 'files' | 'finder' | 'native', open: (url: string) => boolean): void {
+/**
+ * Adds the Finder item to an Explorer menu that is opening; does nothing for other modes or
+ * events. With `select`, a file is selected in its folder; without, its folder opens.
+ */
+export function addFinderItem(event: Event, mode: 'files' | 'finder' | 'native', open: (url: string) => boolean, select = false): void {
   const detail = (event as CustomEvent<{ items?: unknown }>).detail;
   const folder = mode === 'finder' ? explorerFolder(detail) : null;
   if (!folder || !Array.isArray(detail.items)) return;
   detail.items.push({
-    label: 'Открыть в Finder',
+    label: select && folder.file ? 'Показать в Finder' : 'Открыть в Finder',
     run: () => {
-      if (!open(finderFolderUrl(folder.hostId, folder.path))) throw new Error('На этом устройстве недоступен обработчик Finder.');
+      const url = select && folder.file ? finderFolderUrl(folder.hostId, folder.file, undefined, true) : finderFolderUrl(folder.hostId, folder.path);
+      if (!open(url)) throw new Error('На этом устройстве недоступен обработчик Finder.');
     },
   });
 }
