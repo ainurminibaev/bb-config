@@ -60,3 +60,10 @@ check. It records the upstream version in the rule registry and
 `docs/customizations.md`, with a local-only commit. If either file has local
 edits, Keeper leaves a patch in `.local/plugin-patches/kept/` and reports it
 in the notice.
+
+A plugin installed from our fork (`scripts/plugin_fork.py`, now KodaForge) is never patched:
+`fork_watch.py` reads the author's tags once a day (one `git ls-remote`, nothing is downloaded
+or run). A newer release makes an attention state and one message to the notice thread. To take
+it: `python3 scripts/plugin_fork.py sync kodaforge`, then, after the owner agrees, the same
+with `--push`; a conflict or failed test sends nothing. Test:
+`python3 plugins/voice-mode-keeper/test_fork_watch.py`.
