@@ -238,12 +238,6 @@
    "description": "Не показывать предупреждение «машина офлайн» для выбранных машин."
   },
   {
-   "id": "subthread-error-mark",
-   "kind": "local",
-   "name": "Subthread Error Mark",
-   "description": "Красный значок ошибки у подтреда в боковой панели."
-  },
-  {
    "id": "codex-delegation-watch",
    "kind": "local",
    "name": "Codex Delegation Watch",
