@@ -33,6 +33,15 @@ class Versions(unittest.TestCase):
             run.assert_not_called()
 
 
+class Journal(unittest.TestCase):
+    def test_path_is_private_state_of_this_checkout(self):
+        with fork.tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(fork.source, 'state_dir', side_effect=lambda root: fork.Path(directory)):
+            path = fork.journal_path('demo')
+            self.assertEqual(path, fork.Path(directory) / 'forks' / 'demo.json')
+            self.assertTrue(path.parent.is_dir())
+
+
 class Move(unittest.TestCase):
     def setUp(self):
         self.row = {'id': 'demo', 'source': DATA['upstreamSource'] + 'x', 'version': '0.7.0', 'enabled': True, 'status': 'running'}
