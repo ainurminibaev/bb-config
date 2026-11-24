@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { autoOpenWorkspace, belongsTo, followsReleases, inspect, attachLayout, effectiveLayout, layoutOf, threadInWorkspace } from "../inspector";
+import {
+  headerSlot, autoOpenWorkspace, belongsTo, followsReleases, inspect, attachLayout, effectiveLayout, layoutOf, threadInWorkspace } from "../inspector";
 function fixture() {
   const dom = new JSDOM(
     `<div class="kf-root"><nav aria-label="Views"></nav><div data-panel id="main"><div data-panel id="editors"><div id="original"><input value="unsaved draft"></div></div></div><footer><button title="Switch branch"></button><button title="Toggle Terminal (⌃&#96;)"></button></footer></div>`,
@@ -124,4 +125,11 @@ test("the editor's switches in BB's title bar count as part of it", () => {
   const { document } = new JSDOM('<header><div data-kodaforge-header><button id="a"></button></div><button id="b"></button></header><div class="kf-root"><button id="c"></button></div>').window;
   const root = document.querySelector(".kf-root")!;
   assert.deepEqual(["a", "b", "c"].map((id) => belongsTo(root, document.getElementById(id)!)), [true, false, true]);
+});
+test("the view button uses the only visible title bar slot, or none", () => {
+  const doc = new JSDOM(`<header><div data-kodaforge-header id="a"></div></header><header hidden><div data-kodaforge-header id="b"></div></header>`).window.document;
+  const shown = (element: HTMLElement) => !element.closest("[hidden]");
+  assert.equal(headerSlot(doc, shown)?.id, "a");
+  assert.equal(headerSlot(doc, () => true), null);
+  assert.equal(headerSlot(doc, () => false), null);
 });

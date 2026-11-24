@@ -22,6 +22,7 @@ import {
   belongsTo,
   CSS,
   inspect,
+  headerSlot,
   threadInWorkspace,
   type Layout,
 } from "./inspector";
@@ -92,6 +93,9 @@ function Inspector() {
           onChangeView={() => setReopened(true)}
         />
       )}
+      {layout !== "center" && !asking && (
+        <HeaderButton key={threadId} onClick={() => setReopened(true)} />
+      )}
       {asking && (
         <Chooser
           current={layout === "center" ? "center" : "native"}
@@ -114,6 +118,45 @@ function Inspector() {
     </>
   );
 }
+
+/**
+ * The way back from the classic view: one small button in KodaForge's own title bar slot
+ * (`data-kodaforge-header`). Without that slot nothing is drawn; the plugin settings remain.
+ */
+function HeaderButton({ onClick }: { onClick: () => void }) {
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    const find = () => setSlot(headerSlot(document, isVisible));
+    find();
+    let frame = 0;
+    const observer = new MutationObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(find);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, []);
+  if (!slot) return null;
+  return createPortal(
+    <button
+      data-kfi-owned="view"
+      type="button"
+      title="Вид редактора: чат по центру или классический"
+      onClick={onClick}
+      className="text-muted-foreground hover:text-foreground"
+      style={{ order: 99, flex: "none", padding: "2px 8px", borderRadius: 4, fontSize: 12, cursor: "pointer" }}
+    >
+      Вид…
+    </button>,
+    slot,
+  );
+}
+
+/** The slot holds the button itself, so an empty but shown title bar counts as visible. */
+const isVisible = (element: HTMLElement) => element.closest("header")?.getClientRects().length !== 0;
 
 /** Schematic previews: files on the left in both; what fills the middle differs. */
 function Preview({ kind }: { kind: Choice }) {

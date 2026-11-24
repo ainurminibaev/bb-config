@@ -43,6 +43,11 @@ export function followsReleases(requested: unknown): boolean {
 export function belongsTo(root: Element, target: Element): boolean {
   return root.contains(target) || target.closest("[data-kodaforge-header]") !== null;
 }
+/** KodaForge's slot in the title bar; null when there is none or it is not clear which one. */
+export function headerSlot(doc: Document, visible: (element: HTMLElement) => boolean): HTMLElement | null {
+  const slots = [...doc.querySelectorAll<HTMLElement>("[data-kodaforge-header]")].filter(visible);
+  return slots.length === 1 ? slots[0]! : null;
+}
 export type Inspection = {
   state: "waiting" | "compatible" | "incompatible";
   reason: string;
