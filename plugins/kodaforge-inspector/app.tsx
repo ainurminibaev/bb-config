@@ -19,6 +19,7 @@ import type { rpcContract } from "./server";
 import {
   attachLayout,
   autoOpenWorkspace,
+  belongsTo,
   CSS,
   inspect,
   threadInWorkspace,
@@ -385,7 +386,7 @@ function Workspace({
         currentThread() !== threadId ||
         !root ||
         !target ||
-        !root.contains(target)
+        !belongsTo(root, target)
       )
         return;
       const button = target.closest("button");
@@ -412,7 +413,8 @@ function Workspace({
         select("code");
       if (
         root &&
-        root.contains(event.target as Node) &&
+        event.target instanceof Element &&
+        belongsTo(root, event.target) &&
         (event.metaKey || event.ctrlKey) &&
         event.altKey &&
         event.key.toLowerCase() === "b"

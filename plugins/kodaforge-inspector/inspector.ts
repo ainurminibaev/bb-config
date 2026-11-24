@@ -39,6 +39,10 @@ export const FORK =
 export function followsReleases(requested: unknown): boolean {
   return requested === UPSTREAM || requested === FORK;
 }
+/** Part of the editor: inside it, or its tabs and switches in BB's title bar (compactHeader). */
+export function belongsTo(root: Element, target: Element): boolean {
+  return root.contains(target) || target.closest("[data-kodaforge-header]") !== null;
+}
 export type Inspection = {
   state: "waiting" | "compatible" | "incompatible";
   reason: string;
