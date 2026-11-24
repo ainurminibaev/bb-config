@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { autoOpenWorkspace, followsReleases, inspect, attachLayout, effectiveLayout, layoutOf, threadInWorkspace } from "../inspector";
+import { autoOpenWorkspace, belongsTo, followsReleases, inspect, attachLayout, effectiveLayout, layoutOf, threadInWorkspace } from "../inspector";
 function fixture() {
   const dom = new JSDOM(
     `<div class="kf-root"><nav aria-label="Views"></nav><div data-panel id="main"><div data-panel id="editors"><div id="original"><input value="unsaved draft"></div></div></div><footer><button title="Switch branch"></button><button title="Toggle Terminal (⌃&#96;)"></button></footer></div>`,
@@ -118,4 +118,10 @@ test("follows releases from the catalog and from the owner's fork, nothing else"
   assert.ok(followsReleases("git:https://github.com/Kodaks94/bb-plugin-kodaforge.git@semver:>=0.7.0 <1.0.0"));
   assert.equal(followsReleases("path:/srv/kodaforge"), false);
   assert.equal(followsReleases(undefined), false);
+});
+
+test("the editor's switches in BB's title bar count as part of it", () => {
+  const { document } = new JSDOM('<header><div data-kodaforge-header><button id="a"></button></div><button id="b"></button></header><div class="kf-root"><button id="c"></button></div>').window;
+  const root = document.querySelector(".kf-root")!;
+  assert.deepEqual(["a", "b", "c"].map((id) => belongsTo(root, document.getElementById(id)!)), [true, false, true]);
 });

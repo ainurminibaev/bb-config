@@ -3405,7 +3405,7 @@ Machines и ссылку внизу боковой панели. Машина о
 
 KodaForge стоит из форка `ainurminibaev/bb-plugin-kodaforge`, ветка `own`
 (согласовано с владельцем). Состав правок и ветки — `FORK.md` в форке; каждая
-правка предложена автору отдельным PR (#14–#16, #21–#24). CSV-превью — ветка
+правка предложена автору отдельным PR (#14–#16, #21–#25). CSV-превью — ветка
 `feat/csv-preview`, PR после принятия #21 и #22. Политика — `plugins/kodaforge-compat/fork.json`,
 механизм — `scripts/plugin_fork.py` (проверки — `scripts/test_plugin_fork.py`).
 
@@ -3426,6 +3426,10 @@ KodaForge стоит из форка `ainurminibaev/bb-plugin-kodaforge`, вет
   предупреждение. Запуск — `bb`-вызовов 0, один процесс git раз в сутки.
 - Свои вкладки у проекта и треда: `bb plugin config kodaforge set separateTabs true`
   (настройка форка, по умолчанию выключена; у владельца включена).
+- Одна полоса вместо двух (0.7.101): `bb plugin config kodaforge set compactHeader true`.
+  Вкладки рабочих областей и переключатели — в шапке BB (`headerContent`); медведь и
+  название там одни, медведь оранжевый. Уже 760 px, вкладка треда или старый BB —
+  прежняя полоса. KodaForge Inspector 0.3.2 считает кнопки шапки частью редактора.
 - Недоверенные документы рендерятся в iframe без `allow-same-origin` и без сети;
   SVG — только через `<img>`.
 

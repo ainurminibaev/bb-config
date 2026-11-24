@@ -293,14 +293,14 @@
   },
   {
     "id": "kodaforge",
-    "version": "0.7.100",
+    "version": "0.7.101",
     "enabled": true,
     "name": "KodaForge",
     "source": "git:https://github.com/ainurminibaev/bb-plugin-kodaforge.git@semver:own/:>=0.7.100 <1.0.0"
   },
   {
     "id": "kodaforge-inspector",
-    "version": "0.3.1",
+    "version": "0.3.2",
     "enabled": true,
     "name": "KodaForge Inspector",
     "source": "path:plugins/kodaforge-inspector"
