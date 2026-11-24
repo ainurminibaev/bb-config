@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { definePluginApp, useSdk, useBbNavigate, useSettings, useComposer, experimental_useSidebarThreads,
+import { definePluginApp, useRpc, useSdk, useBbNavigate, useSettings, useComposer, experimental_useSidebarThreads,
   experimental_Icon as Icon, experimental_THREAD_ACTION_GROUPS as GROUPS } from '@get-bb/plugin-sdk/app';
 import { toast } from 'sonner';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { openNativeTerminal, openNativeWorkspace, openNativeFiles, waitFor } from './native';
 import { finderFolderUrl, folderClientMode } from './folder-target';
 import { addFinderItem, EXPLORER_MENU_EVENT } from './explorer-menu';
+import type { rpcContract } from './server';
+
+/** Hands the Finder handler on the Mac fresh machines and folders; opening never waits for it. */
+let prepareFinder = () => {};
 
 type Anchor = { threadId: string; element: HTMLElement };
 function useThreadAnchors(enabled: boolean) {
@@ -150,14 +154,19 @@ const clientMode = (finderHelper: boolean) => folderClientMode({ userAgent: navi
 function ExplorerMenu() {
   const { values } = useSettings();
   const navigate = useBbNavigate();
+  const rpc = useRpc<typeof rpcContract>();
   const finderHelper = values?.finderHelper === true;
   const finderSelect = values?.finderSelect === true;
   useEffect(() => {
     if (!finderHelper) return;
-    const listen = (event: Event) => addFinderItem(event, clientMode(finderHelper), url => navigate.openUrl(url), finderSelect);
+    if (clientMode(finderHelper) === 'finder') {
+      prepareFinder = () => { void rpc.call('prepare', null).catch(() => {}); };
+      prepareFinder();
+    }
+    const listen = (event: Event) => addFinderItem(event, clientMode(finderHelper), url => { prepareFinder(); return navigate.openUrl(url); }, finderSelect);
     window.addEventListener(EXPLORER_MENU_EVENT, listen);
-    return () => window.removeEventListener(EXPLORER_MENU_EVENT, listen);
-  }, [finderHelper, finderSelect, navigate]);
+    return () => { window.removeEventListener(EXPLORER_MENU_EVENT, listen); prepareFinder = () => {}; };
+  }, [finderHelper, finderSelect, navigate, rpc]);
   return null;
 }
 
@@ -184,6 +193,7 @@ async function openThreadTarget(
   const mode = clientMode(values.finderHelper === true);
   if (mode === 'files') return openNativeFiles(await getRoot(), signal);
   if (mode === 'finder') {
+    prepareFinder();
     const url = finderFolderUrl(environment.hostId, environment.path);
     if (!navigate.openUrl(url)) throw new Error('На этом устройстве недоступен обработчик Finder.');
     return;

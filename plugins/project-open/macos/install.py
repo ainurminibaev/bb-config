@@ -12,13 +12,14 @@ import tempfile
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', required=True, type=Path)
+    parser.add_argument('--config', type=Path, help='optional manual records; without it the existing config.json is kept')
     args = parser.parse_args()
     if sys.platform != 'darwin':
         raise SystemExit('This installer is for macOS.')
-    config = json.loads(args.config.read_text())
-    if not isinstance(config.get('hosts'), dict) or not Path(config['rclone']).is_file():
-        raise SystemExit('Provide host mappings and the existing rclone executable.')
+    config = json.loads(args.config.read_text()) if args.config else None
+    if config is not None and (not isinstance(config.get('hosts', {}), dict)
+                               or ('rclone' in config and not Path(config['rclone']).is_file())):
+        raise SystemExit('Host records must be an object and rclone an existing executable.')
     source = Path(__file__).resolve().parent
     applications = Path.home() / 'Applications'
     applications.mkdir(exist_ok=True)
@@ -35,7 +36,7 @@ def main():
         with info.open('rb') as stream:
             plist = plistlib.load(stream)
         plist.update(CFBundleIdentifier='app.getbb.project-folder', CFBundleName='BB Project Folder',
-                     CFBundleShortVersionString='0.3.0', CFBundleVersion='3',
+                     CFBundleShortVersionString='0.4.0', CFBundleVersion='4',
                      LSUIElement=True, CFBundleURLTypes=[{'CFBundleURLName': 'BB project folder',
                      'CFBundleURLSchemes': ['bb-project-folder'], 'CFBundleTypeRole': 'Viewer'}])
         folder_icon = Path('/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericFolderIcon.icns')
@@ -55,8 +56,9 @@ def main():
     support = Path.home() / 'Library/Application Support/BB Project Folder'
     support.mkdir(parents=True, exist_ok=True)
     private = support / 'config.json'
-    private.write_text(json.dumps(config, ensure_ascii=False, indent=2) + '\n')
-    private.chmod(0o600)
+    if config is not None:
+        private.write_text(json.dumps(config, ensure_ascii=False, indent=2) + '\n')
+        private.chmod(0o600)
     subprocess.run(['/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister',
                     '-f', str(destination)], check=True)
     print('Installed:', destination)
