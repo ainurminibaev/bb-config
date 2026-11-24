@@ -1,0 +1,23 @@
+.tdesc-anchor{display:inline-flex;align-items:center}
+.tdesc-btn{position:relative;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border:0;border-radius:6px;padding:0;background:transparent;color:var(--muted-foreground);cursor:pointer;flex-shrink:0}
+.tdesc-btn:hover,.tdesc-btn[aria-expanded=true]{background:var(--accent);color:var(--foreground)}
+.tdesc-btn:focus-visible,.tdesc-pop button:focus-visible,.tdesc-recap button:focus-visible{outline:2px solid var(--ring);outline-offset:1px}
+.tdesc-btn[data-empty=true]{opacity:.45}
+.tdesc-btn[data-busy=true] svg{animation:tdesc-pulse 1.4s ease-in-out infinite}
+.tdesc-btn[data-unseen=true]::after{content:"";position:absolute;top:3px;right:3px;width:5px;height:5px;border-radius:50%;background:var(--primary)}
+@keyframes tdesc-pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.tdesc-btn[data-busy=true] svg{animation:none}}
+.tdesc-pop{position:fixed;z-index:1200;width:min(360px,calc(100vw - 16px));box-sizing:border-box;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--popover);color:var(--popover-foreground);box-shadow:var(--shadow-lg,0 8px 30px rgb(0 0 0/.25));font-size:13px;line-height:1.45;max-height:60vh;overflow:auto}
+.tdesc-pop p{margin:0 0 8px;white-space:pre-wrap;overflow-wrap:anywhere}
+.tdesc-label{color:var(--muted-foreground);font-size:11px;margin-bottom:2px!important}
+.tdesc-meta{color:var(--muted-foreground);font-size:11px}
+.tdesc-error{color:var(--destructive-text,var(--destructive));font-size:12px}
+.tdesc-row{display:flex;flex-wrap:wrap;gap:12px;margin-top:8px}
+.tdesc-row button,.tdesc-recap button{font:inherit;font-size:12px;border:0;padding:0;background:transparent;color:var(--foreground);cursor:pointer;font-weight:500}
+.tdesc-row button:hover{text-decoration:underline}
+.tdesc-row button:disabled{opacity:.5;cursor:default;text-decoration:none}
+.tdesc-pop textarea{width:100%;box-sizing:border-box;min-height:84px;resize:vertical;font:inherit;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--background);color:var(--foreground)}
+.tdesc-recap{display:flex;align-items:flex-start;gap:8px;padding:2px 6px 2px 12px;color:var(--muted-foreground);font-size:12px;line-height:1.45}
+.tdesc-recap span{flex:1;min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.tdesc-recap button{width:18px;height:18px;border-radius:50%;color:inherit;flex-shrink:0}
+.tdesc-recap button:hover{background:var(--accent);color:var(--foreground)}

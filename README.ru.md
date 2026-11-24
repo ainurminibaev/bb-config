@@ -21,6 +21,7 @@ BB как рабочее место для разработчиков и пре�
 | [Project Open](plugins/project-open) | Кнопки у треда: открыть папку проекта в Finder и терминал BB | Для Finder — локальный обработчик на Mac (см. README плагина) |
 | [Push Button](plugins/push-button) | Кнопку «попросить агента запушить» в строке ветки; сам Git не запускает | Не требуется |
 | [Thread Account Usage](plugins/thread-account-usage) | Окна квот аккаунта у текущего треда, отдельно от расхода токенов | Не требуется |
+| [Thread Description](plugins/thread-description) | Описание и сводка каждого треда: иконка у названия, кнопка у поля ввода | Не требуется |
 | [Handoff Button](plugins/handoff-button) | Кнопку открытия оригинальной панели Handoff в composer | Установите оригинальный Handoff из каталога BB |
 | [Web BB Button](plugins/web-bb-button) | Глобус в левой панели, открывающий BB в браузере | Укажите публичный URL своего BB в настройках |
 | [Open on Desktop](plugins/file-local-open) | Значки у ссылок на файлы: открыть файл на своём Mac или Windows-компьютере либо сохранить в Загрузки; просмотр PDF по ширине | Не требуется при одном настольном компьютере; иначе `macHostId` |

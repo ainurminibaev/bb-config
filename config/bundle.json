@@ -256,6 +256,12 @@
    "description": "Навыки для коротких общих инструкций: учёт в bb-config, перенос тредов, совместимость агентов."
   },
   {
+   "id": "thread-description",
+   "kind": "local",
+   "name": "Thread Description",
+   "description": "Описание и краткая сводка каждого треда: иконка у названия и кнопка у поля ввода."
+  },
+  {
    "id": "thread-account-usage",
    "kind": "local",
    "name": "Thread Account Usage",

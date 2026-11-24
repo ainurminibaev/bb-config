@@ -517,6 +517,13 @@
     "source": "path:plugins/thread-account-usage"
   },
   {
+    "id": "thread-description",
+    "version": "0.1.0",
+    "enabled": true,
+    "name": "Thread Description",
+    "source": "path:plugins/thread-description"
+  },
+  {
     "id": "limit-guard",
     "version": "0.9.1",
     "enabled": true,
