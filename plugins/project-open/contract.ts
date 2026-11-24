@@ -6,13 +6,15 @@ export const directorySchema = z.object({
   self: z.string(),
   machines: z.record(z.string(), z.object({
     name: z.string(), platform: z.string().nullable(), roots: z.array(z.string()), hostKeys: z.array(z.string()),
+    /** The account BB runs under there. */
+    user: z.string().nullable().optional(),
   })),
 });
 export type Directory = z.infer<typeof directorySchema>;
 
 export const hostContract = defineRpcContract({
   /** Public SSH host keys of this machine: what its SSH server proves itself with. Nothing secret. */
-  identity: { input: z.null(), output: z.object({ platform: z.string(), hostKeys: z.array(z.string()), handler: z.boolean() }) },
+  identity: { input: z.null(), output: z.object({ platform: z.string(), hostKeys: z.array(z.string()), handler: z.boolean(), user: z.string().nullable().optional() }) },
   save: { input: directorySchema, output: z.object({ saved: z.boolean() }) },
 });
 export const rpcContract = defineRpcContract({

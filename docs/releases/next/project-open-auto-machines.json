@@ -1,6 +1,6 @@
 {
   "id": "project-open-auto-machines",
-  "title": "Project Open 0.3.4 — машины и папки для Finder из BB",
+  "title": "Project Open 0.3.5 — машины и папки для Finder из BB",
   "component": "project-open",
   "where": "server",
   "kind": "command",
@@ -9,21 +9,21 @@
     "scripts/plugin_git_update.py",
     "applicable",
     "project-open",
-    "0.3.4"
+    "0.3.5"
   ],
   "apply": [
     "{python}",
     "scripts/plugin_git_update.py",
     "apply",
     "project-open",
-    "0.3.4"
+    "0.3.5"
   ],
   "verify": [
     "{python}",
     "scripts/plugin_git_update.py",
     "check",
     "project-open",
-    "0.3.4"
+    "0.3.5"
   ],
   "rerun": "Актуальная работающая версия проходит проверку без установки.",
   "rollback": "Установите плагин из предыдущего тега project-open/v0.3.2."

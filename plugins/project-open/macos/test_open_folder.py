@@ -141,7 +141,7 @@ class AutomaticMachines(unittest.TestCase):
             'bare': {'name': 'x', 'roots': ['/srv/a'], 'hostKeys': []}}}, **extra}
 
     def test_roots_come_only_from_bb(self):
-        with mock.patch.object(handler, 'pick_alias', return_value='srv-alias'):
+        with mock.patch.object(handler, 'choose_alias', return_value='srv-alias'):
             profile = handler.profile_for('srv', '/srv/a/nested/deep', self.settings())
         self.assertEqual((profile['root'], profile['sshProfile'], profile['hostKeys']), ('/srv/a/nested', 'srv-alias', [self.KEY]))
         self.assertRegex(profile['label'], r'^[\w .-]{1,80}$')
@@ -170,12 +170,47 @@ class AutomaticMachines(unittest.TestCase):
         hosts = {'one': ('10.0.0.1', '22'), 'same': ('10.0.0.1', '22'), 'other': ('10.0.0.2', '22'), 'srv': ('10.0.0.2', '22')}
         options = lambda alias: {'hostname': hosts[alias][0], 'port': hosts[alias][1], 'user': 'u', 'userknownhostsfile': str(self.base / 'known')}
         with mock.patch.object(handler, 'ssh_options', side_effect=options):
-            self.assertEqual(handler.pick_alias([self.KEY], config), 'one')
+            self.assertEqual(handler.candidates([self.KEY], None, config), ['one'])
+            # Another address with the machine's own key is another way into the same machine.
             hosts['other'] = ('10.0.0.3', '2222')
-            with self.assertRaisesRegex(ValueError, 'bindings'):
-                handler.pick_alias([self.KEY], config)
+            self.assertEqual(handler.candidates([self.KEY], None, config), ['one', 'other'])
             with self.assertRaisesRegex(ValueError, 'нет SSH'):
-                handler.pick_alias(['ssh-ed25519 AAAAnone'], config)
+                handler.candidates(['ssh-ed25519 AAAAnone'], None, config)
+
+    def test_account_of_bb_decides_between_entries(self):
+        users = {'a': 'admin', 'b': 'root', 'c': 'root'}
+        options = lambda alias: {'hostname': alias, 'user': users[alias]}
+        with mock.patch.object(handler, 'ssh_aliases', return_value=list(users)), \
+                mock.patch.object(handler, 'ssh_options', side_effect=options), \
+                mock.patch.object(handler, 'known_keys', return_value={self.KEY}):
+            self.assertEqual(handler.candidates([self.KEY], 'root'), ['b', 'c'])
+            for unmatched in ('someone', None):
+                with self.subTest(user=unmatched), self.assertRaisesRegex(ValueError, 'разных пользователей'):
+                    handler.candidates([self.KEY], unmatched)
+            users['a'] = 'root'
+            self.assertEqual(handler.candidates([self.KEY], 'someone'), ['a', 'b', 'c'])
+
+    def test_first_entry_that_signs_in_is_remembered(self):
+        tried = []
+        def signs_in(profile):
+            tried.append(profile['sshProfile'])
+            self.assertEqual(profile['hostKeys'], [self.KEY])
+            return profile['sshProfile'] == 'second'
+        with mock.patch.object(handler, 'candidates', return_value=['first', 'second', 'third']) as found, \
+                mock.patch.object(handler, 'signs_in', side_effect=signs_in):
+            self.assertEqual(handler.choose_alias('srv', [self.KEY], 'root'), 'second')
+            self.assertEqual(handler.choose_alias('srv', [self.KEY], 'root'), 'second')
+            self.assertEqual(tried, ['first', 'second'])
+            # A remembered entry that is no longer one of the machine's is not used.
+            found.return_value = ['first', 'third']
+            with self.assertRaisesRegex(ValueError, 'не пускает'):
+                handler.choose_alias('srv', [self.KEY], 'root')
+            found.return_value = ['only']
+            tried.clear()
+            self.assertEqual(handler.choose_alias('srv', [self.KEY], 'root'), 'only')
+            self.assertEqual(tried, [])
+            bound = handler.profile_for('srv', '/srv/a', self.settings(bindings={'srv': 'mine'}))
+            self.assertEqual((bound['sshProfile'], tried), ('mine', []))
 
     def test_pinned_connection_and_breaker(self):
         profile = {'key': 'srv-1', 'sshProfile': 'a', 'hostKeys': [self.KEY], 'root': '/srv/a'}

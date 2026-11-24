@@ -55,6 +55,8 @@ selected in its parent after six seconds.
 Handler 0.4.0 takes machines and roots from `machines.json`, written by the plugin's
 server through its host part on each opening; a manual `hosts` record in `config.json`
 wins. The SSH alias is matched by host key (`known_hosts` against `/etc/ssh/*.pub` read
-by BB on the machine). On "несколько SSH-записей" add `"bindings": {"<host-id>":
+by BB on the machine). Several matching entries are tried by BB's account
+and config order; the successful one is in `State/<host-id>.alias.json`. On «SSH-записи
+разных пользователей» add `"bindings": {"<host-id>":
 "<alias>"}`. Check `Status/*.json` and `State/*.log` in the handler's support folder; do
 not open Finder on the user's Mac as a probe.

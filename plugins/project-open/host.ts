@@ -1,7 +1,7 @@
 import { experimental_defineHostEntry } from '@get-bb/plugin-sdk/host';
 import { randomUUID } from 'node:crypto';
 import { readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { hostContract } from './contract';
 import { keepKnownKeys, publicKeys } from './directory';
@@ -15,8 +15,13 @@ async function hostKeys(): Promise<string[]> {
   return publicKeys(await Promise.all(names.map(name => readFile(join('/etc/ssh', name), 'utf8').catch(() => ''))));
 }
 
+/** An account without a name on this system (a container) is simply not reported. */
+function user(): string | null {
+  try { return userInfo().username || null; } catch { return null; }
+}
+
 export default experimental_defineHostEntry({ contract: hostContract, handlers: {
-  identity: async () => ({ platform: process.platform, hostKeys: await hostKeys(), handler: await installed() }),
+  identity: async () => ({ platform: process.platform, hostKeys: await hostKeys(), handler: await installed(), user: user() }),
   save: async directory => {
     if (!(await installed())) return { saved: false };
     const file = join(support(), 'machines.json');
