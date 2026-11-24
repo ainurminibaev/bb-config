@@ -173,6 +173,19 @@ def profile_for(host, path, settings):
     return {'mode': 'sftp', 'sshProfile': alias, 'root': str(root), 'label': label, 'key': key, 'hostKeys': sorted(keys)}
 
 
+def settled(host, path, config_path=None, seconds=6):
+    """Settings once they cover this folder: the click that opened the link also made BB send a fresh list."""
+    deadline = time.monotonic() + seconds
+    while True:
+        settings = load_settings(config_path)
+        machine = settings['bb'].get('machines', {}).get(host)
+        if host in settings.get('hosts', {}) or time.monotonic() >= deadline:
+            return settings
+        if isinstance(machine, dict) and any(r == PurePosixPath(path) or r in PurePosixPath(path).parents for r in allowed_roots(machine)):
+            return settings
+        time.sleep(0.3)
+
+
 def ssh_aliases(config):
     """Plain Host names of the user's SSH configuration, following Include."""
     names, seen = [], set()
@@ -435,7 +448,7 @@ def lock_within(stream, seconds):
 
 def open_folder(url, config_path=None):
     host, path, request, name = parse_request(url)
-    settings = load_settings(config_path)
+    settings = settled(host, path, config_path)
     status = BASE / 'Status' / (request + '.json')
     write_json(status, {'state': 'opening', 'host': host, 'path': path})
     lock_dir = BASE / 'State'
