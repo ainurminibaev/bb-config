@@ -300,7 +300,7 @@
   },
   {
     "id": "kodaforge-inspector",
-    "version": "0.3.0",
+    "version": "0.3.1",
     "enabled": true,
     "name": "KodaForge Inspector",
     "source": "path:plugins/kodaforge-inspector"
