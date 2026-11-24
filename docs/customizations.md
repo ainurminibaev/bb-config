@@ -3394,3 +3394,35 @@ Machines и ссылку внизу боковой панели. Машина о
   Machines нет оранжевой карточки, в DOM есть `[data-offline-quiet-hidden]`.
 - **Для установивших:** компонент набора `config/bundle.json` (`local`),
   приходит шагом `bundle` ближайшего релиза; список машин у каждого свой.
+
+## KodaForge из форка и «Открыть в Finder» в дереве
+
+KodaForge стоит из форка `ainurminibaev/bb-plugin-kodaforge`, ветка `own`
+(согласовано с владельцем). Состав правок и ветки — `FORK.md` в форке; каждая
+правка предложена автору отдельным PR (#14–#16, #21–#24). CSV-превью — ветка
+`feat/csv-preview`, PR после принятия #21 и #22. Политика — `plugins/kodaforge-compat/fork.json`,
+механизм — `scripts/plugin_fork.py` (проверки — `scripts/test_plugin_fork.py`).
+
+- Версии: теги `own/vX.Y.Z`, патч = (патч автора + 1) × 100 + номер сборки;
+  0.7.100 — это 0.7.0 автора с нашими правками. С тегами автора не пересекаются.
+- Установить: `python3 scripts/plugin_fork.py apply kodaforge` (настройки
+  переносятся, при сбое каталог возвращается сам), проверить: `check`.
+- Вернуться на каталог: `python3 scripts/plugin_fork.py rollback kodaforge`.
+  Keeper форк не трогает (правило действует только для каталожного источника), а
+  после возврата снова накладывает `plugins/kodaforge-compat/*.patch`.
+- Новая версия автора: `python3 scripts/plugin_fork.py sync kodaforge` сливает её во
+  временном клоне, прогоняет тесты и сборку; с `--push` отправляет ветку и тег, и BB
+  предлагает обновление. Конфликт или упавший тест — ничего не отправляется,
+  установленная версия работает. По расписанию пока не запускается.
+- Свои вкладки у проекта и треда: `bb plugin config kodaforge set separateTabs true`
+  (настройка форка, по умолчанию выключена; у владельца включена).
+- Недоверенные документы рендерятся в iframe без `allow-same-origin` и без сети;
+  SVG — только через `<img>`.
+
+Finder: у SDK BB нет штатного способа добавить действие в чужое меню, поэтому
+KodaForge рассылает событие `kodaforge:explorer-menu` (`docs/explorer-menu.md`
+форка, версия 1), а Project Open 0.3.1 добавляет в него «Открыть в Finder» той же
+логикой `folder-target.ts`. Пункт есть только на Mac с включённым `finderHelper`;
+файл открывает свою папку. Без KodaForge Project Open работает как раньше, без
+Project Open пункта нет. Тест: `plugins/project-open/explorer-menu.test.ts`.
+Выделение самого файла в Finder не сделано: нужен новый обработчик на Mac.

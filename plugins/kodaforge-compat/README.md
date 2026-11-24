@@ -16,3 +16,5 @@ plugin sources are copied and there is no fork.
   after the last tab is closed.
 
 Check: `python3 scripts/kodaforge_workspace_tabs.py --check`.
+
+The owner's installation uses the fork in `fork.json` (`scripts/plugin_fork.py`); these patches apply only to the catalog release, for example after `rollback`.

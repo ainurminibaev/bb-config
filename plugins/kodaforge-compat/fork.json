@@ -1,0 +1,10 @@
+{
+  "id": "kodaforge",
+  "repository": "https://github.com/ainurminibaev/bb-plugin-kodaforge.git",
+  "branch": "own",
+  "tagPrefix": "own/",
+  "range": ">=0.7.100 <1.0.0",
+  "upstream": "https://github.com/Kodaks94/bb-plugin-kodaforge.git",
+  "upstreamSource": "git:https://github.com/Kodaks94/bb-plugin-kodaforge.git@",
+  "catalog": "kodaforge@bb-community"
+}

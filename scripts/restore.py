@@ -2,6 +2,7 @@
 """Preview restoration; --plugins --apply installs plugins and restores preferences."""
 import argparse
 import json
+import re
 from voice_source import is_voice_fork
 from pathlib import Path
 from plugin_scope import outside, project_homes, project_roots
@@ -37,13 +38,19 @@ def value(data):
     return data if isinstance(data, str) else json.dumps(data, separators=(',', ':'))
 
 
+def tag_prefix(plugin):
+    """Options for releases tagged <prefix>vX.Y.Z; BB records them as @semver:<prefix>:<range>."""
+    match = re.search(r'@semver:([^:\s]+/):', plugin['source'])
+    return ['--tag-prefix', match[1]] if match else []
+
+
 def install_source(plugin):
     if plugin['source'].startswith(('builtin:', 'path:')):
         return plugin['source']
     if plugin.get('installSource') and not is_voice_fork(plugin):
         return plugin['installSource']
     # BB records a normalized internal range; the install CLI takes @<range>.
-    return plugin['source'].replace('@semver:', '@')
+    return re.sub(r'@semver:([^:\s]+/:)?', '@', plugin['source'])
 
 
 def installed_ids():
@@ -120,7 +127,7 @@ def plan(install_plugins=False, root=ROOT, installed=None, notes=None, find_root
             elif installed is None or plugin['id'] not in installed:
                 # Already installed catalog plugins keep their own updates.
                 subdirectory = ['--subdirectory', plugin['subdirectory']] if plugin.get('subdirectory') else []
-                commands.append(['bb', 'plugin', 'install', source, *subdirectory, '--yes'])
+                commands.append(['bb', 'plugin', 'install', source, *subdirectory, *tag_prefix(plugin), '--yes'])
         project_commands, project_notes = project_plan(root, installed, find_roots)
         commands.extend(project_commands)
         if notes is not None:
