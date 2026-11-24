@@ -33,6 +33,12 @@ export function effectiveLayout(project: unknown, everywhere: unknown): Layout {
 }
 export const UPSTREAM =
   "git:https://github.com/Kodaks94/bb-plugin-kodaforge.git@semver:>=0.7.0 <1.0.0";
+/** The owner's fork (plugins/kodaforge-compat/fork.json) gets the author's releases too. */
+export const FORK =
+  "git:https://github.com/ainurminibaev/bb-plugin-kodaforge.git@semver:own/:>=0.7.100 <1.0.0";
+export function followsReleases(requested: unknown): boolean {
+  return requested === UPSTREAM || requested === FORK;
+}
 export type Inspection = {
   state: "waiting" | "compatible" | "incompatible";
   reason: string;
