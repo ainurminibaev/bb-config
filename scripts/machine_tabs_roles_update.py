@@ -18,4 +18,4 @@ if version >= (0, 2, 19) and plugin.get("status") == "running":
     raise SystemExit(0)
 if action == "check":
     raise SystemExit(1)
-subprocess.run(["bb", "plugin", "update", "machine-tabs"], check=True)
+subprocess.run(["bb", "plugin", "update", "machine-tabs", "--yes"], check=True)
