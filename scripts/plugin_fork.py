@@ -80,7 +80,7 @@ def on_fork(row, data):
 
 
 def journal_path(plugin_id):
-    directory = source.state_dir() / 'forks'
+    directory = source.state_dir(ROOT) / 'forks'
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     return directory / f'{plugin_id}.json'
 
@@ -209,8 +209,14 @@ def sync(plugin_id, data, push):
             run([*git, 'merge', '--no-ff', '-q', '-m', f'Merge upstream {tag}', 'FETCH_HEAD'], folder)
         except ForkError:
             files = run(['git', 'diff', '--name-only', '--diff-filter=U'], folder).split()
-            raise ForkError(f'Upstream {tag} conflicts with our changes in: {", ".join(files) or "the merge"}. '
-                            f'The installed version keeps working; resolve in a thread') from None
+            if files != ['package-lock.json']:
+                raise ForkError(f'Upstream {tag} conflicts with our changes in: {", ".join(files) or "the merge"}. '
+                                f'The installed version keeps working; resolve in a thread') from None
+            # The lock file follows the merged package.json.
+            run(['git', 'checkout', '--ours', 'package-lock.json'], folder)
+            run(['npm', 'install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund'], folder)
+            run(['git', 'add', 'package-lock.json'], folder)
+            run([*git, 'commit', '-q', '--no-edit'], folder)
         set_version(folder, version)
         run([*git, 'commit', '-qam', f'Own line {version}: upstream {tag} with our changes'], folder)
         run(['npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund'], folder)
