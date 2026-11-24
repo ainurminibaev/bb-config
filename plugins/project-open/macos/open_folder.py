@@ -35,14 +35,60 @@ def parse_request(url):
     if parsed.scheme != 'bb-project-folder' or parsed.netloc != 'open' or parsed.path not in ('', '/') or parsed.fragment:
         raise ValueError('Некорректная ссылка открытия папки.')
     values = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
-    if set(values) != {'host', 'path', 'request'} or any(len(v) != 1 for v in values.values()):
+    # Links of earlier versions have no "select" and mean a folder.
+    select = values.pop('select', None)
+    if set(values) != {'host', 'path', 'request'} or any(len(v) != 1 for v in values.values()) or select not in (None, ['1']):
         raise ValueError('Некорректные параметры открытия папки.')
     host, path, request = (values[key][0] for key in ('host', 'path', 'request'))
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', host) or not re.fullmatch(r'[A-Za-z0-9-]{1,80}', request):
         raise ValueError('Некорректный идентификатор открытия папки.')
     if not path.startswith('/') or '..' in PurePosixPath(path).parts or any(ord(c) < 32 or ord(c) == 127 for c in path):
         raise ValueError('Некорректный абсолютный путь папки.')
-    return host, str(PurePosixPath(path)), request
+    path = PurePosixPath(path)
+    if select and not path.name:
+        raise ValueError('Не указан файл.')
+    return (host, str(path.parent), request, path.name) if select else (host, str(path), request, None)
+
+
+def remote_file_exists(host, path, name, settings):
+    """The exact file, over the same local WebDAV server as the folder check."""
+    url = json.loads((BASE / 'State' / (host + '.json')).read_text())['url']
+    parts = (*within(PurePosixPath(path), PurePosixPath(settings['hosts'][host]['root'])).parts, name)
+    with urlopen(Request(url + quote('/'.join(parts), safe='/'), method='PROPFIND', headers={'Depth': '0'}), timeout=10) as response:
+        return response.status == 207
+
+
+def selected_entry(host, target, path, name, settings):
+    """The entry to select inside an already checked folder; None when it is not there.
+
+    Only its presence is checked: reading the folder would make macOS ask for access.
+    """
+    entry = target / name
+    try:
+        if settings['hosts'][host].get('mode') == 'local':
+            entry.lstat()
+        elif not remote_file_exists(host, path, name, settings):
+            return None
+    except (OSError, ValueError, KeyError):
+        return None
+    return entry
+
+
+def show(target, entry):
+    """Select the file; when Finder cannot, show its folder."""
+    if entry is not None:
+        try:
+            subprocess.run(['/usr/bin/open', '-R', str(entry)], check=True, capture_output=True, timeout=15)
+            return True
+        except (OSError, subprocess.SubprocessError):
+            pass
+    try:
+        subprocess.run(['/usr/bin/open', '-a', 'Finder', target.as_uri()], check=True, timeout=6)
+    except subprocess.TimeoutExpired:
+        # macOS is asking the user for access (after an update of this app it asks again).
+        # Showing the folder selected in its parent needs no access.
+        subprocess.run(['/usr/bin/open', '-R', str(target)], check=True, timeout=15)
+    return False
 
 
 def within(path, root):
@@ -167,7 +213,7 @@ def mounted_folder(host, path, settings):
 
 
 def open_folder(url, config_path=None):
-    host, path, request = parse_request(url)
+    host, path, request, name = parse_request(url)
     settings = json.loads((config_path or BASE / 'config.json').read_text())
     status = BASE / 'Status' / (request + '.json')
     write_json(status, {'state': 'opening', 'host': host, 'path': path})
@@ -178,8 +224,11 @@ def open_folder(url, config_path=None):
         with (lock_dir / (host + '.lock')).open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             target = mounted_folder(host, path, settings)
-            subprocess.run(['/usr/bin/open', '-a', 'Finder', target.as_uri()], check=True, timeout=15)
-        result = {'state': 'opened', 'host': host, 'path': path, 'finderPath': str(target)}
+            entry = selected_entry(host, target, path, name, settings) if name else None
+            selected = show(target, entry)
+        result = {'state': 'opened', 'host': host, 'path': path, 'finderPath': str(entry if selected else target)}
+        if name:
+            result['selected'] = selected
         write_json(status, result)
         return result
     except Exception as error:

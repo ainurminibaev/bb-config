@@ -29,3 +29,5 @@ WebDAV на loopback; диск подключает штатный `mount_webdav
 (`python3 scripts/updates.py apply`).
 
 В дереве KodaForge (из форка с точкой `kodaforge:explorer-menu`) плагин добавляет пункт «Открыть в Finder»: папка открывается сама, файл — своей папкой. Нужен Mac и включённый `finderHelper`.
+
+С обработчиком 0.3.0 и настройкой `finderSelect` файл выделяется в Finder («Показать в Finder»). После обновления обработчика macOS один раз снова спросит доступ.

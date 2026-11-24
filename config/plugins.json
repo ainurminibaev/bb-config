@@ -413,7 +413,7 @@
   },
   {
     "id": "project-open",
-    "version": "0.3.1",
+    "version": "0.3.2",
     "enabled": true,
     "name": "Project Open",
     "source": "path:plugins/project-open"
