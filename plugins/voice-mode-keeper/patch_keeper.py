@@ -19,6 +19,7 @@ Prints one JSON status line per plugin.
 """
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -29,6 +30,7 @@ REPO = Path(__file__).resolve().parents[2]
 STATE_DIR = REPO / '.local/plugin-patches/kept'
 sys.path.insert(0, str(REPO / 'scripts'))
 import platform_compat as compat  # noqa: E402
+import fork_watch
 import tokenomics_compat
 from retirement_config import save_retirement
 from upstream_retirement import retirement
@@ -177,6 +179,10 @@ def keep(plugin_id, spec, installed):
     status = {'plugin': plugin_id, 'name': spec['name'], 'version': (plugin or {}).get('version', '')}
     if not plugin or not plugin.get('enabled'):
         return {**status, 'state': 'idle', 'message': f"{spec['name']} выключен или не установлен."}
+    fork = fork_watch.policy_of(plugin_id, plugin)
+    if fork:
+        return fork_watch.watch(plugin_id, fork, plugin, status, STATE_DIR, send_retirement,
+                                os.environ.get('BB_KEEPER_NOTICE_THREAD', '').strip())
     if not plugin['source'].startswith(spec['source']):
         return {**status, 'state': 'idle', 'message': f"{spec['name']} установлен не из каталога: исправление не нужно."}
     retired = retirement(plugin_id, spec, plugin, status, STATE_DIR, upstream_contains_fix, send_retirement,

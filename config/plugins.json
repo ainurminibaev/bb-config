@@ -577,7 +577,7 @@
   },
   {
     "id": "voice-mode-keeper",
-    "version": "0.2.11",
+    "version": "0.2.12",
     "enabled": true,
     "name": "Plugin Keeper",
     "source": "path:plugins/voice-mode-keeper"
