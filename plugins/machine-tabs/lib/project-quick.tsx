@@ -351,28 +351,58 @@ export function ProjectQuickMenu<P extends QuickProject>({
     const node = field?.current;
     if (!node) return;
     let x = 0;
-    const move = (event: PointerEvent) => { x = event.clientX; };
-    const enterField = (event: PointerEvent) => {
-      x = event.clientX;
-      window.clearTimeout(closeTimer.current);
-      if (open || event.pointerType !== "mouse") return;
-      window.clearTimeout(fieldTimer.current);
-      fieldTimer.current = window.setTimeout(() => show(x), FIELD_DELAY);
+    let y = 0;
+    let armed = false;
+    // Typing or a click in the field cancels the rest; moving the pointer away from that spot arms it again.
+    let still: { x: number; y: number } | null = null;
+    const disarm = () => { window.clearTimeout(fieldTimer.current); armed = false; };
+    // The other buttons of the field (filter, settings, clear) have their own tooltips and menus.
+    const onOtherButton = (event: PointerEvent) => {
+      const hit = (event.target as Element | null)?.closest?.("button");
+      return hit !== null && hit !== undefined && hit !== button.current && node.contains(hit);
     };
-    const leaveField = () => { window.clearTimeout(fieldTimer.current); if (open) leave(); };
-    const typing = () => window.clearTimeout(fieldTimer.current);
+    const arm = () => {
+      armed = true;
+      window.clearTimeout(fieldTimer.current);
+      fieldTimer.current = window.setTimeout(() => { armed = false; show(x); }, FIELD_DELAY);
+    };
+    const move = (event: PointerEvent) => {
+      x = event.clientX;
+      y = event.clientY;
+      if (event.pointerType !== "mouse") return;
+      // The projects button opens the menu itself, under the button.
+      if (button.current?.contains(event.target as Node)) { disarm(); return; }
+      if (onOtherButton(event)) {
+        disarm();
+        if (open && !pinned) close();
+        return;
+      }
+      if (open || armed) return;
+      if (still && Math.hypot(x - still.x, y - still.y) < 8) return;
+      still = null;
+      arm();
+    };
+    const enterField = (event: PointerEvent) => {
+      window.clearTimeout(closeTimer.current);
+      still = null;
+      move(event);
+    };
+    const leaveField = () => { disarm(); still = null; if (open) leave(); };
+    const typing = () => { disarm(); still = { x, y }; };
     node.addEventListener("pointerenter", enterField);
     node.addEventListener("pointermove", move);
     node.addEventListener("pointerleave", leaveField);
+    node.addEventListener("pointerdown", typing);
     node.addEventListener("keydown", typing);
     return () => {
       window.clearTimeout(fieldTimer.current);
       node.removeEventListener("pointerenter", enterField);
       node.removeEventListener("pointermove", move);
       node.removeEventListener("pointerleave", leaveField);
+      node.removeEventListener("pointerdown", typing);
       node.removeEventListener("keydown", typing);
     };
-  }, [field, open, show, leave]);
+  }, [field, open, pinned, show, leave, close]);
 
   useEffect(() => {
     if (!open) return;

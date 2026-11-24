@@ -78,8 +78,11 @@ is disabled or failed, check it in Settings → Plugins.
 ## Project menu
 
 A folder button inside the "Поиск тредов" field, beside the funnel, appears on
-hover. Hovering it opens a compact project list (search, quick filters by thread
-state, projects ordered by latest thread activity with state counts, bb's own status icons). Clicking a
+hover. Hovering it, or resting the pointer on the field itself (also with text
+typed; a click or a key press cancels until the pointer moves again), opens a
+compact project list; the field's other buttons (search settings, funnel, clear)
+never open it and close a hover-opened one. The list has search, quick filters by thread
+state, projects ordered by latest thread activity with state counts and bb's own status icons. Clicking a
 project scrolls the sidebar to its group and flashes it; the arrow on a row, or a
 long rest on it, shows the project's threads, and clicking one opens it and flashes its row. There is no
 CLI or setting for it. If a click does not scroll, the list is not grouped by
