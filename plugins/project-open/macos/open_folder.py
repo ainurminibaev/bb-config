@@ -145,8 +145,8 @@ def allowed_roots(machine):
         root = PurePosixPath(root)
         if '..' not in root.parts and len(root.parts) > 1:
             roots.append(root)
-    # A project inside another project needs no disk of its own.
-    return [r for r in roots if not any(other != r and other in r.parents for other in roots)]
+    # The narrowest first: a project inside another one gets a disk of its own, not its parent's.
+    return sorted(roots, key=lambda r: len(r.parts), reverse=True)
 
 
 def profile_for(host, path, settings):

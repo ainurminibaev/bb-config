@@ -143,7 +143,7 @@ class AutomaticMachines(unittest.TestCase):
     def test_roots_come_only_from_bb(self):
         with mock.patch.object(handler, 'pick_alias', return_value='srv-alias'):
             profile = handler.profile_for('srv', '/srv/a/nested/deep', self.settings())
-        self.assertEqual((profile['root'], profile['sshProfile'], profile['hostKeys']), ('/srv/a', 'srv-alias', [self.KEY]))
+        self.assertEqual((profile['root'], profile['sshProfile'], profile['hostKeys']), ('/srv/a/nested', 'srv-alias', [self.KEY]))
         self.assertRegex(profile['label'], r'^[\w .-]{1,80}$')
         for path in ('/etc', '/srv', '/srv/ab'):
             with self.subTest(path=path), self.assertRaises(ValueError):
