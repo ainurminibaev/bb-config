@@ -75,6 +75,8 @@ interface ListView {
   ids: ReadonlySet<string> | null;
   /** Draw the threads as one "Last 5" section, preserving native parent/child trees. */
   recent: boolean;
+  /** Raise role threads (agent 0, orchestrator 1) to the top of their project group. */
+  roleRanks: Readonly<Record<string, number>> | null;
 }
 
 const DEFAULT_VIEW: ListView = {
@@ -85,7 +87,33 @@ const DEFAULT_VIEW: ListView = {
   dayField: "updatedAt",
   ids: null,
   recent: false,
+  roleRanks: null,
 };
+
+/**
+ * Role threads first in their project group, through bb's own sort: idle
+ * threads sort by latestAttentionAt (running ones stay above, by createdAt).
+ * Copies get a key far ahead of any real time; agents above orchestrators,
+ * recency kept within each. bb's list items are not touched (0.2.19 lesson).
+ */
+const ROLE_BOOST = 2e12;
+function rolesFirst<T extends SidebarData>(data: T, ranks: Readonly<Record<string, number>> | null): T {
+  if (!ranks) return data;
+  let changed = false;
+  const threads = data.threads.map((thread) => {
+    const rank = Object.hasOwn(ranks, thread.id) ? ranks[thread.id] : undefined;
+    if (rank === undefined) return thread;
+    const t = thread as ThreadLike & { latestAttentionAt?: number };
+    const boost = ROLE_BOOST * (2 - rank);
+    changed = true;
+    return {
+      ...thread,
+      latestAttentionAt: (typeof t.latestAttentionAt === "number" ? t.latestAttentionAt : 0) + boost,
+      createdAt: (typeof t.createdAt === "number" ? t.createdAt : 0) + boost,
+    };
+  });
+  return changed ? { ...data, threads } : data;
+}
 
 /** A project's mark, shown before a thread's title. */
 interface ProjectBadge {
@@ -556,7 +584,7 @@ async function loadNativeList(
         const ordered = filtered.projects
           ? { ...filtered, projects: projectsByLatestThread(filtered.projects, filtered.threads) }
           : filtered;
-        return view.byDay ? groupByDay(ordered, view.dayField) : ordered;
+        return view.byDay ? groupByDay(ordered, view.dayField) : rolesFirst(ordered, view.roleRanks);
       }, [result, view]);
     },
   };
@@ -1552,8 +1580,9 @@ function MachineThreadList(props: PluginThreadListProps) {
       byDay,
       dayField,
       ids: matchIds,
+      roleRanks: innerMode === "project" && Object.keys(roleRanks).length > 0 ? roleRanks : null,
     }),
-    [listMachineId, byDay, dayField, matchIds],
+    [listMachineId, byDay, dayField, matchIds, innerMode, roleRanks],
   );
 
   // Include descendants: BB owns the hierarchy, expander and child activity.
