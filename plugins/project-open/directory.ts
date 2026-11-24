@@ -2,7 +2,7 @@
 import type { Directory } from './contract';
 
 export type Machine = { id: string; name?: string | null };
-export type Identity = { platform: string; hostKeys: string[] };
+export type Identity = { platform: string; hostKeys: string[]; user?: string | null };
 type Project = { sources?: { type?: string; hostId?: string | null; path?: string | null }[] };
 type Environment = { hostId?: string | null; path?: string | null };
 
@@ -23,7 +23,8 @@ export function buildMachines(hosts: Machine[], projects: Project[], environment
       if (source.hostId === host.id && usable(source.path)) roots.add(source.path);
     for (const environment of environments)
       if (environment.hostId === host.id && usable(environment.path)) roots.add(environment.path);
-    machines[host.id] = { name: host.name || host.id, platform: identity?.platform ?? null, roots: [...roots].sort(), hostKeys: identity?.hostKeys ?? [] };
+    machines[host.id] = { name: host.name || host.id, platform: identity?.platform ?? null, roots: [...roots].sort(), hostKeys: identity?.hostKeys ?? [],
+      ...(identity?.user ? { user: identity.user } : {}) };
   }
   return machines;
 }
@@ -36,7 +37,8 @@ export function keepKnownKeys(next: Directory, previous: unknown): Directory {
   for (const [id, machine] of Object.entries(machines)) {
     const keys = old[id]?.hostKeys;
     if (machine.platform === null && Array.isArray(keys))
-      machines[id] = { ...machine, platform: old[id]?.platform ?? null, hostKeys: publicKeys(keys.filter(k => typeof k === 'string')) };
+      machines[id] = { ...machine, platform: old[id]?.platform ?? null, hostKeys: publicKeys(keys.filter(k => typeof k === 'string')),
+        ...(typeof old[id]?.user === 'string' ? { user: old[id]!.user } : {}) };
   }
   return { ...next, machines };
 }

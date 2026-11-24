@@ -40,8 +40,12 @@ server writes `machines.json` through its own host part, so no BB credentials ar
 on the Mac. The folder must be inside one of those roots; the link only points at it.
 The SSH destination is the entry of `~/.ssh/config` whose key in `known_hosts` equals the
 machine's own key. Names are not compared and nothing is probed. The connection then
-accepts only that key. Several different entries, or none, is a refusal: name one once in
-`config.json` as `"bindings": {"<host-id>": "<ssh-alias>"}`. No new keys or logins are
+accepts only that key. Several entries with the machine's key are ways into one machine:
+those with the account BB runs under there are tried in the order of the configuration,
+and the first that really signs in is remembered (`State/<host-id>.alias.json`; forgotten
+when its disk fails to start). Only entries of different accounts, none of them BB's, or no
+entry at all, are a refusal: name one once in `config.json` as
+`"bindings": {"<host-id>": "<ssh-alias>"}`; that always wins. No new keys or logins are
 created. Without SSH use Open on Desktop, which downloads the file. Each project is its
 own disk. A manual `hosts` record wins over what BB reports.
 

@@ -166,7 +166,7 @@ def profile_for(host, path, settings):
     keys = [k for k in machine.get('hostKeys', []) if isinstance(k, str) and re.fullmatch(r'[a-z0-9@.-]+ [A-Za-z0-9+/=]+', k)]
     if not keys:
         raise Unavailable('У этой машины нет SSH, который можно проверить.' + NO_SSH)
-    alias = settings.get('bindings', {}).get(host) or pick_alias(keys)
+    alias = settings.get('bindings', {}).get(host) or choose_alias(host, keys, machine.get('user') if isinstance(machine.get('user'), str) else None)
     name = re.sub(r'[^\w .-]+', ' ', str(machine.get('name') or host)).strip(' .') or host
     label = (name[:40] + ' - ' + re.sub(r'[^\w .-]+', ' ', root.name))[:80].strip(' .')
     key = host + '-' + hashlib.sha256(str(root).encode()).hexdigest()[:10]
@@ -234,26 +234,63 @@ def ssh_options(alias):
     return dict(line.split(' ', 1) for line in out.splitlines() if ' ' in line)
 
 
-def pick_alias(keys, config=None):
-    """The one SSH destination whose already accepted host key is the machine's own key.
+def candidates(keys, user=None, config=None):
+    """SSH destinations whose already accepted host key is the machine's own key, in the order of the configuration.
 
-    Nothing is connected to here, and names are not compared: only host keys are.
+    Nothing is connected to here, and names are not compared: only host keys are. Several
+    entries with the machine's key are ways into one machine; among them the account BB runs
+    under is the right one.
     """
-    matches = {}
+    ways = {}
     for alias in ssh_aliases(config or Path.home() / '.ssh/config'):
         try:
             options = ssh_options(alias)
             if known_keys(options) & set(keys):
                 way = tuple(options.get(k, '') for k in ('hostname', 'port', 'user', 'proxyjump', 'proxycommand'))
-                matches.setdefault(way, alias)
+                # Another entry for the same address may carry another identity file.
+                ways.setdefault((*way, options.get('identityfile', '')), (alias, options.get('user', '')))
         except (OSError, subprocess.SubprocessError, ValueError):
             continue
-    if len(matches) == 1:
-        return next(iter(matches.values()))
-    if matches:
-        raise Unavailable('К этой машине подходит несколько SSH-записей: ' + ', '.join(sorted(matches.values()))
-                          + '. Укажи одну в «bindings» файла config.json.')
-    raise Unavailable('На этом Mac нет SSH-входа на эту машину.' + NO_SSH)
+    found = list(ways.values())
+    if not found:
+        raise Unavailable('На этом Mac нет SSH-входа на эту машину.' + NO_SSH)
+    same = [alias for alias, account in found if user and account == user]
+    if same:
+        return same
+    if len({account for _, account in found}) == 1:
+        return [alias for alias, _ in found]
+    raise Unavailable('К этой машине подходят SSH-записи разных пользователей: ' + ', '.join(sorted(alias for alias, _ in found))
+                      + '. Укажи одну в «bindings» файла config.json.')
+
+
+def signs_in(profile):
+    """Whether this entry really gives SFTP, with the machine's pinned key."""
+    try:
+        return subprocess.run([*ssh_command(profile), '-s', 'sftp'], stdin=subprocess.DEVNULL, capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def remembered_path(host):
+    return BASE / 'State' / (host + '.alias.json')
+
+
+def choose_alias(host, keys, user=None, config=None):
+    """The first entry that signs in, remembered; a single entry needs no trial."""
+    names = candidates(keys, user, config)
+    if len(names) == 1:
+        return names[0]
+    try:
+        remembered = json.loads(remembered_path(host).read_text())['alias']
+        if remembered in names:
+            return remembered
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    for alias in names:
+        if signs_in({'key': host + '-trial', 'sshProfile': alias, 'hostKeys': sorted(keys)}):
+            write_json(remembered_path(host), {'alias': alias})
+            return alias
+    raise Unavailable('Ни одна SSH-запись этой машины сейчас не пускает: ' + ', '.join(names) + '. Проверь сеть или VPN и повтори.' + NO_SSH)
 
 
 def ssh_command(profile):
@@ -343,7 +380,8 @@ def mounted_folder(host, path, settings):
     if not live:
         mount.mkdir(parents=True, exist_ok=True)
     metadata = BASE / 'State' / (key + '.json')
-    own = {k: v for k, v in profile.items() if k != 'key'}
+    # A pinned machine is the same disk through any of its SSH entries.
+    own = {k: v for k, v in profile.items() if k != 'key' and not (k == 'sshProfile' and profile.get('hostKeys'))}
     fingerprint, earlier = (hashlib.sha256(json.dumps([own, version], sort_keys=True).encode()).hexdigest()
                             for version in ('webdav-v2', 'webdav-v1'))
     previous = json.loads(metadata.read_text()) if metadata.exists() else {}
@@ -396,6 +434,7 @@ def mounted_folder(host, path, settings):
         deadline = time.monotonic() + 15
         while True:
             if process.poll() is not None:
+                remembered_path(host).unlink(missing_ok=True)
                 raise Unavailable('Машина недоступна по SSH. Проверь сеть или VPN и повтори; подробности — в журнале BB Project Folder.')
             if time.monotonic() >= deadline:
                 process.terminate()
@@ -403,6 +442,7 @@ def mounted_folder(host, path, settings):
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     process.kill()
+                remembered_path(host).unlink(missing_ok=True)
                 raise Unavailable('Машина не ответила по SSH за 15 секунд. Проверь сеть или VPN и повтори.')
             try:
                 if answers(url, 12):
