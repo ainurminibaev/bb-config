@@ -1,0 +1,30 @@
+{
+  "id": "kodaforge-inspector-view-button",
+  "title": "KodaForge Inspector 0.3.3 — выбор вида из классического вида",
+  "component": "kodaforge-inspector",
+  "where": "server",
+  "kind": "command",
+  "applies": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "applicable",
+    "kodaforge-inspector",
+    "0.3.3"
+  ],
+  "apply": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "apply",
+    "kodaforge-inspector",
+    "0.3.3"
+  ],
+  "verify": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "check",
+    "kodaforge-inspector",
+    "0.3.3"
+  ],
+  "rerun": "Актуальная работающая версия проходит проверку без установки.",
+  "rollback": "Установите плагин из предыдущего тега kodaforge-inspector/v0.3.2."
+}

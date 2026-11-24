@@ -51,3 +51,10 @@ Selecting the file itself (`open -R`) needs handler 0.3.0 on every Mac and
 `select=1` parameter. After a handler update macOS asks again for access to Documents
 and network volumes for “BB Project Folder”; until it is answered a folder is shown
 selected in its parent after six seconds.
+
+Handler 0.4.0 takes machines and roots from `machines.json`, written by the plugin's
+server through its host part on each opening; a manual `hosts` record in `config.json`
+wins. The SSH alias is matched by host key (`known_hosts` against `/etc/ssh/*.pub` read
+by BB on the machine). On "несколько SSH-записей" add `"bindings": {"<host-id>":
+"<alias>"}`. Check `Status/*.json` and `State/*.log` in the handler's support folder; do
+not open Finder on the user's Mac as a probe.

@@ -34,13 +34,24 @@ on the loopback interface. macOS’s own `mount_webdav` connects the disk; Finde
 opens the exact requested directory. No FUSE driver, remote network share,
 SSH key copy or new server-side authentication is required. NFS is not used.
 
-The handler accepts only configured host IDs and allowed project roots. The
+Machines need no records. BB tells the handler its machines, their project folders
+and workspaces, and each machine's public SSH host keys: on every opening the plugin's
+server writes `machines.json` through its own host part, so no BB credentials are kept
+on the Mac. The folder must be inside one of those roots; the link only points at it.
+The SSH destination is the entry of `~/.ssh/config` whose key in `known_hosts` equals the
+machine's own key. Names are not compared and nothing is probed. The connection then
+accepts only that key. Several different entries, or none, is a refusal: name one once in
+`config.json` as `"bindings": {"<host-id>": "<ssh-alias>"}`. No new keys or logins are
+created. Without SSH use Open on Desktop, which downloads the file. Each project is its
+own disk. A manual `hosts` record wins over what BB reports.
+
+The handler accepts only those machines and configured or reported project roots. The
 link carries a host ID, path and request ID, without SSH addresses or credentials.
 Configuration and runtime status stay under the client’s
 `~/Library/Application Support/BB Project Folder/`, outside this repository.
 
 Source: `macos/open_folder.py`, `macos/handler.applescript`, `macos/install.py`.
-Create a private JSON config containing the installed `rclone` path and `hosts`:
+Optional private JSON config with manual records:
 
 ```json
 {
@@ -56,6 +67,7 @@ Create a private JSON config containing the installed `rclone` path and `hosts`:
 On the Mac, copy all three source files to one directory, then run:
 
 ```sh
+python3 macos/install.py            # keeps an existing config.json
 python3 macos/install.py --config /private/path/client.json
 ```
 
@@ -86,7 +98,7 @@ portalled to its own header. They use the actual thread ID even in split panes.
 DOM markers and accessible labels must be rechecked after BB UI updates.
 Unmount removes portals/observers and aborts pending UI operations.
 
-To disconnect the remote disk use Finder’s eject action or
+To disconnect a disk shown in Finder use its eject action, otherwise
 `diskutil unmount <handler-support-dir>/Volumes/<label>`. Runtime logs/status
 and cached files must not be committed or copied into the settings snapshot.
 The handler’s private config must be restored separately; see the repository’s
@@ -96,11 +108,13 @@ replacing BB’s original controls.
 Connection lifecycle: the macOS helper starts rclone on demand, without a
 LaunchAgent. Each configured remote host reuses its existing local server and
 mount. After reboot the next activation creates the connection again; it does
-not automatically restore Finder windows. Network/VPN interruptions have no
-helper watchdog or guaranteed transparent recovery. An unreachable SSH target
-requires restored connectivity and may require ejecting/reopening the disk.
+not automatically restore Finder windows. SSH notices a dead link in about 12 seconds;
+after a failed connection the next requests fail at once for 15 seconds, so Finder gets
+an error instead of waiting for each one. New disks are mounted `nobrowse`: Finder and
+Spotlight do not look into them on their own and they are not in the sidebar. The
+handler itself never waits on the disk and says so when Finder does not answer.
 The helper neither provides a VPN/proxy route nor maintains an offline project
-copy. Every remote host needs an explicit private SSH/root mapping.
+copy.
 
 On touch clients no sidebar shortcuts are mounted: hidden controls must not
 intercept row taps. Header folder shortcuts on iPhone/iPad/Android open BB’s
