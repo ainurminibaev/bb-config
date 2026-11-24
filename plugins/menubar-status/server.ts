@@ -212,6 +212,9 @@ export default async function menubarStatus(bb: BbPluginApi) {
    * - outbox/*.json: replies and "open in bb" requests from the panel.
    */
   const chatSignatures = new Map<string, string>();
+  /** Thread id → until when its conversation file is rewritten on every poll: the panel waits to see the reply it sent. */
+  const chatAwaited = new Map<string, number>();
+  const CHAT_AWAITED_MS = 30_000;
   // Conversation events per listed thread, oldest first: while an agent works
   // only the new ones are read, not all pages again on every poll.
   type ChatRow = { seq: number | string; type: string; createdAt: number; data: Record<string, unknown> };
@@ -228,7 +231,11 @@ export default async function menubarStatus(bb: BbPluginApi) {
     panelThreads = listed;
     await Promise.all(feed.items.map(async (item) => {
       const signature = `${item.updatedAt}|${item.state}|${item.activity}`;
-      if (chatSignatures.get(item.id) === signature) return;
+      // A reply sent from the panel into a running turn may change none of
+      // these, so the conversation is rewritten for a while after it anyway.
+      const awaited = (chatAwaited.get(item.id) ?? 0) > Date.now();
+      if (!awaited) chatAwaited.delete(item.id);
+      if (chatSignatures.get(item.id) === signature && !awaited) return;
       try {
         const chat = await chatOf(item.id, known);
         await bb.sdk.files.write({ hostId, path: `${dir}/chats/${item.id}.json`, content: JSON.stringify(chat) });
@@ -538,6 +545,7 @@ export default async function menubarStatus(bb: BbPluginApi) {
     const result = (await bb.sdk.threads.send({
       threadId, mode: "auto", input: [{ type: "text", text, mentions: [] }],
     } as never)) as { delivery?: string };
+    chatAwaited.set(threadId, Date.now() + CHAT_AWAITED_MS);
     schedule();
     return { delivery: result.delivery ?? "sent" };
   }
