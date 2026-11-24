@@ -2,7 +2,7 @@ import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
-import { LAYOUTS, UPSTREAM, effectiveLayout, layoutOf } from "./inspector";
+import { LAYOUTS, followsReleases, effectiveLayout, layoutOf } from "./inspector";
 const report = z.object({
   state: z.enum(["compatible", "incompatible", "waiting"]),
   reason: z.string().max(300),
@@ -106,7 +106,7 @@ export default function plugin(bb: BbPluginApi) {
           { timeout: 15000, maxBuffer: 64000 },
         );
         source = JSON.parse(result.stdout);
-        tracking = (source as { requested?: string }).requested === UPSTREAM;
+        tracking = followsReleases((source as { requested?: string }).requested);
       } catch (e) {
         source = { error: e instanceof Error ? e.message : String(e) };
       }

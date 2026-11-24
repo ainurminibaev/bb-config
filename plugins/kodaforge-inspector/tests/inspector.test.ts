@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { autoOpenWorkspace, inspect, attachLayout, effectiveLayout, layoutOf, threadInWorkspace } from "../inspector";
+import { autoOpenWorkspace, followsReleases, inspect, attachLayout, effectiveLayout, layoutOf, threadInWorkspace } from "../inspector";
 function fixture() {
   const dom = new JSDOM(
     `<div class="kf-root"><nav aria-label="Views"></nav><div data-panel id="main"><div data-panel id="editors"><div id="original"><input value="unsaved draft"></div></div></div><footer><button title="Switch branch"></button><button title="Toggle Terminal (⌃&#96;)"></button></footer></div>`,
@@ -110,4 +110,12 @@ test("only the selected dialog's plain page is redirected, and only when switche
   ] as const) {
     assert.equal(autoOpenWorkspace(route, on, selected), null);
   }
+});
+
+test("follows releases from the catalog and from the owner's fork, nothing else", async () => {
+  const policy = JSON.parse(await (await import("node:fs/promises")).readFile(new URL("../../kodaforge-compat/fork.json", import.meta.url), "utf8"));
+  assert.ok(followsReleases(`git:${policy.repository}@semver:${policy.tagPrefix}:${policy.range}`));
+  assert.ok(followsReleases("git:https://github.com/Kodaks94/bb-plugin-kodaforge.git@semver:>=0.7.0 <1.0.0"));
+  assert.equal(followsReleases("path:/srv/kodaforge"), false);
+  assert.equal(followsReleases(undefined), false);
 });

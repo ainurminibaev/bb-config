@@ -38,3 +38,10 @@ handler status, and verification that Finder shows that mounted path. A menu
 opening or a successful mount/stat alone does not prove the folder opened.
 Check repeated clicks and native menu state; do not report a stale failed request
 as the outcome of a newer successful one.
+
+In KodaForge's Explorer the plugin adds “Открыть в Finder” through that plugin's
+`kodaforge:explorer-menu` window event (contract version 1, see its
+docs/explorer-menu.md). It shows only on a desktop Mac with `finderHelper` on; a file
+opens its folder. The link is built by `finderFolderUrl`; keep that logic in one place.
+Without KodaForge nothing changes; if the item is missing, check that KodaForge is the
+fork (`bb plugin source kodaforge`) and that `finderHelper` is on.

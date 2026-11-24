@@ -27,3 +27,5 @@ WebDAV на loopback; диск подключает штатный `mount_webdav
 Установка обработчика на Mac (`macos/install.py`) и формат настроек — в
 [README.md](README.md). Сам плагин входит в набор bb-config
 (`python3 scripts/updates.py apply`).
+
+В дереве KodaForge (из форка с точкой `kodaforge:explorer-menu`) плагин добавляет пункт «Открыть в Finder»: папка открывается сама, файл — своей папкой. Нужен Mac и включённый `finderHelper`.

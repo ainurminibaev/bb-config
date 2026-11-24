@@ -140,29 +140,32 @@
   },
   {
    "id": "kodaforge",
-   "kind": "catalog",
-   "name": "KodaForge",
-   "description": "Редактор кода внутри BB; нужен для Code Open и KodaForge Inspector.",
-   "repository": "https://github.com/Kodaks94/bb-plugin-kodaforge",
-   "source": "git:https://github.com/Kodaks94/bb-plugin-kodaforge.git@",
-   "install": "kodaforge@bb-community",
-   "min": "0.7.0",
-   "configure": [
-    {
-     "name": "вкладки рабочих областей (Keeper)",
-     "check": [
-      "{python}",
-      "scripts/kodaforge_workspace_tabs.py",
-      "--check"
-     ],
-     "apply": [
-      "{python}",
-      "scripts/kodaforge_workspace_tabs.py",
-      "--apply"
-     ]
-    }
+   "kind": "git",
+   "name": "KodaForge (форк)",
+   "description": "Редактор кода внутри BB (форк: просмотр файлов, Markdown, терминал в папке, свои вкладки у проекта); нужен для Code Open и KodaForge Inspector.",
+   "repository": "https://github.com/ainurminibaev/bb-plugin-kodaforge",
+   "source": "git:https://github.com/ainurminibaev/bb-plugin-kodaforge.git@",
+   "install": "git:https://github.com/ainurminibaev/bb-plugin-kodaforge.git@>=0.7.100 <1.0.0",
+   "installOptions": [
+    "--tag-prefix",
+    "own/"
    ],
-   "tested": "0.7.0"
+   "min": "0.7.100",
+   "adopt": {
+    "check": [
+     "{python}",
+     "scripts/plugin_fork.py",
+     "check",
+     "kodaforge"
+    ],
+    "apply": [
+     "{python}",
+     "scripts/plugin_fork.py",
+     "apply",
+     "kodaforge"
+    ]
+   },
+   "tested": "0.7.100"
   },
   {
    "id": "kodaforge-inspector",

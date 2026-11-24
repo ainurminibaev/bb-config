@@ -3,7 +3,7 @@
 Заявленный набор описан в [`config/bundle.json`](../config/bundle.json): у каждого
 компонента — описание и ссылка на код (их показывает окно выбора), у внешних —
 проверенная версия `tested` (Handoff 0.8.2, Needs You 0.2.1, Tokenomics 0.2.2,
-KodaForge 0.7.0, ChatGPT Realtime 0.1.0; более новая даёт предупреждение). Одна
+KodaForge 0.7.100, ChatGPT Realtime 0.1.0; более новая даёт предупреждение). Одна
 установка и одно обновление сводят BB к этому набору
 (`python3 scripts/updates.py apply`, см. [updates.md](updates.md)). Порядок в файле —
 порядок установки: зависимости раньше зависимых.
@@ -21,7 +21,7 @@ KodaForge 0.7.0, ChatGPT Realtime 0.1.0; более новая даёт пред
 | `handoff-button` | свой плагин | `plugins/handoff-button` | зависит от `handoff` | — |
 | `inbox` (Needs You) | каталог BB | `inbox@bb-community`, от 0.2.0 | исправление `plugins/inbox-compat` накладывает Keeper | — |
 | `tokenomics` | каталог BB | `tokenomics@bb-community`, от 0.2.0 | исправление `plugins/voice-mode-keeper/tokenomics_compat.py` накладывает Keeper | — |
-| `kodaforge` | каталог BB | `kodaforge@bb-community`, от 0.7.0 | для `code-open`, `kodaforge-inspector`; исправления `plugins/kodaforge-compat` (Keeper) | — |
+| `kodaforge` | форк | `ainurminibaev/bb-plugin-kodaforge`, теги `own/`, от 0.7.100 | для `code-open`, `kodaforge-inspector`; перевод и возврат `scripts/plugin_fork.py` | — |
 | `kodaforge-inspector` | свой плагин | `plugins/kodaforge-inspector` | зависит от `kodaforge` | — |
 | `code-open` | свой плагин | `plugins/code-open` | зависит от `kodaforge` | — |
 | `codex-project-trust` | **собственный репозиторий** | `git:…/ainurminibaev/bb-codex-project-trust@^1.0.0`, от 1.0.0 | — | — |
