@@ -293,11 +293,10 @@
   },
   {
     "id": "kodaforge",
-    "version": "0.7.0",
+    "version": "0.7.100",
     "enabled": true,
     "name": "KodaForge",
-    "source": "git:https://github.com/Kodaks94/bb-plugin-kodaforge.git@semver:>=0.7.0 <1.0.0",
-    "installSource": "kodaforge@bb-community"
+    "source": "git:https://github.com/ainurminibaev/bb-plugin-kodaforge.git@semver:own/:>=0.7.100 <1.0.0"
   },
   {
     "id": "kodaforge-inspector",
@@ -407,7 +406,7 @@
   },
   {
     "id": "project-open",
-    "version": "0.3.0",
+    "version": "0.3.1",
     "enabled": true,
     "name": "Project Open",
     "source": "path:plugins/project-open"

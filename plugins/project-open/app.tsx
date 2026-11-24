@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { openNativeTerminal, openNativeWorkspace, openNativeFiles, waitFor } from './native';
 import { finderFolderUrl, folderClientMode } from './folder-target';
+import { addFinderItem, EXPLORER_MENU_EVENT } from './explorer-menu';
 
 type Anchor = { threadId: string; element: HTMLElement };
 function useThreadAnchors(enabled: boolean) {
@@ -142,6 +143,23 @@ function HeaderBridge() {
   return <><span ref={marker} data-project-open-bridge="" hidden />{anchor && threadId ? createPortal(<ThreadButtons root={anchor.root} threadId={threadId} />, anchor.element) : null}</>;
 }
 
+const clientMode = (finderHelper: boolean) => folderClientMode({ userAgent: navigator.userAgent, platform: navigator.platform, maxTouchPoints: navigator.maxTouchPoints,
+  compactTouch: window.matchMedia('(max-width:640px) and (pointer:coarse)').matches }, finderHelper);
+
+/** Puts «Открыть в Finder» into KodaForge's Explorer menu, when that plugin offers its menu. */
+function ExplorerMenu() {
+  const { values } = useSettings();
+  const navigate = useBbNavigate();
+  const finderHelper = values?.finderHelper === true;
+  useEffect(() => {
+    if (!finderHelper) return;
+    const listen = (event: Event) => addFinderItem(event, clientMode(finderHelper), url => navigate.openUrl(url));
+    window.addEventListener(EXPLORER_MENU_EVENT, listen);
+    return () => window.removeEventListener(EXPLORER_MENU_EVENT, listen);
+  }, [finderHelper, navigate]);
+  return null;
+}
+
 async function openThreadTarget(
   kind: 'folder' | 'terminal', threadId: string, sdk: ReturnType<typeof useSdk>,
   navigate: ReturnType<typeof useBbNavigate>, values: ReturnType<typeof useSettings>['values'],
@@ -162,8 +180,7 @@ async function openThreadTarget(
   const environment = await sdk.environments.get({ environmentId: thread.environmentId, signal });
   if (!environment.path) throw new Error('У треда нет рабочей папки.');
   if (!values) throw new Error('Настройки открытия папки ещё загружаются.');
-  const mode = folderClientMode({ userAgent: navigator.userAgent, platform: navigator.platform, maxTouchPoints: navigator.maxTouchPoints,
-    compactTouch: window.matchMedia('(max-width:640px) and (pointer:coarse)').matches }, values.finderHelper === true);
+  const mode = clientMode(values.finderHelper === true);
   if (mode === 'files') return openNativeFiles(await getRoot(), signal);
   if (mode === 'finder') {
     const url = finderFolderUrl(environment.hostId, environment.path);
@@ -262,5 +279,6 @@ export default definePluginApp(app => {
     });
   }
   app.slots.experimental_appOverlay({ id: 'project-controls', component: ProjectControls });
+  app.slots.experimental_appOverlay({ id: 'explorer-menu', component: ExplorerMenu });
   app.composer.customize({ id: 'header-bridge', scopes: ['thread'], banners: [{ id: 'header-bridge', chrome: 'bare', component: HeaderBridge }] });
 });

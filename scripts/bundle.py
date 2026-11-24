@@ -350,7 +350,7 @@ def converge_one(component, row, root, installed):
     if state == 'missing' or state == 'outdated' and component['kind'] == 'local':
         if component['kind'] == 'local':
             return install_local(component, root, installed)
-        code, output = run(bb_command('plugin', 'install', component['install'], '--yes'), root)
+        code, output = run(bb_command('plugin', 'install', component['install'], *component.get('installOptions', []), '--yes'), root)
         return None if code == 0 else f'bb plugin install {component["install"]}: {output}'
     if state == 'adopt':
         code, output = run(component['adopt']['apply'], root)

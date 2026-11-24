@@ -107,3 +107,5 @@ intercept row taps. Header folder shortcuts on iPhone/iPad/Android open BB’s
 original New tab file search for that thread, never the macOS URL handler.
 The macOS handler is used only on a Mac desktop; other desktop clients use
 BB’s native Open behavior.
+
+In KodaForge's Explorer (a build with the `kodaforge:explorer-menu` event) the plugin adds “Открыть в Finder”: a folder opens itself, a file its folder. It needs a Mac and `finderHelper` on.
