@@ -78,10 +78,8 @@ export function withGroupPaging(runtime: Record<string, any>) {
     const list = props && typeof type !== "string" &&
       typeof props.onToggleThreadCollapsed === "function" &&
       props.collapsedThreadIds instanceof Set;
-    if (list && Array.isArray(props.items) && typeof props.projectId === "string" &&
-        props.sortableParentKey === props.projectId) {
-      return factory(ProjectItems, { Component: type, nativeProps: props }, key);
-    }
+    // 0.2.20: roles-first in project groups is off — reordering bb's items
+    // hid threads in many project groups (0.2.19). Kept for a safe redo.
     const pinned = list && Array.isArray(props.rootItems) &&
       Array.isArray(props.rootNodes) && "onReorderPinnedRoot" in props;
     const normal = props && typeof type !== "string" &&
