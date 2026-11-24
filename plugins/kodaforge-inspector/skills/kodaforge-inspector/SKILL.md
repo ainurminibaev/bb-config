@@ -10,3 +10,5 @@ description: Проверка центрального чата KodaForge, ис�
 Настройки `autoOpen` (по умолчанию выключено) и `autoOpenThread` (ID диалога `thr_…`) перенаправляют обычную страницу одного выбранного диалога сразу в KodaForge; ссылки на сообщения и прочие диалоги не затрагиваются. Включай и меняй ID только по просьбе пользователя: `bb plugin config kodaforge-inspector set autoOpen true`, `… set autoOpenThread <id>`.
 
 Источник основной установки смотри через `bb plugin source kodaforge --json`. Для обновления основного плагина по запросу пользователя используй штатный механизм BB. Инструкция по установке и проверке находится в README плагина.
+
+The view chooser opens by «Вид…» in the toolbar (center) or in KodaForge's title bar (classic, postponed choice). Without the title bar slot use the plugin's `layout` setting.
