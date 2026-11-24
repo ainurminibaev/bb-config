@@ -1,7 +1,10 @@
 [
   {
     "id": "subthread-error-mark",
-    "replacedBy": "machine-tabs",
+    "replacedBy": {
+      "id": "machine-tabs",
+      "minVersion": "0.2.16"
+    },
     "reason": "Machine Tabs 0.2.16 сам ставит ⊗ на тред с ошибкой, который строка BB не отмечает, в том числе на подтред; второй значок дублировал его."
   }
 ]

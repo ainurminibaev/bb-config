@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "version": "v1.17.0",
+  "title": "Один значок ошибки у подтреда",
+  "steps": [
+    {
+      "id": "bundle",
+      "title": "Полный набор компонентов bb-config",
+      "component": "bb-config",
+      "where": "server",
+      "kind": "bundle",
+      "rerun": "Безопасно: установленное и актуальное только проверяется; повтор доделывает остаток после сбоя.",
+      "rollback": "Компонент, который не нужен, исключите командой python3 scripts/bundle.py exclude <id> и удалите штатно (bb plugin remove <id>); прежнюю версию собственного плагина ставит предыдущий релиз."
+    },
+    {
+      "id": "retire-subthread-error-mark",
+      "title": "Убрать Subthread Error Mark: второй красный ⊗ у подтреда с ошибкой",
+      "component": "subthread-error-mark",
+      "where": "server",
+      "kind": "command",
+      "requiresPlugins": [],
+      "applies": [
+        "{python}",
+        "scripts/plugin_retire.py",
+        "applicable",
+        "subthread-error-mark"
+      ],
+      "apply": [
+        "{python}",
+        "scripts/plugin_retire.py",
+        "apply",
+        "subthread-error-mark"
+      ],
+      "verify": [
+        "{python}",
+        "scripts/plugin_retire.py",
+        "check",
+        "subthread-error-mark"
+      ],
+      "rerun": "Безопасно: если плагина уже нет, ничего не делается.",
+      "rollback": "bb plugin install из тега subthread-error-mark/v0.1.0 репозитория bb-config — значок вернётся вторым рядом со значком Machine Tabs."
+    }
+  ]
+}
