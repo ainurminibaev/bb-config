@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Remove a plugin bb-config no longer ships: config/retired-plugins.json lists them with the reason.
 
-  applicable <id>   0 when the plugin is installed here (there is something to remove)
+  applicable <id>   0 when the plugin is installed here and its replacement (replacedBy: id and
+                    minVersion) is installed, enabled and new enough; otherwise it stays
   check <id>        0 when it is not installed
   apply <id>        remove it with `bb plugin remove`; nothing else of the installation changes
 """
@@ -23,8 +24,33 @@ def retired(plugin_id, path=ROOT / 'config/retired-plugins.json'):
     raise ValueError(f'{plugin_id} is not in config/retired-plugins.json')
 
 
+def version(text):
+    try:
+        return tuple(int(part) for part in str(text).split('-')[0].split('.'))
+    except ValueError:
+        return None
+
+
+def replaced(row):
+    """The replacement is in place, so removing the plugin loses nothing."""
+    need = row.get('replacedBy')
+    if not need:
+        return True
+    other = source.plugin(need['id'])
+    if not other or not other.get('enabled'):
+        return False
+    have, least = version(other.get('version')), version(need.get('minVersion', '0'))
+    return bool(have and least and have >= least)
+
+
 def applicable(plugin_id):
-    return 0 if source.plugin(plugin_id) else 1
+    if not source.plugin(plugin_id):
+        return 1
+    if not replaced(retired(plugin_id)):
+        need = retired(plugin_id)['replacedBy']
+        print(f'{plugin_id}: kept until {need["id"]} {need.get("minVersion", "")} is installed and enabled')
+        return 1
+    return 0
 
 
 def check(plugin_id):

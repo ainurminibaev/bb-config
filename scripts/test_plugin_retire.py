@@ -35,6 +35,18 @@ class Retire(unittest.TestCase):
             self.assertEqual(retire.apply('demo'), 0)
         bb.assert_not_called()
 
+    def test_kept_until_the_replacement_is_new_enough(self):
+        row = {'id': 'demo', 'replacedBy': {'id': 'tabs', 'minVersion': '0.2.16'}}
+        def installed(rows):
+            return lambda plugin_id: rows.get(plugin_id)
+        cases = [({}, False), ({'tabs': {'enabled': True, 'version': '0.2.8'}}, False),
+                 ({'tabs': {'enabled': False, 'version': '0.2.21'}}, False),
+                 ({'tabs': {'enabled': True, 'version': '0.2.16'}}, True),
+                 ({'tabs': {'enabled': True, 'version': '0.10.0'}}, True)]
+        for rows, expected in cases:
+            with mock.patch.object(retire.source, 'plugin', side_effect=installed(rows)):
+                self.assertEqual(retire.replaced(row), expected, rows)
+
 
 if __name__ == '__main__':
     unittest.main()
