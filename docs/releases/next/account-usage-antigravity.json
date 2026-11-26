@@ -1,0 +1,30 @@
+{
+  "id": "account-usage-antigravity",
+  "title": "Thread Account Usage 0.2.0 — Antigravity (Google и Antig), единая шкала лимитов, страница «Аккаунты и объёмы»",
+  "component": "thread-account-usage",
+  "where": "server",
+  "kind": "command",
+  "applies": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "applicable",
+    "thread-account-usage",
+    "0.2.0"
+  ],
+  "apply": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "apply",
+    "thread-account-usage",
+    "0.2.0"
+  ],
+  "verify": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "check",
+    "thread-account-usage",
+    "0.2.0"
+  ],
+  "rerun": "Актуальная работающая версия проходит проверку без установки.",
+  "rollback": "Установите предыдущий тег thread-account-usage/v0.1.3; сессия кабинета antig.ru остаётся в ~/.local/state/bb-antig."
+}

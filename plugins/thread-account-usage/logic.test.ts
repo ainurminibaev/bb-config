@@ -80,3 +80,19 @@ test('per-model window survives a rate-limited answer until it resets', () => {
   assert.deepEqual(carryModelWindows(base, [{ ...fable, resetsAt: '2026-11-22T19:00:00Z' }], now), base);
   assert.deepEqual(carryModelWindows(base, undefined, now), base);
 });
+test('one scale: pace tick, running ahead, a package expiring unused', async () => {
+  const { pace, ahead, wasteRisk, vclaudeNote } = await import('./logic.ts');
+  const now = Date.parse('2026-11-26T05:00:00Z');
+  const week = { label: 'Weekly limit', kind: 'weekly' as const, usedPercent: 85, resetsAt: '2026-12-01T21:00:00Z' };
+  assert.equal(Math.round(pace(week, now)!), 19);
+  assert.equal(ahead(week, now), true);
+  assert.equal(ahead({ ...week, usedPercent: 25 }, now), false);
+  assert.equal(ahead({ ...week, usedPercent: 92, resetsAt: null }, now), true);
+  const pack = { label: 'Тариф', kind: 'other' as const, usedPercent: 7.1, resetsAt: null, endsAt: '2026-11-28T17:15:00Z' };
+  assert.equal(Math.round(pace(pack, now)!), 92);
+  assert.equal(wasteRisk(pack, now), true);
+  assert.equal(wasteRisk({ ...pack, endsAt: '2026-12-26T04:16:00Z' }, now), false);
+  assert.equal(pace({ label: 'Credits', kind: 'other', usedPercent: 1, resetsAt: null }, now), null);
+  assert.equal(vclaudeNote(4_643_626, 5_000_000, { 'anthropic-claude-opus-4-6': { input: 1, output: 1 }, 'anthropic-claude-opus-5-5': { input: 800_000, output: 4_000_000 } }),
+    'осталось 4,64 млн из 5 млн ед. ≈ 5,8 млн вх. или 1,16 млн вых. токенов Opus 5.5');
+});

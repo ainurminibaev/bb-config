@@ -97,7 +97,7 @@ static class Program
 sealed class Account
 {
     public string Provider = "", Machines = "";
-    public int FiveHour = -1, Week = -1, Resets;
+    public int FiveHour = -1, Week = -1, Tariff = -1, Resets;
     public DateTime? FiveHourReset, WeekReset;
 }
 
@@ -363,8 +363,9 @@ sealed class StatusContext : ApplicationContext
                 int used = Math.Max(0, Number(entry, "usedPercent"));
                 if (kind == "five-hour") { account.FiveHour = used; account.FiveHourReset = reset; }
                 if (kind == "weekly") { account.Week = used; account.WeekReset = reset; }
+                if ((account.Provider == "vclaude" || account.Provider == "acp-gemini-antig") && kind == "other") { account.Tariff = used; account.Machines = account.Provider == "vclaude" ? "V" : "A"; }
             }
-            if (account.FiveHour >= 0 || account.Week >= 0) result.Accounts.Add(account);
+            if (account.FiveHour >= 0 || account.Week >= 0 || account.Tariff >= 0) result.Accounts.Add(account);
         }
         result.Accounts.Sort(delegate(Account a, Account b)
         {
@@ -374,7 +375,7 @@ sealed class StatusContext : ApplicationContext
         return result;
     }
 
-    static int Order(string provider) { return provider.StartsWith("claude") ? 0 : provider.StartsWith("codex") ? 1 : 9; }
+    static int Order(string provider) { return (provider.StartsWith("claude") || provider == "vclaude") ? 0 : provider.StartsWith("codex") ? 1 : 9; }
 
     void Refresh()
     {
@@ -513,7 +514,7 @@ sealed class StatusContext : ApplicationContext
     /** The agent's own mark (icons\claude-dark.png and the like), or null when the file is missing. */
     Image Mark(string provider, bool light)
     {
-        string name = (provider.StartsWith("claude") ? "claude" : provider.StartsWith("codex") ? "codex" : provider) + (light ? "-light" : "-dark");
+        string name = ((provider.StartsWith("claude") || provider == "vclaude") ? "claude" : provider.StartsWith("codex") ? "codex" : provider) + (light ? "-light" : "-dark");
         Image image;
         if (marks.TryGetValue(name, out image)) return image;
         try { using (var file = Image.FromFile(Path.Combine(dir, "icons", name + ".png"))) image = new Bitmap(file); }
@@ -627,7 +628,7 @@ sealed class StatusContext : ApplicationContext
         var signature = new StringBuilder();
         signature.Append(bar).Append(light).Append(hovered).Append(pinned).Append(model.Stale).Append(model.Needs).Append('/').Append(model.Working)
             .Append('/').Append(model.Errors).Append('/').Append(model.Unread).Append(model.Working > 0 && !model.Stale ? spin : 0);
-        foreach (Account a in model.Accounts) signature.Append('|').Append(a.Provider).Append(a.Machines).Append(a.Resets).Append(a.FiveHour).Append('/').Append(a.Week).Append(Until(a.FiveHourReset)).Append(Until(a.WeekReset));
+        foreach (Account a in model.Accounts) signature.Append('|').Append(a.Provider).Append(a.Machines).Append(a.Resets).Append(a.FiveHour).Append('/').Append(a.Week).Append('/').Append(a.Tariff).Append(Until(a.FiveHourReset)).Append(Until(a.WeekReset));
         string wantedPicture = signature.ToString();
         if (wantedPicture == stripDrawn && stripShown) return true;
 
@@ -723,9 +724,9 @@ sealed class StatusContext : ApplicationContext
 
                     string plus = account.Resets > 0 ? "+" + account.Resets : "";
                     float lettersWidth = wide(account.Machines, tiny), labelWidth = lettersWidth + (plus.Length > 0 ? wide(plus, tiny) : 0);
-                    float barsWidth = (account.FiveHour >= 0 ? thick + between : 0) + thin;
+                    float barsWidth = (account.FiveHour >= 0 || account.Tariff >= 0 ? thick + between : 0) + thin;
                     float column = Math.Max(barsWidth, labelWidth), bx = x + (column - barsWidth) / 2;
-                    if (account.FiveHour >= 0) { Bar(g, bx, barTop, thick, barHeight, account.FiveHour, ink); bx += thick + between; }
+                    if (account.FiveHour >= 0 || account.Tariff >= 0) { Bar(g, bx, barTop, thick, barHeight, Math.Max(account.FiveHour, account.Tariff), ink); bx += thick + between; }
                     if (account.Week >= 0) Bar(g, bx, barTop, thin, barHeight, account.Week, ink);
                     float lx = x + (column - labelWidth) / 2;
                     g.DrawString(account.Machines, tiny, softBrush, lx, labelTop, StringFormat.GenericTypographic);

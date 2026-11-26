@@ -6,6 +6,8 @@ export function classifyWindow(label: string, kind?: unknown): QuotaWindow['kind
   return 'other';
 }
 export function appliesToModel(window: QuotaWindow, model: string | null): boolean {
+  // Antigravity groups: a Gemini quota does not limit a Claude model and back.
+  if (window.scope?.length) return model === null || window.scope.some(family => model.toLowerCase().includes(family));
   if (window.kind !== 'model') return true;
   return model !== null && ['fable', 'opus', 'sonnet', 'haiku', 'mythos'].some(
     family => window.label.toLowerCase().includes(family) && model.toLowerCase().includes(family));
@@ -28,9 +30,20 @@ export function riskyOverride(names: readonly string[], providerId: string): boo
     : ['CLAUDE_CONFIG_DIR', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL'];
   return names.some(name => risky.includes(name));
 }
+/** Providers whose only quota is a prepaid package ('other'): spent package = no work. */
+export const packageProviders = new Set(['vclaude', 'acp-gemini-antig']);
+export const isPackageAccount = (account: Pick<Account, 'providerId'>) => packageProviders.has(account.providerId);
 export function accountExhausted(account: Account): boolean {
-  return account.status === 'ok' && account.windows.some(w =>
-    (w.kind === 'five-hour' || w.kind === 'weekly') && w.usedPercent >= 100);
+  if (account.status !== 'ok') return false;
+  const full = (w: QuotaWindow) => (w.kind === 'five-hour' || w.kind === 'weekly' || packageProviders.has(account.providerId)) && w.usedPercent >= 100;
+  if (account.windows.some(w => !w.scope?.length && full(w))) return true;
+  // Scoped groups (Gemini, Claude+GPT): the account is blocked only when every group is.
+  const groups = new Map<string, boolean>();
+  for (const w of account.windows.filter(w => w.scope?.length)) {
+    const key = w.scope!.join('+');
+    groups.set(key, (groups.get(key) ?? false) || full(w));
+  }
+  return groups.size > 0 && [...groups.values()].every(Boolean);
 }
 export function dedupeAccounts(accounts: Account[]): Account[] {
   const result = new Map<string, Account>();
@@ -100,4 +113,50 @@ export function planLabel(providerId: string, plan: string | null | undefined): 
   const name = displayPlan(providerId, plan);
   const price = planPrice(providerId, plan);
   return price ? `${name} ${price}` : name;
+}
+
+/**
+ * One scale for every way of billing (docs/customizations.md, «Единая шкала лимитов»):
+ * a bar is the used share, its tick is the share of the period already gone —
+ * a 5-hour or weekly window until its reset, a package's 30 days until it expires.
+ */
+const HOUR = 3_600_000;
+export function periodMs(window: QuotaWindow): number | null {
+  if (window.endsAt) return 30 * 24 * HOUR;
+  if (window.kind === 'five-hour') return 5 * HOUR;
+  if (window.kind === 'weekly' || window.kind === 'model') return 7 * 24 * HOUR;
+  return null;
+}
+/** Percent of the window's period already gone, or null when its end or length is unknown. */
+export function pace(window: QuotaWindow, now: number): number | null {
+  const end = Date.parse(window.endsAt ?? window.resetsAt ?? '');
+  const period = periodMs(window);
+  if (!Number.isFinite(end) || period === null) return null;
+  return Math.max(0, Math.min(100, 100 * (1 - (end - now) / period)));
+}
+/** Spending runs well ahead of time (15 points or more), or the window is nearly spent. */
+export function ahead(window: QuotaWindow, now: number): boolean {
+  if (window.usedPercent >= 90) return true;
+  const gone = pace(window, now);
+  return gone !== null && window.usedPercent >= 20 && window.usedPercent - gone >= 15;
+}
+/** A package that will expire mostly unused: three quarters of its term gone, 40 points under pace. */
+export function wasteRisk(window: QuotaWindow, now: number): boolean {
+  if (!window.endsAt) return false;
+  const gone = pace(window, now);
+  return gone !== null && gone >= 75 && window.usedPercent < gone - 40;
+}
+
+const millions = (v: number) => v >= 1e6 ? `${(v / 1e6).toLocaleString('ru-RU', { maximumFractionDigits: 2 })} млн` : `${Math.round(v / 1e3)} тыс.`;
+/**
+ * VClaude package in its own units and in Opus tokens: model rates are units per
+ * million tokens, so tokens ≈ remaining units ÷ (rate ÷ 1e6).
+ */
+export function vclaudeNote(remaining: number, limit: number, rates: Record<string, { input: number; output: number }>): string {
+  const opus = Object.keys(rates).filter(id => /opus/i.test(id)).sort((a, b) => a.localeCompare(b, 'en', { numeric: true })).at(-1);
+  const rate = opus ? rates[opus] : undefined;
+  const name = opus?.replace(/^anthropic-claude-/, '').replace(/^opus-(\d+)-(\d+)$/, 'Opus $1.$2') ?? '';
+  const tokens = rate && rate.input > 0 && rate.output > 0
+    ? ` ≈ ${millions(remaining / (rate.input / 1e6))} вх. или ${millions(remaining / (rate.output / 1e6))} вых. токенов ${name}` : '';
+  return `осталось ${millions(remaining)} из ${millions(limit)} ед.${tokens}`;
 }

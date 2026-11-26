@@ -5,6 +5,11 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { hostContract } from './host-contract';
+import { createAntigravityReader } from './antigravity';
+import { createCodexVolumeReader } from './codex-volume';
+const readCodexVolume = createCodexVolumeReader();
+
+const readAntigravity = createAntigravityReader();
 
 // Read-only protocol: never includes the credit consumption method.
 function readCodexResets(): Promise<{ email: string | null; count: number | null }> {
@@ -59,4 +64,8 @@ async function readClaudeProfile(): Promise<{ email: string | null; organization
       rateLimitTier: text(account.organizationRateLimitTier) ?? text(account.userRateLimitTier) };
   } catch { return empty; }
 }
-export default experimental_defineHostEntry({ contract: hostContract, handlers: { codexResets: readCodexResets, claudeProfile: readClaudeProfile } });
+export default experimental_defineHostEntry({ contract: hostContract, handlers: {
+  codexResets: readCodexResets, claudeProfile: readClaudeProfile,
+  antigravity: ({ refresh }) => readAntigravity(refresh),
+  codexVolume: () => readCodexVolume().catch(() => []),
+} });

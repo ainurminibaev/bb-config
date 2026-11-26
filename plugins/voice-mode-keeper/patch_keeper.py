@@ -32,10 +32,19 @@ sys.path.insert(0, str(REPO / 'scripts'))
 import platform_compat as compat  # noqa: E402
 import fork_watch
 import tokenomics_compat
+import usage_antigravity
+import usage_vclaude
 from retirement_config import save_retirement
 from upstream_retirement import retirement
 
 KEPT = {
+    'usage': {
+        'name': 'Usage (VClaude, Antigravity)',
+        'source': 'git:https://github.com/MayankBansal12/bb-plugin-usage.git@',
+        'files': ['server.ts'],
+        # VClaude rows first, then Antigravity rows before the same anchor; each step is idempotent.
+        'rewrite': lambda source, version: usage_antigravity.rewrite(usage_vclaude.rewrite(source, version), version),
+    },
     'inbox': {
         'name': 'Needs You',
         'source': 'git:https://github.com/notpritam/bb-plugin-inbox.git@',

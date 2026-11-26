@@ -175,3 +175,17 @@ test("machineNamesFrom: persistent machines from the row, null without the field
   assert.deepEqual([...names], [["t1", "Tru"]]);
   assert.equal(machineNamesFrom([thread({ id: "t1" })], hosts), null);
 });
+
+test("menu: the busiest of several 5-hour windows stays the 5-hour cell", async () => {
+  const { menuWindows } = await import("./server.ts");
+  const out = menuWindows([
+    { label: "Gemini · 5 ч", kind: "five-hour", usedPercent: 2 },
+    { label: "Claude+GPT · неделя", kind: "weekly", usedPercent: 10 },
+    { label: "Claude+GPT · 5 ч", kind: "five-hour", usedPercent: 40 },
+  ]);
+  assert.deepEqual(out.map((w) => [w.label, w.kind]), [
+    ["Gemini · 5 ч", "other"], ["Claude+GPT · неделя", "weekly"], ["Claude+GPT · 5 ч", "five-hour"],
+  ]);
+  const plain = [{ label: "Current session", kind: "five-hour", usedPercent: 1 }];
+  assert.deepEqual(menuWindows(plain), plain);
+});

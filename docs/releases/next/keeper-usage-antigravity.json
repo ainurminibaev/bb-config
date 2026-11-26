@@ -1,0 +1,30 @@
+{
+  "id": "keeper-usage-antigravity",
+  "title": "Plugin Keeper 0.2.13 — строки Antigravity и VClaude в Usage",
+  "component": "voice-mode-keeper",
+  "where": "server",
+  "kind": "command",
+  "applies": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "applicable",
+    "voice-mode-keeper",
+    "0.2.13"
+  ],
+  "apply": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "apply",
+    "voice-mode-keeper",
+    "0.2.13"
+  ],
+  "verify": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "check",
+    "voice-mode-keeper",
+    "0.2.13"
+  ],
+  "rerun": "Актуальная работающая версия проходит проверку без установки.",
+  "rollback": "Установите предыдущий тег voice-mode-keeper/v0.2.12 и переустановите Usage из каталога."
+}

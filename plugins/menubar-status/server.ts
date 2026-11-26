@@ -56,6 +56,22 @@ export function windowKind(label: string, kind?: string): "five-hour" | "weekly"
 }
 const USAGE_MS = 120_000;
 
+/**
+ * The menu clients show one "5ч" and one "Нед" cell per account. Google
+ * Antigravity reports a 5-hour window per model group (Gemini, Claude+GPT):
+ * keep the busiest one as "five-hour" and pass the rest as "other" under their
+ * own names, so the menu shows the bottleneck and nothing is silently dropped.
+ */
+export function menuWindows<W extends { label: string; kind: string; usedPercent: number }>(windows: W[]): W[] {
+  for (const kind of ["five-hour", "weekly"]) {
+    const same = windows.filter((w) => w.kind === kind);
+    if (same.length < 2) continue;
+    const busiest = same.reduce((a, b) => (b.usedPercent > a.usedPercent ? b : a));
+    windows = windows.map((w) => (w.kind === kind && w !== busiest ? { ...w, kind: "other" } : w));
+  }
+  return windows;
+}
+
 export default async function menubarStatus(bb: BbPluginApi) {
   const settings = bb.settings.define({
     hostId: { type: "string", label: "Machine that shows the menu bar or tray widget (host ID)", default: "" },
@@ -314,8 +330,8 @@ export default async function menubarStatus(bb: BbPluginApi) {
   async function syncUsage(): Promise<void> {
     const where = await target();
     if (!where) return;
-    type Row = { provider: string; hosts: string[]; plan: string | null; status: string; resets: number | null;
-      windows: { label: string; kind: string; usedPercent: number; resetsAt: string | null }[] };
+    type Row = { provider: string; name?: string | null; hosts: string[]; plan: string | null; status: string; resets: number | null;
+      windows: { label: string; kind: string; usedPercent: number; resetsAt: string | null; endsAt?: string | null }[] };
     let rows: Row[] | null = null;
     try {
       const result = await bb.sdk.plugins.callRpc({
@@ -323,14 +339,14 @@ export default async function menubarStatus(bb: BbPluginApi) {
         outputSchema: z.object({ accounts: z.array(z.object({
           providerId: z.string(), hostNames: z.array(z.string()), plan: z.string().nullable(), status: z.string(),
           resetCount: z.number().nullable().optional(),
-          windows: z.array(z.object({ label: z.string(), kind: z.string(), usedPercent: z.number(), resetsAt: z.string().nullable() })),
+          windows: z.array(z.object({ label: z.string(), kind: z.string(), usedPercent: z.number(), resetsAt: z.string().nullable(), endsAt: z.string().nullable().optional() })),
         }).passthrough()) }).passthrough(),
         signal: AbortSignal.timeout(30_000),
       } as never) as { accounts: { providerId: string; hostNames: string[]; plan: string | null; status: string;
         resetCount?: number | null; windows: Row["windows"] }[] };
       rows = result.accounts.filter((a) => a.windows.length).map((a) => ({
-        provider: a.providerId, hosts: a.hostNames, plan: a.plan, status: a.status, resets: a.resetCount ?? null,
-        windows: a.windows.map((w) => ({ ...w, kind: windowKind(w.label, w.kind) })),
+        provider: a.providerId, name: (a as { providerName?: string }).providerName ?? null, hosts: a.hostNames, plan: a.plan, status: a.status, resets: a.resetCount ?? null,
+        windows: menuWindows(a.windows.map((w) => ({ ...w, kind: windowKind(w.label, w.kind) }))),
       }));
     } catch {
       // Not installed or not answering: read the machines directly.

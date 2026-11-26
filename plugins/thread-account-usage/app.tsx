@@ -2,10 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { definePluginApp, experimental_useProviders, useBbContext, useBbNavigate, useRpc, useSettings, useSidebarSplitLayout } from '@get-bb/plugin-sdk/app';
 import type { rpcContract, Account, Snapshot, QuotaWindow } from './contract';
-import { accountExhausted, appliesToModel, planLabel } from './logic';
+import { accountExhausted, ahead, appliesToModel, isPackageAccount, pace, planLabel, wasteRisk } from './logic';
+import { AccountsPage } from './accounts-page';
+import { inlineMarks } from './provider-icons';
 import './app.css';
 
-type Filter = 'all' | 'five-hour' | 'weekly' | 'model';
+type Filter = 'all' | 'five-hour' | 'weekly' | 'model' | 'package';
+// 'package' = prepaid packages (VClaude, Antig): windows with an expiry date.
+const matches = (w: QuotaWindow, filter: Filter) => filter === 'all' || (filter === 'package' ? !!w.endsAt : w.kind === filter);
 function useCompactViewport() {
   const [compact,setCompact]=useState(()=>window.matchMedia('(max-width:767px)').matches);
   useEffect(()=>{const query=window.matchMedia('(max-width:767px)');const change=()=>setCompact(query.matches);query.addEventListener('change',change);return()=>query.removeEventListener('change',change)},[]);
@@ -14,8 +18,16 @@ function useCompactViewport() {
 const filters: { id: Filter; label: string }[] = [
   { id: 'all', label: 'Все окна' }, { id: 'five-hour', label: '5 часов' },
   { id: 'weekly', label: 'Неделя' }, { id: 'model', label: 'Fable / модели' },
+  { id: 'package', label: 'Пакеты' },
 ];
-const short = (w: QuotaWindow) => w.kind === 'five-hour' ? '5ч' : w.kind === 'weekly' ? 'Нед' : w.label;
+// Scoped windows (Antigravity groups) keep their own name: two 5-hour windows per account.
+// Two Antigravity rows share one Google CLI: name where the quota comes from.
+// ACP accounts carry their BB provider name (displayName), e.g. «Прямой Gemini».
+const tag: Record<string, true> = { 'acp-antigravity-acp': true, 'acp-gemini-antig': true };
+// Antig's mark is drawn inline (provider-icons.tsx), here and in BB's provider pickers.
+const withAliases = (logos: Record<string, string | null>): Record<string, string | null> => ({ ...logos, ...Object.fromEntries(Object.keys(inlineMarks).map(id => [id, `inline:${id}`])) });
+const scopeShort = (scope: string[]) => scope.includes('gemini') ? 'Gem' : scope.map(f => f === 'claude' ? 'C' : f === 'gpt' ? 'G' : f.slice(0, 3)).join('/');
+const short = (w: QuotaWindow) => w.scope?.length ? `${scopeShort(w.scope)} ${w.kind === 'five-hour' ? '5ч' : w.kind === 'weekly' ? '7д' : ''}`.trim() : w.kind === 'five-hour' ? '5ч' : w.kind === 'weekly' ? 'Нед' : w.label;
 const level = (percent: number) => percent >= 100 ? 'blocked' : percent >= 90 ? 'warning' : 'normal';
 const pct = (v: number) => `${Math.round(v)}%`;
 function compactReset(at: string | null, now: number) {
@@ -32,9 +44,19 @@ function resetText(at: string | null, now: number) {
       : `Сброс через ${Math.floor(minutes / 1440)} д ${Math.floor(minutes % 1440 / 60)} ч`;
   return { relative, exact: new Date(at).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) };
 }
+function quotaDeadline(window: QuotaWindow, now: number) {
+  if (!window.endsAt) return resetText(window.resetsAt, now);
+  const time = Date.parse(window.endsAt);
+  if (!Number.isFinite(time)) return { relative: 'Дата окончания неизвестна', exact: '' };
+  const exact = new Date(time).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  return { relative: time <= now ? 'Срок тарифа истёк' : 'Тариф действует до', exact };
+}
 // Provider logos are monochrome SVGs drawn with currentColor; inside <img> that is
 // always black and vanishes on a dark theme. Paint them as a mask in the text colour.
 function AgentLogo({ src, alt, className }: { src: string; alt?: string; className: string }) {
+  // "inline:<providerId>": a mark this plugin draws itself (provider-icons.tsx).
+  const Mark = src.startsWith('inline:') ? inlineMarks[src.slice(7)] : undefined;
+  if (Mark) return <span className={`tau-agent-logo-inline ${className}`} role="img" aria-label={alt ?? ''}><Mark /></span>;
   const url = `url("${src.replace(/"/g, '%22')}")`;
   return <span className={`tau-agent-logo ${className}`} role="img" aria-label={alt ?? ''} style={{ WebkitMaskImage: url, maskImage: url }}/>;
 }
@@ -52,42 +74,66 @@ function RefreshIcon({loading}:{loading:boolean}) {
   </svg>;
 }
 function WindowRows({ account, filter, model, now }: { account: Account; filter: Filter; model?: string | null; now: number }) {
-  const windows = account.windows.filter(w => filter === 'all' || w.kind === filter);
+  const windows = account.windows.filter(w => matches(w, filter));
   return <div className="tau-window-list">
     {windows.length === 0 && <p className="tau-empty">{filter === 'five-hour' ? 'Провайдер не сообщает пятичасовое окно.' : 'Провайдер не сообщил это окно.'}</p>}
     {windows.map((w, i) => {
-      const reset = resetText(w.resetsAt, now);
+      const reset = quotaDeadline(w, now);
       const inactive = model !== undefined && !appliesToModel(w, model);
-      return <div className="tau-window" key={`${w.label}:${i}`} data-level={level(w.usedPercent)} data-inactive={inactive}>
-        <div className="tau-window-heading"><span>{w.kind === 'five-hour' ? '5 часов' : w.kind === 'weekly' ? 'Неделя' : w.label}
+      const gone = pace(w, now), fast = ahead(w, now), waste = wasteRisk(w, now);
+      const base = level(w.usedPercent);
+      return <div className="tau-window" key={`${w.label}:${i}`} data-level={base === 'normal' && fast ? 'warning' : base} data-inactive={inactive}>
+        <div className="tau-window-heading"><span>{w.scope?.length ? w.label : w.kind === 'five-hour' ? '5 часов' : w.kind === 'weekly' ? 'Неделя' : w.label}
           {inactive && <small> · другая модель</small>}</span><strong>{pct(w.usedPercent)} <small>исп.</small></strong></div>
-        <div className="tau-bar"><span style={{ width: `${Math.min(100, Math.max(0, w.usedPercent))}%` }} /></div>
-        <div className="tau-reset"><span>{reset.relative}</span><time dateTime={w.resetsAt ?? undefined}>{reset.exact}</time></div>
+        <div className="tau-bar"><span style={{ width: `${Math.min(100, Math.max(0, w.usedPercent))}%` }} />{gone !== null && w.usedPercent < 100 && <i className="tau-pace" data-ahead={fast} style={{ left: `${gone}%` }} />}</div>
+        <div className="tau-reset"><span>{reset.relative}</span><time dateTime={w.endsAt ?? w.resetsAt ?? undefined}>{reset.exact}</time></div>
+        {gone !== null && <div className="tau-reset" title={fast ? 'Расход опережает время' : waste ? 'Пакет может сгореть неиспользованным' : undefined}><span>Прошло {pct(gone)} {w.endsAt ? 'срока пакета' : 'окна'}</span></div>}
       </div>;
     })}
   </div>;
 }
 
+function InlineWindow({ w, a, now }: { w: QuotaWindow; a: Account; now: number }) {
+  const gone = pace(w, now);
+  const fast = ahead(w, now);
+  const waste = wasteRisk(w, now);
+  const reset = resetText(w.resetsAt, now);
+  const base = level(w.usedPercent);
+  const until = w.endsAt ? new Date(w.endsAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) : null;
+  return <div className="tau-inline-window" data-level={base === 'normal' && fast ? 'warning' : base}
+    title={`${w.label}: ${pct(w.usedPercent)} использовано${gone !== null ? `, прошло ${pct(gone)} периода` : ''}${fast ? ' — расход опережает время' : ''}${waste ? ' — пакет может сгореть неиспользованным' : ''}. ${w.endsAt ? `Сгорает ${new Date(w.endsAt).toLocaleString('ru-RU')}` : `${reset.relative}. ${reset.exact}`}${a.note ? `\n${a.note}` : ''}`}>
+    <div className="tau-bar"><span style={{width:`${Math.min(100,Math.max(0,w.usedPercent))}%`}}/>{gone !== null && w.usedPercent < 100 && <i className="tau-pace" data-ahead={fast} style={{ left: `${gone}%` }} />}</div>
+    <span className="tau-inline-type">{short(w)}</span><strong>{pct(w.usedPercent)}</strong><small>{until ? `до ${until}` : compactReset(w.resetsAt,now)}</small>
+  </div>;
+}
+function AccountRow({ a, filter, now, logos, onDetails }: { a: Account; filter: Filter; now: number; logos: Record<string,string|null>; onDetails: (key:string)=>void }) {
+  const windows = a.windows.filter(w => matches(w, filter));
+  return <section className="tau-compact-row" data-stale={a.status!=='ok'}>
+    <div className="tau-row-identity" title={[a.email ?? a.providerName, a.hostNames.join(', '), a.note, a.message].filter(Boolean).join('\n')}>
+      <strong>{logos[a.providerId]&&<AgentLogo className="tau-grid-logo" src={logos[a.providerId]!} alt={a.providerName}/>}<span>{a.providerId === 'vclaude' ? a.providerName : `${tag[a.providerId] ? a.providerName + ' · ' : ''}${a.email?.split('@')[0] ?? 'Аккаунт неизвестен'}`}</span>{(a.resetCount??0)>0&&<span className="tau-row-reset" title={`Доступно сбросов лимита: ${a.resetCount}. Сброс обнуляет недельное окно Codex — им распоряжаетесь вы в Codex.`}>+{a.resetCount}</span>}</strong>
+      <small>{a.hostNames.map(n=>n.replace(/\s*[—–].*$/,'').trim()).join(' · ')}</small>
+      {a.plan&&<small className="tau-plan" title="Тариф и цена в месяц (справочно)">{planLabel(a.providerId,a.plan)}</small>}
+    </div>
+    <div className="tau-row-windows">{windows.length ? windows.map((w,i)=><InlineWindow key={`${w.label}:${i}`} w={w} a={a} now={now}/>)
+      :<small className="tau-row-empty">{a.message ?? 'Окно не сообщено'}</small>}
+      {windows.length > 0 && isPackageAccount(a) && a.note && <small className="tau-row-note" title={a.note}>{a.note}</small>}
+      {windows.length > 0 && a.message && <small className="tau-row-note" title={a.message}>{a.message}</small>}</div>
+    <button className="tau-more" aria-label={`Подробнее: ${a.email??a.providerName}`} title="Подробнее" onClick={()=>onDetails(a.key)}>›</button>
+  </section>;
+}
 function AccountsGrid({ accounts, filter, now, logos, onDetails }: { accounts: Account[]; filter: Filter; now: number; logos: Record<string,string|null>; onDetails: (key:string)=>void }) {
-  return <div className="tau-account-rows">{accounts.map(a=>{
-    const windows = a.windows.filter(w=>filter==='all'||w.kind===filter);
-    return <section className="tau-compact-row" key={a.key} data-stale={a.status!=='ok'}>
-      <div className="tau-row-identity" title={`${a.email ?? a.providerName}\n${a.hostNames.join(', ')}`}>
-        <strong>{logos[a.providerId]&&<AgentLogo className="tau-grid-logo" src={logos[a.providerId]!} alt={a.providerName}/>}<span>{a.email?.split('@')[0]??'Аккаунт неизвестен'}</span></strong>
-        <small>{a.hostNames.map(n=>n.replace(/\s*[—–].*$/,'').trim()).join(' · ')}</small>
-        {a.plan&&<small className="tau-plan" title="Тариф и цена в месяц (справочно)">{planLabel(a.providerId,a.plan)}</small>}
-        {(a.resetCount??0)>0&&<sup className="tau-row-reset" title="Доступные сбросы лимита">+{a.resetCount}</sup>}
-      </div>
-      <div className="tau-row-windows">{windows.length ? windows.map((w,i)=>{
-        const reset=resetText(w.resetsAt,now);
-        return <div className="tau-inline-window" key={`${w.label}:${i}`} data-level={level(w.usedPercent)} title={`${w.label}: ${pct(w.usedPercent)} использовано. ${reset.relative}. ${reset.exact}`}>
-          <div className="tau-bar"><span style={{width:`${Math.min(100,Math.max(0,w.usedPercent))}%`}}/></div>
-          <span className="tau-inline-type">{short(w)}</span><strong>{pct(w.usedPercent)}</strong><small>{compactReset(w.resetsAt,now)}</small>
-        </div>;
-      }):<small className="tau-row-empty">Окно не сообщено</small>}</div>
-      <button className="tau-more" aria-label={`Подробнее: ${a.email??a.providerName}`} title="Подробнее" onClick={()=>onDetails(a.key)}>›</button>
-    </section>;
-  })}</div>;
+  const subscriptions = accounts.filter(a => !isPackageAccount(a));
+  const packages = accounts.filter(isPackageAccount);
+  const sections: [string, string, Account[]][] = [];
+  if (filter !== 'package') sections.push(['subscriptions', 'Подписки — окна сбрасываются', subscriptions]);
+  if (filter === 'all' || filter === 'package') sections.push(['packages', 'Пакеты — не пополняются, сгорают', packages]);
+  return <div className="tau-account-rows">{sections.filter(([, , list]) => list.length).map(([id, title, list]) =>
+    <div className="tau-account-section" key={id} data-section={id}>
+      <h3 className="tau-section-title">{title}</h3>
+      {list.map(a => <AccountRow key={a.key} a={a} filter={filter} now={now} logos={logos} onDetails={onDetails} />)}
+    </div>)}
+    {filter === 'package' && !packages.length && <p className="tau-empty">Пакетов нет.</p>}
+  </div>;
 }
 
 function QuotaControl({ threadId, target }: { threadId: string | null; target?:HTMLElement }) {
@@ -177,7 +223,7 @@ function QuotaControl({ threadId, target }: { threadId: string | null; target?:H
     const above = !threadId;
     setPosition({ left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)),
       top: above ? rect.top - 8 : rect.bottom + 8,
-      maxHeight: above ? Math.min(580, rect.top - 16) : Math.max(100, window.innerHeight - rect.bottom - 20) });
+      maxHeight: above ? rect.top - 16 : Math.max(100, window.innerHeight - rect.bottom - 20) });
   }, [threadId, view,mobile]);
   useEffect(() => {
     if (!open) return;
@@ -201,7 +247,7 @@ function QuotaControl({ threadId, target }: { threadId: string | null; target?:H
   const list = accounts ?? [];
   const blockedAccounts=list.filter(accountExhausted);
   const accountName = account?.email?.split('@')[0] ?? 'не подтверждён';
-  const logo = catalog.providers.find(p => p.id === snapshot?.providerId)?.logoUrl;
+  const logo = snapshot ? withAliases(Object.fromEntries(catalog.providers.map(p => [p.id, p.logoUrl])))[snapshot.providerId] ?? undefined : undefined;
   const resetTotal=list.reduce((sum,a)=>sum+(a.resetCount??0),0);
   const averageWindows:QuotaWindow[]=['five-hour','weekly','model'].flatMap(kind=>{
     const values=list.flatMap(a=>a.windows.filter(w=>w.kind===kind).map(w=>w.usedPercent));
@@ -217,7 +263,7 @@ function QuotaControl({ threadId, target }: { threadId: string | null; target?:H
       onClick={() => { if(closeTimer.current)clearTimeout(closeTimer.current);positionPanel(); const next=!(open&&pinned);pinnedRef.current=next;setOpen(next);setPinned(next); }}>
       {threadId && mobile ? <span className="tau-mobile-quota"><QuotaGlyph windows={importantWindows} logo={logo} agent={account?.providerName??snapshot?.providerId} resets={account?.resetCount??0}/><span data-level={worst?level(worst.usedPercent):undefined}>{worst?`${short(worst)} ${pct(worst.usedPercent)}`:loading?"…":"Лимиты"}</span></span> : threadId ? <><span className="tau-thread-composite"><QuotaGlyph windows={importantWindows} logo={logo} agent={account?.providerName??snapshot?.providerId} resets={account?.resetCount??0}/><span className="tau-thread-text">
         <span className="tau-thread-owner" title={`${account?.email??'Аккаунт не подтверждён'} · ${snapshot?.hostName??''}`}><span>{accountName}</span><small>{snapshot?.hostName?.replace(/\s*[—–].*$/,'').trim()??'машина треда'}</small></span>
-        {worst?<span className="tau-inline-legend">{importantWindows.map(w=><span key={w.label} data-kind={w.kind} data-level={level(w.usedPercent)} title={`${w.label}: ${pct(w.usedPercent)} использовано. ${resetText(w.resetsAt,now).relative}. ${resetText(w.resetsAt,now).exact}`}><strong><span>{short(w)}</span> {pct(w.usedPercent)}</strong><small><span aria-hidden="true">↻ </span>{compactReset(w.resetsAt,now)}</small></span>)}</span>:<span className="tau-missing">{loading?'…':'Лимиты не подтверждены'}</span>}
+        {snapshot?.exhausted?<span className="tau-inline-legend tau-exhausted" title={snapshot.exhausted.detail}><strong>Исчерпан</strong><small>{snapshot.exhausted.title}</small></span>:worst?<span className="tau-inline-legend">{importantWindows.map(w=><span key={w.label} data-kind={w.kind} data-level={level(w.usedPercent)} title={`${w.label}: ${pct(w.usedPercent)} использовано. ${resetText(w.resetsAt,now).relative}. ${resetText(w.resetsAt,now).exact}`}><strong><span>{short(w)}</span> {pct(w.usedPercent)}</strong><small>{w.endsAt ? `до ${new Date(w.endsAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}` : <><span aria-hidden="true">↻ </span>{compactReset(w.resetsAt,now)}</>}</small></span>)}</span>:<span className="tau-missing">{loading?'…':'Лимиты не подтверждены'}</span>}
       </span></span>
         {(error || account?.status === 'stale') && <span className="tau-caution">!</span>}</>
         : <><QuotaGlyph windows={footerWindows} resets={resetTotal} blocked={blockedAccounts.length}/><span className="tau-footer-values">{footerWindows.map(w=><span key={w.kind} data-kind={w.kind}><small>{short(w)}</small><strong>{pct(w.usedPercent)}</strong></span>)}{!footerWindows.length&&<span>—</span>}</span></>}
@@ -242,8 +288,9 @@ function QuotaControl({ threadId, target }: { threadId: string | null; target?:H
         {view === 'thread' ? <>
           {snapshot && <div className="tau-account-heading"><strong>{account?.email ?? 'Аккаунт не подтверждён'}</strong>
             <small>{account?.providerName ?? snapshot.providerId} · {snapshot.hostName ?? 'Нет машины'}{account?.plan ? ` · ${planLabel(account.providerId, account.plan)}` : ''}</small>
-            {snapshot.model && <small>Модель запуска: {snapshot.model}</small>}</div>}
+            {snapshot.model && <small>Модель запуска: {snapshot.model}</small>}{account?.note && <small>{account.note}</small>}</div>}
           {snapshot?.message && <p className="tau-empty">{snapshot.message}</p>}
+          {snapshot?.exhausted && <p className="tau-exhausted-note"><strong>Исчерпан: {snapshot.exhausted.title}.</strong> {snapshot.exhausted.detail}{snapshot.exhausted.link && <> <a href={snapshot.exhausted.link} target="_blank" rel="noreferrer">Пополнить ↗</a></>}</p>}
           {account && <><WindowRows account={account} filter={filter} model={snapshot?.model} now={now} />
             <p className="tau-source">Доступные сбросы: {account.resetCount===null?'не сообщены':account.resetCount}</p>
             {account.status !== 'ok' && <p className="tau-error">Последние известные данные. {account.message}</p>}
@@ -251,16 +298,16 @@ function QuotaControl({ threadId, target }: { threadId: string | null; target?:H
           {!snapshot && <p className="tau-empty">{loading ? 'Проверяем аккаунт треда…' : 'Данные пока не получены'}</p>}
         </> : <>
           {detailsKey ? <>
-            {details?.account&&<div className="tau-account-heading"><strong>{details.account.email}</strong><small>{details.account.providerName} · {planLabel(details.account.providerId, details.account.plan)}</small><small>{details.account.hostNames.join(' · ')}</small><small>Получено из BB: {details.account.fetchedAt?new Date(details.account.fetchedAt).toLocaleString():'неизвестно'}</small><small>Доступные сбросы: {details.account.resetCount===null?'не сообщены':details.account.resetCount}</small></div>}
+            {details?.account&&<div className="tau-account-heading"><strong>{details.account.email}</strong><small>{details.account.providerName} · {planLabel(details.account.providerId, details.account.plan)}</small><small>{details.account.hostNames.join(' · ')}</small>{details.account.note&&<small>{details.account.note}</small>}{details.account.message&&<small>{details.account.message}</small>}<small>Получено из BB: {details.account.fetchedAt?new Date(details.account.fetchedAt).toLocaleString():'неизвестно'}</small><small>Доступные сбросы: {details.account.resetCount===null?'не сообщены':details.account.resetCount}</small></div>}
             {details?.account&&<WindowRows account={details.account} filter={filter} now={now}/>}
             {detailsError&&<p className="tau-error">Не удалось загрузить подробности</p>}
             {!details&&!detailsError&&<p className="tau-empty">Загружаем…</p>}
             {details&&<div className="tau-recent"><strong>Последние треды агента на этих машинах</strong>{details.threads.map(t=><button key={t.id} onClick={()=>{setOpen(false);setPinned(false);navigate.toThread(t.id)}}><span>{t.title}</span><small>{t.hostName} · {new Date(t.updatedAt).toLocaleDateString()}</small></button>)}{!details.threads.length&&<small>Нет доступных тредов</small>}</div>}
-          </>:<AccountsGrid accounts={list} filter={filter} now={now} logos={Object.fromEntries(catalog.providers.map(p=>[p.id,p.logoUrl]))} onDetails={key=>{setDetailsKey(key);setPinned(true)}}/>}
+          </>:<AccountsGrid accounts={list} filter={filter} now={now} logos={withAliases(Object.fromEntries(catalog.providers.map(p=>[p.id,p.logoUrl])))} onDetails={key=>{setDetailsKey(key);setPinned(true)}}/>}
           {!list.length && <p className="tau-empty">{loading ? 'Собираем лимиты с машин…' : 'Подключённые CLI не сообщили аккаунты'}</p>}
         </>}
       </div>
-      <div className="tau-panel-foot"><span className="tau-update-state" aria-live="polite">{loading?'Обновляем…':'Авто · 2 мин'}</span><span>{mobile?'Точные даты в ›':'Даты по наведению'}</span></div>
+      <div className="tau-panel-foot"><span className="tau-update-state" aria-live="polite">{loading?'Обновляем…':'Авто · 2 мин'}</span><button type="button" className="tau-page-link" onClick={()=>{ setOpen(false); setPinned(false); navigate.toPluginPanel('accounts'); }}>Аккаунты и объёмы ›</button></div>
     </div>, document.body)}
   </>;
 }
@@ -339,6 +386,16 @@ function Overlay() {
     {mounts.map(m => <QuotaControl key={m.threadId ?? 'all'} threadId={m.threadId} target={m.element}/>)}
   </>;
 }
+/** Sidebar icon: three bars of different height with a tick — limits and volumes. */
+function NavIcon({ className }: { className?: string }) {
+  return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+    <path d="M4 20h16" /><path d="M6 16v-4" /><path d="M11 16V7" /><path d="M16 16v-6" /><path d="M14 4h4" />
+  </svg>;
+}
 export default definePluginApp(app => {
+  // One page for all accounts; VClaude's own analysis is its tab.
+  app.experimental_icons.register({ name: 'thread-account-usage/nav', component: NavIcon });
+  for (const [providerId, icon] of Object.entries(inlineMarks)) app.slots.experimental_providerIcon({ providerKind: 'agent', providerId, icon });
+  app.slots.navPanel({ id: 'accounts', path: 'accounts', title: 'Аккаунты и объёмы', icon: 'thread-account-usage/nav', component: AccountsPage });
   app.slots.experimental_appOverlay({ id: 'thread-account-usage', component: Overlay });
 });

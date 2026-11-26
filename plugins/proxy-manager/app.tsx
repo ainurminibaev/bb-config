@@ -240,12 +240,19 @@ function RouteBadge() {
   return <><span ref={setAnchor} hidden data-proxy-route-anchor=""/>{footerTarget ? createPortal(chip, footerTarget) : chip}</>;
 
 }
+/** Sidebar icon: two nodes joined through a relay — distinct from the other sidebar pages. */
+function NavIcon({ className }: { className?: string }) {
+  return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <circle cx="5" cy="12" r="2.5" /><circle cx="19" cy="12" r="2.5" /><path d="M7.5 12h3l1.5-4 1.5 8 1.5-4h1.5" />
+  </svg>;
+}
 export default definePluginApp(app => {
   app.contentScripts.register({ id: 'composer-route-footer', mount: ({ signal }) => installComposerFooter(signal) });
   // A bare banner, not a composer action: the chip is portaled into the footer,
   // and bb shows only three plugin action groups inline before a "…" overflow,
   // so an invisible anchor there pushed a real action (voice mode) into "…".
   app.composer.customize({ id: 'proxy-route', scopes: ['thread', 'new-thread'], banners: [{ id: 'route', chrome: 'bare', component: RouteBadge }] });
-  app.slots.navPanel({ id: 'proxies', title: 'Прокси', icon: 'Network', path: 'proxies', component: ProxiesPage });
+  app.experimental_icons.register({ name: 'proxy-manager/nav', component: NavIcon });
+  app.slots.navPanel({ id: 'proxies', title: 'Прокси', icon: 'proxy-manager/nav', path: 'proxies', component: ProxiesPage });
   app.slots.settingsSection({ id: 'connections', title: 'Прокси и подключения', component: ProxiesPage });
 });

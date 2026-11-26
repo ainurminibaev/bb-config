@@ -40,6 +40,7 @@ struct Account {
     let resets: Int
     let five: Double?
     let week: Double?
+    let tariff: Double?
     let fiveReset: Date?
     let weekReset: Date?
 }
@@ -353,14 +354,16 @@ final class Controller: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
               let list = usage["accounts"] as? [[String: Any]] else { return [] }
         var result: [Account] = []
         for account in list {
-            var five: Double? = nil, week: Double? = nil
+            var five: Double? = nil, week: Double? = nil, tariff: Double? = nil
             var fiveReset: Date? = nil, weekReset: Date? = nil
+            let provider = account["provider"] as? String ?? ""
             for window in account["windows"] as? [[String: Any]] ?? [] {
                 let used = min(100, max(0, window["usedPercent"] as? Double ?? 0))
                 if window["kind"] as? String == "five-hour" { five = used; fiveReset = parseDate(window["resetsAt"]) }
                 if window["kind"] as? String == "weekly" { week = used; weekReset = parseDate(window["resetsAt"]) }
+                if (provider == "vclaude" || provider == "acp-gemini-antig") && window["kind"] as? String == "other" { tariff = used }
             }
-            if five == nil && week == nil { continue }
+            if five == nil && week == nil && tariff == nil { continue }
             // A machine's initial: "server" → S, "MacBook Pro — …" → M; one per machine.
             var letters = ""
             for host in account["hosts"] as? [String] ?? [] {
@@ -369,9 +372,9 @@ final class Controller: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
                     if !letters.contains(letter) { letters += letter }
                 }
             }
-            result.append(Account(provider: account["provider"] as? String ?? "", machines: letters,
+            result.append(Account(provider: provider, machines: provider == "vclaude" ? "V" : provider == "acp-gemini-antig" ? "A" : letters,
                                   resets: account["resets"] as? Int ?? 0,
-                                  five: five, week: week, fiveReset: fiveReset, weekReset: weekReset))
+                                  five: five, week: week, tariff: tariff, fiveReset: fiveReset, weekReset: weekReset))
         }
         let order = ["claude-code": 0, "codex": 1]
         return result.sorted { (order[$0.provider] ?? 9, $0.machines) < (order[$1.provider] ?? 9, $1.machines) }
@@ -386,7 +389,7 @@ final class Controller: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         let side: CGFloat = 6.5
         let center = NSPoint(x: origin.x + side / 2, y: origin.y + side / 2)
         let path = NSBezierPath()
-        if provider == "claude-code" {
+        if provider == "claude-code" || provider == "vclaude" {
             for index in 0..<4 {
                 let angle = CGFloat(index) * .pi / 4
                 path.move(to: NSPoint(x: center.x - cos(angle) * 3.1, y: center.y - sin(angle) * 3.1))
@@ -446,7 +449,7 @@ final class Controller: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
                     .font: NSFont.systemFont(ofSize: 6.5, weight: .heavy),
                     .foregroundColor: NSColor(red: 0.45, green: 0.95, blue: 0.6, alpha: 1)]))
             }
-            let bars: CGFloat = (account.five != nil ? 3 + 1.5 : 0) + 1.5
+            let bars: CGFloat = (account.five != nil || account.tariff != nil ? 3 + 1.5 : 0) + 1.5
             let width = max(bars, ceil(label.size().width))
             columns.append(Column(account: account, x: x, width: width, label: label))
             x += width
@@ -476,7 +479,7 @@ final class Controller: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
                 .foregroundColor: calm ? ink.withAlphaComponent(0.75) : NSColor.white])
             x += (compact ? 3 : 4.5) + ceil(timer!.size().width) + (badge != nil ? badgePadding : 0)
         }
-        let signature = columns.map { "\($0.account.machines)+\($0.account.resets):\(Int($0.account.five ?? -1)):\(Int($0.account.week ?? -1))" }
+        let signature = columns.map { "\($0.account.machines)+\($0.account.resets):\(Int($0.account.five ?? -1)):\(Int($0.account.week ?? $0.account.tariff ?? -1))" }
             .joined(separator: ",") + "|" + (timer?.string ?? "")
         let image = NSImage(size: NSSize(width: ceil(x), height: height), flipped: false) { _ in
             // Fills from the bottom as the limit is used: empty at 0 %, full at 100 %.
@@ -493,9 +496,9 @@ final class Controller: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
                 NSGraphicsContext.restoreGraphicsState()
             }
             for column in columns {
-                let bars: CGFloat = (column.account.five != nil ? 3 + 1.5 : 0) + 1.5
+                let bars: CGFloat = (column.account.five != nil || column.account.tariff != nil ? 3 + 1.5 : 0) + 1.5
                 var bx = column.x + (column.width - bars) / 2
-                if let five = column.account.five { bar(bx, 3, five); bx += 4.5 }
+                if let five = column.account.five ?? column.account.tariff { bar(bx, 3, five); bx += 4.5 }
                 if let week = column.account.week { bar(bx, 1.5, week) }
                 let labelWidth = column.label.size().width
                 column.label.draw(at: NSPoint(x: column.x + (column.width - labelWidth) / 2, y: -0.5))
