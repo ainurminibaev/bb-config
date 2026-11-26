@@ -5,10 +5,10 @@ const KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB000000000000';
 
 test('roots come from project sources and workspaces of that machine only', () => {
   const machines = buildMachines([{ id: 'a', name: 'A' }, { id: 'b' }],
-    [{ sources: [{ hostId: 'a', path: '/srv/p' }, { hostId: 'b', path: 'C:/p' }, { hostId: 'a', path: '/' }] }, {}],
+    [{ sources: [{ hostId: 'a', path: '/srv/p' }, { hostId: 'b', path: 'C:/p' }, { hostId: 'a', path: '/' }, { hostId: 'a', path: '/root' }, { hostId: 'a', path: '/home/me/' }, { hostId: 'a', path: '/root/p' }] }, {}],
     [{ hostId: 'a', path: '/srv/w' }, { hostId: 'a', path: '/srv/../etc' }, { hostId: null, path: '/x' }, { hostId: 'b', path: null }],
     new Map([['a', { platform: 'linux', hostKeys: [KEY], user: 'root' }]]));
-  expect(machines).toEqual({ a: { name: 'A', platform: 'linux', roots: ['/srv/p', '/srv/w'], hostKeys: [KEY], user: 'root' },
+  expect(machines).toEqual({ a: { name: 'A', platform: 'linux', roots: ['/root/p', '/srv/p', '/srv/w'], hostKeys: [KEY], user: 'root' },
     b: { name: 'b', platform: null, roots: [], hostKeys: [] } });
 });
 

@@ -115,6 +115,7 @@ mount. After reboot the next activation creates the connection again; it does
 not automatically restore Finder windows. SSH notices a dead link in about 12 seconds;
 after a failed connection the next requests fail at once for 15 seconds, so Finder gets
 an error instead of waiting for each one. New disks are mounted `nobrowse`: Finder and
+Whole home folders (`/root`, `/home/example`, `/Users/example`) are never listed, even when a BB project points at one: they hold keys and settings. Project folders inside them still are.
 Spotlight do not look into them on their own and they are not in the sidebar. The
 handler itself never waits on the disk and says so when Finder does not answer.
 The helper neither provides a VPN/proxy route nor maintains an offline project

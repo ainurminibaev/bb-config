@@ -6,8 +6,10 @@ export type Identity = { platform: string; hostKeys: string[]; user?: string | n
 type Project = { sources?: { type?: string; hostId?: string | null; path?: string | null }[] };
 type Environment = { hostId?: string | null; path?: string | null };
 
+/** A whole home folder holds keys and settings: never offered to Finder, even when a project points at it. */
+const home = (path: string) => /^\/(root|home\/[^/]+|Users\/[^/]+)\/?$/.test(path);
 const usable = (path: unknown): path is string => typeof path === 'string' && /^\/[^/]/.test(path)
-  && !/[\x00-\x1f\x7f]/.test(path) && !path.split('/').includes('..');
+  && !/[\x00-\x1f\x7f]/.test(path) && !path.split('/').includes('..') && !home(path);
 
 export function publicKeys(files: string[]): string[] {
   return [...new Set(files.map(text => text.trim().split(/\s+/).slice(0, 2).join(' '))
