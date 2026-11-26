@@ -3302,6 +3302,8 @@ SSH-запись подбирается по ключу сервера и зак
 BB действует прежний `config.json`. Обновление на Mac: `python3 install.py` без `--config`.
 Откат: тег project-open/v0.3.2 и прежняя копия `BB Project Folder.app`.
 Тесты: `directory.test.ts`, `macos/test_open_folder.py`.
+С 0.3.6 домашние папки целиком (`/root`, `/home/example`, `/Users/example`) не попадают в
+`machines.json`, даже если проект BB указывает на них (тест `directory.test.ts`).
 
 Machine Tabs 0.2.19 поднимает активные треды ролей в группах проектов. Агенты
 идут перед оркестраторами, внутри каждой категории — по свежести. Все роли
