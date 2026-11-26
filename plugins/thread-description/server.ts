@@ -51,9 +51,9 @@ export default async function threadDescription(bb: BbPluginApi) {
   async function view(threadId: string): Promise<DescriptionView> {
     const entry = (await load(threadId)) ?? emptyEntry();
     return {
-      description: entry.description, manual: entry.manual, recap: entry.recap, recapOpen: entry.recapOpen,
+      description: entry.description, manual: entry.manual, recap: entry.recap,
       recapUnseen: entry.recapAt !== null && entry.recapAt > (entry.recapSeenAt ?? 0),
-      generatedAt: entry.generatedAt, model: entry.model, busy: running.has(threadId), error: entry.error,
+      generatedAt: entry.generatedAt, model: entry.model, tokens: entry.lastTokens, busy: running.has(threadId), error: entry.error,
     };
   }
 
@@ -114,7 +114,7 @@ export default async function threadDescription(bb: BbPluginApi) {
     return [];
   }
 
-  async function runWorker(execution: Execution, prompt: string): Promise<string> {
+  async function runWorker(execution: Execution, prompt: string): Promise<{ text: string; tokens: number | null }> {
     // The personal workspace has no project instructions and none of the user's files.
     const worker = await bb.sdk.threads.spawn({
       projectId: await personalProjectId(),
@@ -137,7 +137,10 @@ export default async function threadDescription(bb: BbPluginApi) {
         timer = setTimeout(() => settle(worker.id, { ok: false, error: 'модель не ответила за 3 минуты' }), WORKER_TIMEOUT_MS);
       });
       if (!result.ok) throw new Error(result.error);
-      return result.text;
+      let tokens: number | null = null;
+      try { tokens = (await bb.sdk.threads.context({ threadId: worker.id })).usage?.usedTokens ?? null; } catch { /* usage is optional */ }
+      await countRun(tokens);
+      return { text: result.text, tokens };
     } finally {
       clearTimeout(timer);
       waiting.delete(worker.id);
@@ -145,6 +148,21 @@ export default async function threadDescription(bb: BbPluginApi) {
       try { await bb.sdk.threads.stop({ threadId: worker.id }); } catch { /* already stopped */ }
       try { await bb.sdk.threads.delete({ threadId: worker.id, childThreadsConfirmed: false }); } catch (error) { bb.log.warn(`Thread Description: cleanup ${worker.id}: ${message(error)}`); }
     }
+  }
+
+  // Daily totals for `bb thread-description stats`: what the plugin costs.
+  const day = (at = Date.now()) => new Date(at).toISOString().slice(0, 10);
+  let statsLock: Promise<unknown> = Promise.resolve();
+  function countRun(tokens: number | null) {
+    statsLock = statsLock.catch(() => undefined).then(async () => {
+      const stored = await bb.storage.kv.get<{ runs?: number; tokens?: number; measured?: number }>(`stats:${day()}`);
+      await bb.storage.kv.set(`stats:${day()}`, {
+        runs: (stored?.runs ?? 0) + 1,
+        tokens: (stored?.tokens ?? 0) + (tokens ?? 0),
+        measured: (stored?.measured ?? 0) + (tokens === null ? 0 : 1),
+      });
+    });
+    return statsLock.catch((error) => bb.log.warn(`Thread Description: stats: ${message(error)}`));
   }
 
   // --- generation ------------------------------------------------------------
@@ -177,12 +195,13 @@ export default async function threadDescription(bb: BbPluginApi) {
     let failure: unknown;
     for (const execution of options) {
       try {
-        const reply = parseReply(await runWorker(execution, prompt));
+        const run = await runWorker(execution, prompt);
+        const reply = parseReply(run.text);
         if (!reply) throw new Error('модель вернула не JSON');
         await update(threadId, (current) => applyReply(current, reply, {
           now: Date.now(), firstTask: task, lastMessageId: messages[messages.length - 1]?.id ?? null,
           hasReply: messages.some((item) => item.role === 'assistant'),
-          shortWords: bounded(values.shortWords, 15, 0, 200), model: `${execution.providerId}/${execution.model}`,
+          shortWords: bounded(values.shortWords, 15, 0, 200), model: `${execution.providerId}/${execution.model}`, tokens: run.tokens,
         }));
         return;
       } catch (error) {
@@ -265,8 +284,8 @@ export default async function threadDescription(bb: BbPluginApi) {
     // Returns at once: progress and the result arrive through the realtime signal.
     refresh: async ({ threadId }) => { await bb.sdk.threads.get({ threadId }); void start(threadId); return view(threadId); },
     setDescription: async ({ threadId, text }) => { await setDescription(threadId, text); return view(threadId); },
-    setRecapOpen: async ({ threadId, open }) => {
-      await update(threadId, (entry) => ({ ...entry, recapOpen: open, recapSeenAt: Date.now() }));
+    markSeen: async ({ threadId }) => {
+      await update(threadId, (entry) => ({ ...entry, recapSeenAt: Date.now() }));
       return view(threadId);
     },
   });
@@ -277,7 +296,7 @@ export default async function threadDescription(bb: BbPluginApi) {
     return [
       `Описание${value.manual ? ' (ручное)' : ''}: ${value.description || '—'}`,
       `Сводка: ${value.recap || '—'}`,
-      `Обновлено: ${value.generatedAt ? new Date(value.generatedAt).toISOString() : 'ещё нет'}${value.model ? `, ${value.model}` : ''}${value.busy ? ', идёт обновление' : ''}`,
+      `Обновлено: ${value.generatedAt ? new Date(value.generatedAt).toISOString() : 'ещё нет'}${value.model ? `, ${value.model}` : ''}${value.tokens ? `, ${value.tokens} токенов` : ''}${value.busy ? ', идёт обновление' : ''}`,
       ...(value.error ? [`Ошибка: ${value.error}`] : []),
     ].join('\n');
   };
@@ -300,6 +319,25 @@ export default async function threadDescription(bb: BbPluginApi) {
         summary: 'Задать описание вручную; пустой текст возвращает автообновление',
         options: { thread: threadArg, text: { type: 'string', description: 'Текст описания', required: true } },
         async run({ options }) { await setDescription(options.thread, options.text.slice(0, 2000)); return { exitCode: 0, stdout: await print(options.thread) }; },
+      }),
+      stats: cliCommand({
+        summary: 'Сколько генераций и токенов ушло по дням',
+        options: { days: { type: 'integer', min: 1, max: 90, description: 'За сколько дней (по умолчанию 7)' } },
+        async run({ options }) {
+          const days = bounded(options.days, 7, 1, 90);
+          const lines: string[] = [];
+          let runs = 0; let tokens = 0;
+          for (let index = days - 1; index >= 0; index -= 1) {
+            const date = day(Date.now() - index * 86_400_000);
+            const item = await bb.storage.kv.get<{ runs?: number; tokens?: number; measured?: number }>(`stats:${date}`);
+            if (!item?.runs) continue;
+            runs += item.runs; tokens += item.tokens ?? 0;
+            const average = item.measured ? Math.round((item.tokens ?? 0) / item.measured) : null;
+            lines.push(`${date}  генераций ${item.runs}, токенов ${item.tokens ?? 0}${average ? ` (в среднем ${average})` : ''}`);
+          }
+          lines.push(`Итого за ${days} дн.: генераций ${runs}, токенов ${tokens}.`);
+          return { exitCode: 0, stdout: lines.join('\n') };
+        },
       }),
       models: cliCommand({
         summary: 'Какой моделью и на какой машине будет создано описание треда', options: { thread: threadArg },

@@ -5,7 +5,7 @@ import { ERROR_BACKOFF_MS, applyReply, bounded, buildPrompt, decide, emptyEntry,
 const HOUR = 3_600_000;
 const user: Message = { id: 'u1', role: 'user', text: 'посмотри баг' };
 const agent: Message = { id: 'a1', role: 'assistant', text: 'Падает вход на iOS.' };
-const meta = { now: 1000, firstTask: 'посмотри баг', lastMessageId: 'u1', hasReply: false, shortWords: 15, model: 'claude-code/haiku' };
+const meta = { now: 1000, firstTask: 'посмотри баг', lastMessageId: 'u1', hasReply: false, shortWords: 15, model: 'claude-code/haiku', tokens: 20000 };
 
 test('a new thread is described from its first message, an empty one is not', () => {
   assert.equal(decide({ event: 'active', entry: null, messages: [user], now: 0, refreshMs: HOUR }), 'first');

@@ -31,11 +31,11 @@ function useDescription(threadId: string) {
     view, failure,
     refresh: () => run(rpc.call('refresh', { threadId })),
     save: (text: string) => run(rpc.call('setDescription', { threadId, text })),
-    setRecapOpen: (open: boolean) => run(rpc.call('setRecapOpen', { threadId, open })),
+    markSeen: useCallback(() => run(rpc.call('markSeen', { threadId })), [run, rpc, threadId]),
   };
 }
 
-const PageIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 3h8l4 4v14H6z" /><path d="M9 11h6M9 15h6" /></svg>;
+const InfoIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden><circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><path d="M12 7.6v.1" /></svg>;
 const RecapIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M4 6h16M4 12h10M4 18h7" /><path d="M16 17l2 2 3-4" /></svg>;
 
 function ago(at: number) {
@@ -46,8 +46,14 @@ function ago(at: number) {
   return new Date(at).toLocaleDateString();
 }
 
-function HeaderIcon({ threadId }: { threadId: string }) {
-  const { view, failure, refresh, save } = useDescription(threadId);
+const tokens = (count: number) => (count >= 1000 ? `${Math.round(count / 1000)} тыс. токенов` : `${count} токенов`);
+
+/**
+ * An icon that shows a card on hover and keeps it open on click.
+ * `kind` picks the content: the description (header) or the recap (composer).
+ */
+function InfoButton({ threadId, kind }: { threadId: string; kind: 'description' | 'recap' }) {
+  const { view, failure, refresh, save, markSeen } = useDescription(threadId);
   const button = useRef<HTMLButtonElement | null>(null);
   const popup = useRef<HTMLDivElement | null>(null);
   const hideTimer = useRef(0);
@@ -60,16 +66,20 @@ function HeaderIcon({ threadId }: { threadId: string }) {
   const hover = (on: boolean) => {
     window.clearTimeout(hideTimer.current);
     // The gap lets the pointer travel from the icon to the card.
-    hideTimer.current = window.setTimeout(() => setHovered(on), on ? 200 : 250);
+    hideTimer.current = window.setTimeout(() => setHovered(on), on ? 150 : 300);
   };
   useEffect(() => () => window.clearTimeout(hideTimer.current), []);
+  const unseen = Boolean(view?.recapUnseen);
+  useEffect(() => { if (open && unseen) void markSeen(); }, [open, unseen, markSeen]);
   useEffect(() => {
     if (!open) return;
     const measure = () => {
       const rect = button.current?.getBoundingClientRect();
       if (!rect) return;
       const width = Math.min(360, window.innerWidth - 16);
-      setPlace({ top: rect.bottom + 6, left: Math.max(8, Math.min(rect.left - 12, window.innerWidth - width - 8)) });
+      const left = Math.max(8, Math.min(kind === 'recap' ? rect.right - width : rect.left - 12, window.innerWidth - width - 8));
+      // The header card opens downwards, the composer card upwards.
+      setPlace(kind === 'recap' ? { bottom: window.innerHeight - rect.top + 8, left } : { top: rect.bottom + 6, left });
     };
     measure();
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
@@ -81,31 +91,43 @@ function HeaderIcon({ threadId }: { threadId: string }) {
     window.addEventListener('keydown', onKey);
     document.addEventListener('pointerdown', onDown, true);
     return () => { window.removeEventListener('resize', measure); window.removeEventListener('keydown', onKey); document.removeEventListener('pointerdown', onDown, true); };
-  }, [open, close]);
+  }, [open, close, kind]);
 
   const busy = view?.busy ?? false;
   const problem = failure ?? view?.error ?? null;
+  const label = kind === 'recap' ? 'Сводка треда' : 'Описание треда';
+  const mouse = (event: { pointerType: string }) => event.pointerType === 'mouse';
+  const main = kind === 'recap'
+    ? view?.recap || (busy ? 'Сводка готовится…' : 'Сводки пока нет.')
+    : view?.description || (busy ? 'Описание готовится…' : 'Описания пока нет.');
   return <>
-    <button ref={button} type="button" className="tdesc-btn" aria-label="Описание треда" aria-expanded={open}
-      data-empty={!view?.description} data-busy={busy}
-      onClick={() => { if (pinned) close(); else setPinned(true); }}
-      onPointerEnter={(event) => { if (event.pointerType === 'mouse') hover(true); }}
-      onPointerLeave={(event) => { if (event.pointerType === 'mouse') hover(false); }}><PageIcon /></button>
-    {open && place && createPortal(<div ref={popup} className="tdesc-pop" role="dialog" aria-label="Описание треда" style={place}
-      onPointerEnter={() => hover(true)} onPointerLeave={(event) => { if (event.pointerType === 'mouse') hover(false); }}>
+    <button ref={button} type="button" className="tdesc-btn" aria-label={label} title={open ? undefined : label} aria-expanded={open}
+      data-empty={kind === 'recap' ? !view?.recap : !view?.description} data-busy={busy} data-unseen={kind === 'recap' && unseen && !open}
+      onClick={() => {
+        if (pinned) { close(); return; }
+        setPinned(true);
+        if (kind === 'recap' && !view?.recap && !busy) void refresh();
+      }}
+      onPointerEnter={(event) => { if (mouse(event)) hover(true); }}
+      onPointerLeave={(event) => { if (mouse(event)) hover(false); }}>{kind === 'recap' ? <RecapIcon /> : <InfoIcon />}</button>
+    {open && place && createPortal(<div ref={popup} className="tdesc-pop" role="dialog" aria-label={label} style={place}
+      onPointerEnter={(event) => { if (mouse(event)) hover(true); }} onPointerLeave={(event) => { if (mouse(event)) hover(false); }}>
       {draft === null
-        ? <p>{view?.description || (busy ? 'Описание готовится…' : 'Описания пока нет.')}</p>
+        ? <>
+          {kind === 'recap' && <p className="tdesc-label">Сейчас</p>}
+          <p>{main}</p>
+          {kind === 'description' && view?.recap && <><p className="tdesc-label">Сейчас</p><p>{view.recap}</p></>}
+        </>
         : <textarea autoFocus maxLength={2000} aria-label="Текст описания" value={draft} onChange={(event) => setDraft(event.target.value)} />}
-      {draft === null && view?.recap && <><p className="tdesc-label">Сейчас</p><p>{view.recap}</p></>}
       {problem && <p className="tdesc-error">{problem}</p>}
       {draft === null && view?.generatedAt && <div className="tdesc-meta">
-        Обновлено {ago(view.generatedAt)}{view.manual ? ' · описание ваше' : ''}{view.model ? ` · ${view.model}` : ''}
+        Обновлено {ago(view.generatedAt)}{view.manual && kind === 'description' ? ' · описание ваше' : ''}{view.model ? ` · ${view.model.split('/').pop()}` : ''}{view.tokens ? ` · ${tokens(view.tokens)}` : ''}
       </div>}
       <div className="tdesc-row">
         {draft === null ? <>
           <button type="button" disabled={busy} onClick={() => void refresh()}>{busy ? 'Обновляется…' : 'Обновить'}</button>
-          <button type="button" onClick={() => { setPinned(true); setDraft(view?.description ?? ''); }}>Изменить</button>
-          {view?.manual && <button type="button" onClick={() => void save('')}>Вернуть автообновление</button>}
+          {kind === 'description' && <button type="button" onClick={() => { setPinned(true); setDraft(view?.description ?? ''); }}>Изменить</button>}
+          {kind === 'description' && view?.manual && <button type="button" onClick={() => void save('')}>Вернуть автообновление</button>}
         </> : <>
           <button type="button" onClick={() => void save(draft).then((ok) => { if (ok) setDraft(null); })}>Сохранить</button>
           <button type="button" onClick={() => setDraft(null)}>Отмена</button>
@@ -137,38 +159,12 @@ function HeaderMount({ threadId }: ExperimentalThreadHeaderRowProps) {
     observer.observe(document.body, { childList: true, subtree: true });
     return () => { observer.disconnect(); window.clearTimeout(frame); node.remove(); };
   }, [threadId]);
-  return <><span ref={marker} hidden />{anchor && createPortal(<HeaderIcon key={threadId} threadId={threadId} />, anchor)}</>;
+  return <><span ref={marker} hidden />{anchor && createPortal(<InfoButton key={threadId} threadId={threadId} kind="description" />, anchor)}</>;
 }
 
 function RecapAction() {
   const { scope } = useComposer();
-  return scope.kind === 'thread' ? <RecapButton key={scope.threadId} threadId={scope.threadId} /> : null;
-}
-
-function RecapButton({ threadId }: { threadId: string }) {
-  const { view, refresh, setRecapOpen } = useDescription(threadId);
-  const open = view?.recapOpen ?? false;
-  return <button type="button" className="tdesc-btn" title="Сводка треда" aria-label="Сводка треда" aria-expanded={open}
-    data-empty={!view?.recap} data-busy={view?.busy ?? false} data-unseen={Boolean(view?.recapUnseen && !open)}
-    onClick={() => {
-      void setRecapOpen(!open);
-      if (!open && !view?.recap && !view?.busy) void refresh();
-    }}><RecapIcon /></button>;
-}
-
-function RecapBanner() {
-  const { scope } = useComposer();
-  return scope.kind === 'thread' ? <RecapLine key={scope.threadId} threadId={scope.threadId} /> : null;
-}
-
-function RecapLine({ threadId }: { threadId: string }) {
-  const { view, failure, setRecapOpen } = useDescription(threadId);
-  if (!view?.recapOpen) return null;
-  const text = view.recap || (view.busy ? 'Сводка готовится…' : view.error ?? failure ?? 'Сводки пока нет: агент ещё не ответил.');
-  return <div className="tdesc-recap" role="note" data-thread-recap>
-    <span>{text}</span>
-    <button type="button" aria-label="Свернуть сводку" title="Свернуть" onClick={() => void setRecapOpen(false)}>×</button>
-  </div>;
+  return scope.kind === 'thread' ? <InfoButton key={scope.threadId} threadId={scope.threadId} kind="recap" /> : null;
 }
 
 export default definePluginApp((app) => {
@@ -176,6 +172,5 @@ export default definePluginApp((app) => {
   app.composer.customize({
     id: 'thread-description', scopes: ['thread'],
     actions: [{ id: 'recap', component: RecapAction }],
-    banners: [{ id: 'recap', chrome: 'bare', component: RecapBanner }],
   });
 });

@@ -8,7 +8,6 @@ export type Entry = {
   recap: string;
   recapAt: number | null;
   recapSeenAt: number | null;
-  recapOpen: boolean;
   firstTask: string;
   /** The first task was too short; rewrite after the first agent reply. */
   needsImprove: boolean;
@@ -16,13 +15,15 @@ export type Entry = {
   /** Id of the newest message the last generation saw. */
   lastMessageId: string | null;
   model: string | null;
+  /** Context tokens of the last worker run, as the provider reported them. */
+  lastTokens: number | null;
   error: string | null;
   errorAt: number | null;
 };
 
 export const emptyEntry = (): Entry => ({
-  description: '', manual: false, recap: '', recapAt: null, recapSeenAt: null, recapOpen: false, firstTask: '',
-  needsImprove: false, generatedAt: null, lastMessageId: null, model: null, error: null, errorAt: null,
+  description: '', manual: false, recap: '', recapAt: null, recapSeenAt: null, firstTask: '',
+  needsImprove: false, generatedAt: null, lastMessageId: null, model: null, lastTokens: null, error: null, errorAt: null,
 });
 
 export const ERROR_BACKOFF_MS = 10 * 60_000;
@@ -46,12 +47,12 @@ export function readEntry(raw: unknown): Entry {
   if (typeof raw !== 'object' || raw === null) return entry;
   const source = raw as Record<string, unknown>;
   const text = (key: 'description' | 'recap' | 'firstTask') => { if (typeof source[key] === 'string') entry[key] = source[key]; };
-  const flag = (key: 'manual' | 'recapOpen' | 'needsImprove') => { if (typeof source[key] === 'boolean') entry[key] = source[key]; };
-  const time = (key: 'recapAt' | 'recapSeenAt' | 'generatedAt' | 'errorAt') => { if (typeof source[key] === 'number') entry[key] = source[key]; };
+  const flag = (key: 'manual' | 'needsImprove') => { if (typeof source[key] === 'boolean') entry[key] = source[key]; };
+  const time = (key: 'recapAt' | 'recapSeenAt' | 'generatedAt' | 'errorAt' | 'lastTokens') => { if (typeof source[key] === 'number') entry[key] = source[key]; };
   const optional = (key: 'lastMessageId' | 'model' | 'error') => { if (typeof source[key] === 'string') entry[key] = source[key]; };
   text('description'); text('recap'); text('firstTask');
-  flag('manual'); flag('recapOpen'); flag('needsImprove');
-  time('recapAt'); time('recapSeenAt'); time('generatedAt'); time('errorAt');
+  flag('manual'); flag('needsImprove');
+  time('recapAt'); time('recapSeenAt'); time('generatedAt'); time('errorAt'); time('lastTokens');
   optional('lastMessageId'); optional('model'); optional('error');
   return entry;
 }
@@ -122,7 +123,7 @@ export function parseReply(reply: string): { description: string; recap: string 
 
 /** Merge a generation result. A manual description is never overwritten. */
 export function applyReply(entry: Entry, reply: { description: string; recap: string }, meta: {
-  now: number; firstTask: string; lastMessageId: string | null; hasReply: boolean; shortWords: number; model: string;
+  now: number; firstTask: string; lastMessageId: string | null; hasReply: boolean; shortWords: number; model: string; tokens: number | null;
 }): Entry {
   const recap = reply.recap || entry.recap;
   return {
@@ -135,6 +136,7 @@ export function applyReply(entry: Entry, reply: { description: string; recap: st
     generatedAt: meta.now,
     lastMessageId: meta.lastMessageId,
     model: meta.model,
+    lastTokens: meta.tokens,
     error: null,
     errorAt: null,
   };

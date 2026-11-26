@@ -6,10 +6,10 @@ export const viewSchema = z.object({
   description: z.string(),
   manual: z.boolean(),
   recap: z.string(),
-  recapOpen: z.boolean(),
   recapUnseen: z.boolean(),
   generatedAt: z.number().nullable(),
   model: z.string().nullable(),
+  tokens: z.number().nullable(),
   busy: z.boolean(),
   error: z.string().nullable(),
 });
@@ -19,5 +19,6 @@ export const rpcContract = defineRpcContract({
   refresh: { input: threadInput, output: viewSchema },
   /** An empty text returns the description to automatic updates. */
   setDescription: { input: threadInput.extend({ text: z.string().max(2000) }), output: viewSchema },
-  setRecapOpen: { input: threadInput.extend({ open: z.boolean() }), output: viewSchema },
+  /** The recap was shown: clears the new-recap dot. */
+  markSeen: { input: threadInput, output: viewSchema },
 });

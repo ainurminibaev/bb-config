@@ -10,6 +10,7 @@ bb thread-description show --thread <id>      # описание, сводка, 
 bb thread-description refresh --thread <id>   # обновить сейчас (до 3 минут на модель)
 bb thread-description set --thread <id> --text "…"   # ручное описание; пустой текст возвращает авто
 bb thread-description models --thread <id>    # какая модель и машина будут использованы
+bb thread-description stats [--days 7]        # генерации и токены по дням
 ```
 
 Ручное описание ставь только по просьбе пользователя: автоматика его больше не меняет.
@@ -34,6 +35,7 @@ bb thread-description models --thread <id>    # какая модель и ма�
 
 ## Диагностика
 
+- Наведение не срабатывает в приложении: шапка окна — область перетаскивания; у иконки и карточки стоит `app-region: no-drag` (`app.css`).
 - Нет иконки: BB изменил разметку шапки (опора — `data-thread-header-workflow-actions` и кнопка `Thread actions`, `title-anchor.ts`). Команды и кнопка у поля ввода работают и без неё.
 - На узком экране кнопки у поля ввода нет (BB не показывает там действия плагинов); сводка есть в карточке иконки.
 - `bb plugin logs thread-description` — причины неудачных генераций.
