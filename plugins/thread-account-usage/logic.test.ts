@@ -96,3 +96,16 @@ test('one scale: pace tick, running ahead, a package expiring unused', async () 
   assert.equal(vclaudeNote(4_643_626, 5_000_000, { 'anthropic-claude-opus-4-6': { input: 1, output: 1 }, 'anthropic-claude-opus-5-5': { input: 800_000, output: 4_000_000 } }),
     'осталось 4,64 млн из 5 млн ед. ≈ 5,8 млн вх. или 1,16 млн вых. токенов Opus 5.5');
 });
+test('accounts list: one row per model group, 5 h and week together, Fable apart', async () => {
+  const { windowRows, rowLead } = await import('./logic.ts');
+  const w = (label: string, kind: QuotaWindow['kind'], usedPercent: number, scope?: string[]): QuotaWindow => ({ label, kind, usedPercent, resetsAt: null, ...(scope ? { scope } : {}) });
+  const claude = windowRows({ providerId: 'claude-code', windows: [w('Current session', 'five-hour', 7), w('Weekly limit', 'weekly', 97), w('Fable', 'model', 77)] });
+  assert.deepEqual(claude.map(r => [r.name, r.five?.usedPercent ?? null, r.week?.usedPercent ?? null, r.single?.label ?? null]), [['Claude', 7, 97, null], ['Fable', null, null, 'Fable']]);
+  assert.equal(rowLead(claude[0]!).usedPercent, 97);
+  const google = windowRows({ providerId: 'acp-antigravity-acp', windows: [w('Gemini · 5 ч', 'five-hour', 2, ['gemini']), w('Claude+GPT · неделя', 'weekly', 100, ['claude', 'gpt']), w('Claude+GPT · 5 ч', 'five-hour', 51, ['claude', 'gpt'])] });
+  assert.deepEqual(google.map(r => [r.name, r.five?.usedPercent ?? null, r.week?.usedPercent ?? null]), [['Gemini', 2, null], ['Claude', 51, 100]]);
+  const codex = windowRows({ providerId: 'codex', windows: [w('Weekly limit', 'weekly', 28)] });
+  assert.deepEqual(codex.map(r => [r.name, r.week?.usedPercent]), [['Codex', 28]]);
+  const pack = windowRows({ providerId: 'acp-gemini-antig', windows: [w('Часы', 'other', 100)] });
+  assert.equal(pack[0]!.single?.label, 'Часы');
+});

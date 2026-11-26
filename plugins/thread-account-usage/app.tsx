@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { definePluginApp, experimental_useProviders, useBbContext, useBbNavigate, useRpc, useSettings, useSidebarSplitLayout } from '@get-bb/plugin-sdk/app';
 import type { rpcContract, Account, Snapshot, QuotaWindow } from './contract';
-import { accountExhausted, ahead, appliesToModel, isPackageAccount, pace, planLabel, wasteRisk } from './logic';
+import { accountExhausted, ahead, appliesToModel, isPackageAccount, pace, planLabel, rowLead, wasteRisk, windowRows, type WindowRow } from './logic';
 import { AccountsPage } from './accounts-page';
 import { inlineMarks } from './provider-icons';
 import './app.css';
@@ -93,7 +93,7 @@ function WindowRows({ account, filter, model, now }: { account: Account; filter:
   </div>;
 }
 
-function InlineWindow({ w, a, now }: { w: QuotaWindow; a: Account; now: number }) {
+function InlineWindow({ w, a, now, name }: { w: QuotaWindow; a: Account; now: number; name?: string }) {
   const gone = pace(w, now);
   const fast = ahead(w, now);
   const waste = wasteRisk(w, now);
@@ -103,7 +103,28 @@ function InlineWindow({ w, a, now }: { w: QuotaWindow; a: Account; now: number }
   return <div className="tau-inline-window" data-level={base === 'normal' && fast ? 'warning' : base}
     title={`${w.label}: ${pct(w.usedPercent)} использовано${gone !== null ? `, прошло ${pct(gone)} периода` : ''}${fast ? ' — расход опережает время' : ''}${waste ? ' — пакет может сгореть неиспользованным' : ''}. ${w.endsAt ? `Сгорает ${new Date(w.endsAt).toLocaleString('ru-RU')}` : `${reset.relative}. ${reset.exact}`}${a.note ? `\n${a.note}` : ''}`}>
     <div className="tau-bar"><span style={{width:`${Math.min(100,Math.max(0,w.usedPercent))}%`}}/>{gone !== null && w.usedPercent < 100 && <i className="tau-pace" data-ahead={fast} style={{ left: `${gone}%` }} />}</div>
-    <span className="tau-inline-type">{short(w)}</span><strong>{pct(w.usedPercent)}</strong><small>{until ? `до ${until}` : compactReset(w.resetsAt,now)}</small>
+    <span className="tau-inline-type">{name ?? short(w)}</span><strong>{pct(w.usedPercent)}</strong><small>{until ? `до ${until}` : compactReset(w.resetsAt,now)}</small>
+  </div>;
+}
+/** One model group: thick bar = 5-hour window, thin bar under it = week; figures of the busier one. */
+function PairRow({ r, a, now }: { r: WindowRow; a: Account; now: number }) {
+  if (r.single || !(r.five && r.week)) {
+    const w = rowLead(r);
+    return <InlineWindow w={w} name={w.scope?.length || w.kind === 'model' ? r.name : undefined} a={a} now={now} />;
+  }
+  const lead = rowLead(r);
+  const fast = ahead(r.five, now) || ahead(r.week, now);
+  const base = level(lead.usedPercent);
+  const bar = (w: QuotaWindow, thin: boolean) => {
+    const gone = pace(w, now);
+    return <div className="tau-bar" data-thin={thin}><span style={{ width: `${Math.min(100, Math.max(0, w.usedPercent))}%` }} />
+      {gone !== null && w.usedPercent < 100 && <i className="tau-pace" data-ahead={ahead(w, now)} style={{ left: `${gone}%` }} />}</div>;
+  };
+  const line = (w: QuotaWindow, name: string) => { const t = resetText(w.resetsAt, now); return `${name}: ${pct(w.usedPercent)} использовано, ${t.relative.toLowerCase()} (${t.exact})`; };
+  return <div className="tau-inline-window tau-pair" data-level={base === 'normal' && fast ? 'warning' : base}
+    title={`${r.name}\n${line(r.five, '5 часов')}\n${line(r.week, 'Неделя')}`}>
+    <div className="tau-pair-bars">{bar(r.five, false)}{bar(r.week, true)}</div>
+    <span className="tau-inline-type">{r.name}</span><strong>{pct(lead.usedPercent)}</strong><small>{compactReset(lead.resetsAt, now)}</small>
   </div>;
 }
 function AccountRow({ a, filter, now, logos, onDetails }: { a: Account; filter: Filter; now: number; logos: Record<string,string|null>; onDetails: (key:string)=>void }) {
@@ -114,7 +135,8 @@ function AccountRow({ a, filter, now, logos, onDetails }: { a: Account; filter: 
       <small>{a.hostNames.map(n=>n.replace(/\s*[—–].*$/,'').trim()).join(' · ')}</small>
       {a.plan&&<small className="tau-plan" title="Тариф и цена в месяц (справочно)">{planLabel(a.providerId,a.plan)}</small>}
     </div>
-    <div className="tau-row-windows">{windows.length ? windows.map((w,i)=><InlineWindow key={`${w.label}:${i}`} w={w} a={a} now={now}/>)
+    <div className="tau-row-windows">{windows.length ? (filter === 'all' ? windowRows(a).map((r,i)=><PairRow key={`${r.name}:${i}`} r={r} a={a} now={now}/>)
+      : windows.map((w,i)=><InlineWindow key={`${w.label}:${i}`} w={w} a={a} now={now}/>))
       :<small className="tau-row-empty">{a.message ?? 'Окно не сообщено'}</small>}
       {windows.length > 0 && isPackageAccount(a) && a.note && <small className="tau-row-note" title={a.note}>{a.note}</small>}
       {windows.length > 0 && a.message && <small className="tau-row-note" title={a.message}>{a.message}</small>}</div>

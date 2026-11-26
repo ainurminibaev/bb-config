@@ -160,3 +160,30 @@ export function vclaudeNote(remaining: number, limit: number, rates: Record<stri
     ? ` ≈ ${millions(remaining / (rate.input / 1e6))} вх. или ${millions(remaining / (rate.output / 1e6))} вых. токенов ${name}` : '';
   return `осталось ${millions(remaining)} из ${millions(limit)} ед.${tokens}`;
 }
+
+/**
+ * Rows of the accounts list: one per model group. A 5-hour and a weekly
+ * window of the same group share a row (thick bar = 5 h, thin = week); a
+ * per-model cap (Fable) and a package keep their own row.
+ */
+export type WindowRow = { name: string; five: QuotaWindow | null; week: QuotaWindow | null; single: QuotaWindow | null };
+const groupName = (account: Pick<Account, 'providerId'>, w: QuotaWindow) =>
+  w.scope?.length ? (w.scope.includes('gemini') ? 'Gemini' : 'Claude')
+    : w.kind === 'model' || w.kind === 'other' ? w.label
+    : account.providerId === 'codex' ? 'Codex' : 'Claude';
+export function windowRows(account: Pick<Account, 'providerId' | 'windows'>): WindowRow[] {
+  const rows: WindowRow[] = [];
+  for (const w of account.windows) {
+    const name = groupName(account, w);
+    const pairable = w.kind === 'five-hour' || w.kind === 'weekly';
+    const row = pairable ? rows.find(r => r.name === name && !r.single) : undefined;
+    if (row && w.kind === 'five-hour' && !row.five) row.five = w;
+    else if (row && w.kind === 'weekly' && !row.week) row.week = w;
+    else rows.push(pairable ? { name, five: w.kind === 'five-hour' ? w : null, week: w.kind === 'weekly' ? w : null, single: null }
+      : { name, five: null, week: null, single: w });
+  }
+  return rows;
+}
+/** The window that sets a row's percent and timer: the busier of the two. */
+export const rowLead = (r: WindowRow): QuotaWindow =>
+  r.single ?? (r.five && r.week ? (r.week.usedPercent > r.five.usedPercent ? r.week : r.five) : (r.five ?? r.week)!);
