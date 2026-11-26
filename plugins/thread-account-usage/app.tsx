@@ -26,7 +26,7 @@ const filters: { id: Filter; label: string }[] = [
 const tag: Record<string, true> = { 'acp-antigravity-acp': true, 'acp-gemini-antig': true };
 // Antig's mark is drawn inline (provider-icons.tsx), here and in BB's provider pickers.
 const withAliases = (logos: Record<string, string | null>): Record<string, string | null> => ({ ...logos, ...Object.fromEntries(Object.keys(inlineMarks).map(id => [id, `inline:${id}`])) });
-const scopeShort = (scope: string[]) => scope.includes('gemini') ? 'Gem' : scope.map(f => f === 'claude' ? 'C' : f === 'gpt' ? 'G' : f.slice(0, 3)).join('/');
+const scopeShort = (scope: string[]) => scope.includes('gemini') ? 'Gemini' : 'Claude';
 const short = (w: QuotaWindow) => w.scope?.length ? `${scopeShort(w.scope)} ${w.kind === 'five-hour' ? '5ч' : w.kind === 'weekly' ? '7д' : ''}`.trim() : w.kind === 'five-hour' ? '5ч' : w.kind === 'weekly' ? 'Нед' : w.label;
 const level = (percent: number) => percent >= 100 ? 'blocked' : percent >= 90 ? 'warning' : 'normal';
 const pct = (v: number) => `${Math.round(v)}%`;
@@ -106,6 +106,8 @@ function InlineWindow({ w, a, now, name }: { w: QuotaWindow; a: Account; now: nu
     <span className="tau-inline-type">{name ?? short(w)}</span><strong>{pct(w.usedPercent)}</strong><small>{until ? `до ${until}` : compactReset(w.resetsAt,now)}</small>
   </div>;
 }
+// Quotas grouped by model (Прямой Gemini) read as one row per group; others keep one row per window.
+const pairRows = new Set(['acp-antigravity-acp']);
 /** One model group: thick bar = 5-hour window, thin bar under it = week; figures of the busier one. */
 function PairRow({ r, a, now }: { r: WindowRow; a: Account; now: number }) {
   if (r.single || !(r.five && r.week)) {
@@ -135,7 +137,7 @@ function AccountRow({ a, filter, now, logos, onDetails }: { a: Account; filter: 
       <small>{a.hostNames.map(n=>n.replace(/\s*[—–].*$/,'').trim()).join(' · ')}</small>
       {a.plan&&<small className="tau-plan" title="Тариф и цена в месяц (справочно)">{planLabel(a.providerId,a.plan)}</small>}
     </div>
-    <div className="tau-row-windows">{windows.length ? (filter === 'all' ? windowRows(a).map((r,i)=><PairRow key={`${r.name}:${i}`} r={r} a={a} now={now}/>)
+    <div className="tau-row-windows">{windows.length ? (filter === 'all' && pairRows.has(a.providerId) ? windowRows(a).map((r,i)=><PairRow key={`${r.name}:${i}`} r={r} a={a} now={now}/>)
       : windows.map((w,i)=><InlineWindow key={`${w.label}:${i}`} w={w} a={a} now={now}/>))
       :<small className="tau-row-empty">{a.message ?? 'Окно не сообщено'}</small>}
       {windows.length > 0 && isPackageAccount(a) && a.note && <small className="tau-row-note" title={a.note}>{a.note}</small>}

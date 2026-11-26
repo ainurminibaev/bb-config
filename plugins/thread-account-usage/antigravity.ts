@@ -58,7 +58,8 @@ export function parseGoogleQuota(summary: unknown, models: unknown): AgWindow[] 
     const group = record(raw);
     const name = text(group.displayName) ?? 'Модели';
     const scope = families(`${name} ${text(group.description, 2000) ?? ''}`);
-    const short = scope.length ? scope.map(f => f === 'gpt' ? 'GPT' : f[0]!.toUpperCase() + f.slice(1)).join('+') : name;
+    // The owner reads the Claude+GPT group as «Claude»; GPT is not named.
+    const short = scope.includes('gemini') ? 'Gemini' : scope.includes('claude') ? 'Claude' : name;
     for (const item of Array.isArray(group.buckets) ? group.buckets as unknown[] : []) {
       const bucket = record(item);
       const left = fraction(bucket.remainingFraction);

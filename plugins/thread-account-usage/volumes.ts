@@ -126,6 +126,6 @@ export function googleComparison(accounts: Account[]): string {
   const own = google?.volume?.confidence === 'measured' && google.volume.tokens
     ? `${google.providerName} (Google AI Pro): ≈ ${short(google.volume.tokens)} токенов на окно «${google.volume.window}» — замер по токенам agy против % квоты. `
     : `${google?.providerName ?? 'Google AI Pro'}: замер копится — токены agy из его разговоров сопоставляются с ростом % квоты раз в 15 минут; Google объём окон не публикует. `;
-  return own + 'Официально: у Pro раздельные окна — Gemini (5 ч) и Claude+GPT (5 ч и неделя), расход пропорционален стоимости токенов модели, недельный лимит зависит от тарифа (Ultra больше). '
+  return own + 'Официально: у Pro раздельные окна — Gemini (5 ч) и Claude (5 ч и неделя), расход пропорционален стоимости токенов модели, недельный лимит зависит от тарифа (Ultra больше). '
     + (known.length ? `Для сравнения (замеры этой установки): ${known.join('; ')}.` : '');
 }

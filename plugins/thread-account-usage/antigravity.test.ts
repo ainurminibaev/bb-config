@@ -24,8 +24,8 @@ test('Google quota: Gemini models and the Claude+GPT group become scoped windows
   const windows = parseGoogleQuota(summary, models);
   assert.deepEqual(windows.map(w => [w.label, w.kind, Math.round(w.usedPercent * 10) / 10, w.scope]), [
     ['Gemini · 5 ч', 'five-hour', 1.5, ['gemini']],
-    ['Claude+GPT · неделя', 'weekly', 25, ['claude', 'gpt']],
-    ['Claude+GPT · 5 ч', 'five-hour', 0, ['claude', 'gpt']],
+    ['Claude · неделя', 'weekly', 25, ['claude', 'gpt']],
+    ['Claude · 5 ч', 'five-hour', 0, ['claude', 'gpt']],
   ]);
   assert.equal(appliesToModel(windows[0]!, 'gemini-3.8-flash-high'), true);
   assert.equal(appliesToModel(windows[0]!, 'claude-opus-4-6-thinking'), false);
