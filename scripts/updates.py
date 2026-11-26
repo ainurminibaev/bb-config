@@ -535,6 +535,16 @@ def prepared_plugin_source(root, plugin_id, plugin):
     return directory
 
 
+def tagged_plugin_source(plugin_id, plugin):
+    """Installed from this repository's own release tags (`<id>/vX.Y.Z`): BB updates it itself.
+
+    Such a plugin left the release folder on purpose (plugin_git_source.py), so
+    an older release step must accept it instead of failing on "another source".
+    """
+    source = str(plugin.get('source') or '')
+    return source.startswith('git:') and f'@semver:{plugin_id}/:' in source
+
+
 def plugin_state(step, root, plugins, commit=None):
     """(ok, detail) — the running plugin is this checkout's build of the release version.
 
@@ -551,7 +561,11 @@ def plugin_state(step, root, plugins, commit=None):
     newer = commit and version_tuple(plugin.get('version')) > version_tuple(wanted)
     prepared = prepared_plugin_source(root, step['plugin'], plugin) if commit else None
     legacy = same_plugin_source(installation_root(root), step['plugin'], plugin)
-    if commit and prepared and not newer:
+    tagged = commit and not prepared and tagged_plugin_source(step['plugin'], plugin)
+    if tagged:
+        if version_tuple(plugin.get('version')) < version_tuple(wanted):
+            return False, f'installed {plugin.get("version")} from its Git tag, release has {wanted}; run bb plugin update {step["plugin"]}'
+    elif commit and prepared and not newer:
         relative = f'plugins/{step["plugin"]}'
         wanted_tree = git(root, 'rev-parse', f'{commit}:{relative}')
         state = git(prepared, 'rev-parse', f'{prepared.name}:{relative}', check=False)
@@ -566,7 +580,7 @@ def plugin_state(step, root, plugins, commit=None):
     if plugin.get('enabled') and plugin.get('status') not in ('running', 'needs-configuration'):
         return False, f'status {plugin.get("status")}: {plugin.get("statusDetail")}'
     which = f'{plugin.get("version")} (newer than release {wanted}; a later build is installed)' if newer else wanted
-    source = f'release {prepared.name}' if prepared else 'the existing installation'
+    source = f'release {prepared.name}' if prepared else 'its Git tag' if tagged else 'the existing installation'
     waiting = (" (waits for the user's settings: " + (plugin.get('statusDetail') or '')[:160] + ')'
                if plugin.get('enabled') and plugin.get('status') == 'needs-configuration' else '')
     return True, f'{step["plugin"]} {which} from {source}' + ('' if plugin.get('enabled') else ' (disabled by the user, kept)') + waiting

@@ -269,6 +269,16 @@ class UpdatesTests(unittest.TestCase):
             installed['demo']['rootDir'] = '/elsewhere'
             self.assertEqual(self.call('run', 'v1.0.0/demo')[0], 1)  # another source is never replaced
             self.assertEqual(len(commands), count + 3)
+            # Moved to this repository's own tags (<id>/vX.Y.Z): BB updates it; the old step accepts it.
+            installed['demo'].update(source='git:https://github.com/o/r.git@semver:demo/:^1.2.0', version='1.2.1')
+            accepted = self.call('run', 'v1.0.0/demo')
+            self.assertEqual(accepted[0], 0)
+            self.assertIn('from its Git tag', accepted[1]['detail'])
+            installed['demo']['version'] = '1.1.9'
+            self.assertIn('bb plugin update demo', self.call('run', 'v1.0.0/demo')[1])
+            installed['demo'].update(source='git:https://github.com/o/r.git@semver:other/:^1.2.0', version='1.2.1')
+            self.assertEqual(self.call('run', 'v1.0.0/demo')[0], 1)  # another plugin's tags are not ours
+            self.assertEqual(len(commands), count + 3)
 
     def test_validate_requires_dependency_declarations_for_later_integration_steps(self):
         requirements = [{'id': 'addon', 'version': '1.4.0'}]
