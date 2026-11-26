@@ -5,7 +5,7 @@ import {
   type ExperimentalThreadHeaderRowProps,
 } from '@get-bb/plugin-sdk/app';
 import type { DescriptionView, rpcContract } from './contract';
-import { findTitleSpot } from './title-anchor';
+import { findComposerSpot, findTitleSpot } from './title-anchor';
 import './app.css';
 
 // One cache for the header icon, the composer button and the recap line of a thread.
@@ -46,6 +46,16 @@ function ago(at: number) {
   return new Date(at).toLocaleDateString();
 }
 
+const EditIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="M13.5 6.5l4 4" /></svg>;
+const RefreshIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 4v7h-7" /></svg>;
+
+/** "claude-code/claude-haiku-5-5" → "Haiku 5.5"; other ids stay as they are. */
+function modelName(id: string) {
+  const model = id.split('/').pop() ?? id;
+  const claude = /^claude-([a-z]+)-(\d+)-(\d+)/u.exec(model);
+  return claude ? `${claude[1]![0]!.toUpperCase()}${claude[1]!.slice(1)} ${claude[2]}.${claude[3]}` : model;
+}
+
 const tokens = (count: number) => (count >= 1000 ? `${Math.round(count / 1000)} тыс. токенов` : `${count} токенов`);
 
 /**
@@ -79,7 +89,7 @@ function InfoButton({ threadId, kind }: { threadId: string; kind: 'description' 
       const width = Math.min(360, window.innerWidth - 16);
       const left = Math.max(8, Math.min(kind === 'recap' ? rect.right - width : rect.left - 12, window.innerWidth - width - 8));
       // The header card opens downwards, the composer card upwards.
-      setPlace(kind === 'recap' ? { bottom: window.innerHeight - rect.top + 8, left } : { top: rect.bottom + 6, left });
+      setPlace(kind === 'recap' ? { top: rect.top - 8, left, transform: 'translateY(-100%)' } : { top: rect.bottom + 6, left });
     };
     measure();
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
@@ -100,6 +110,7 @@ function InfoButton({ threadId, kind }: { threadId: string; kind: 'description' 
   const main = kind === 'recap'
     ? view?.recap || (busy ? 'Сводка готовится…' : 'Сводки пока нет.')
     : view?.description || (busy ? 'Описание готовится…' : 'Описания пока нет.');
+  const loading = busy && !(kind === 'recap' ? view?.recap : view?.description);
   return <>
     <button ref={button} type="button" className="tdesc-btn" aria-label={label} title={open ? undefined : label} aria-expanded={open}
       data-empty={kind === 'recap' ? !view?.recap : !view?.description} data-busy={busy} data-unseen={kind === 'recap' && unseen && !open}
@@ -112,27 +123,33 @@ function InfoButton({ threadId, kind }: { threadId: string; kind: 'description' 
       onPointerLeave={(event) => { if (mouse(event)) hover(false); }}>{kind === 'recap' ? <RecapIcon /> : <InfoIcon />}</button>
     {open && place && createPortal(<div ref={popup} className="tdesc-pop" role="dialog" aria-label={label} style={place}
       onPointerEnter={(event) => { if (mouse(event)) hover(true); }} onPointerLeave={(event) => { if (mouse(event)) hover(false); }}>
-      {draft === null
-        ? <>
-          {kind === 'recap' && <p className="tdesc-label">Сейчас</p>}
-          <p>{main}</p>
-          {kind === 'description' && view?.recap && <><p className="tdesc-label">Сейчас</p><p>{view.recap}</p></>}
-        </>
-        : <textarea autoFocus maxLength={2000} aria-label="Текст описания" value={draft} onChange={(event) => setDraft(event.target.value)} />}
-      {problem && <p className="tdesc-error">{problem}</p>}
-      {draft === null && view?.generatedAt && <div className="tdesc-meta">
-        Обновлено {ago(view.generatedAt)}{view.manual && kind === 'description' ? ' · описание ваше' : ''}{view.model ? ` · ${view.model.split('/').pop()}` : ''}{view.tokens ? ` · ${tokens(view.tokens)}` : ''}
-      </div>}
-      <div className="tdesc-row">
-        {draft === null ? <>
-          <button type="button" disabled={busy} onClick={() => void refresh()}>{busy ? 'Обновляется…' : 'Обновить'}</button>
-          {kind === 'description' && <button type="button" onClick={() => { setPinned(true); setDraft(view?.description ?? ''); }}>Изменить</button>}
-          {kind === 'description' && view?.manual && <button type="button" onClick={() => void save('')}>Вернуть автообновление</button>}
-        </> : <>
-          <button type="button" onClick={() => void save(draft).then((ok) => { if (ok) setDraft(null); })}>Сохранить</button>
-          <button type="button" onClick={() => setDraft(null)}>Отмена</button>
-        </>}
+      <div className="tdesc-head">
+        <span className="tdesc-title">{kind === 'recap' ? 'Сейчас' : 'О чём тред'}</span>
+        {draft === null && <span className="tdesc-tools">
+          {kind === 'description' && <button type="button" className="tdesc-tool" aria-label="Изменить описание" title="Изменить"
+            onClick={() => { setPinned(true); setDraft(view?.description ?? ''); }}><EditIcon /></button>}
+          <button type="button" className="tdesc-tool" aria-label="Обновить" title="Обновить" disabled={busy} data-busy={busy}
+            onClick={() => { setPinned(true); void refresh(); }}><RefreshIcon /></button>
+        </span>}
       </div>
+      {draft !== null ? <>
+        <textarea autoFocus maxLength={2000} aria-label="Текст описания" value={draft} onChange={(event) => setDraft(event.target.value)} />
+        <div className="tdesc-edit">
+          <button type="button" className="tdesc-primary" onClick={() => void save(draft).then((ok) => { if (ok) setDraft(null); })}>Сохранить</button>
+          <button type="button" className="tdesc-plain" onClick={() => setDraft(null)}>Отмена</button>
+        </div>
+      </> : loading ? <div className="tdesc-skeleton" aria-label="Готовится"><i /><i /><i /></div>
+        : <p className="tdesc-main" data-empty={!(kind === 'recap' ? view?.recap : view?.description)}>{main}</p>}
+      {draft === null && kind === 'description' && view?.recap && <div className="tdesc-now">
+        <span className="tdesc-title">Сейчас</span>
+        <p>{view.recap}</p>
+      </div>}
+      {problem && <p className="tdesc-error">{problem}</p>}
+      {draft === null && (view?.generatedAt || view?.manual) && <div className="tdesc-foot" title={view?.tokens ? `Последнее обновление: ${tokens(view.tokens)}` : undefined}>
+        {view?.generatedAt ? <span>{busy ? 'обновляется…' : ago(view.generatedAt)}</span> : null}
+        {view?.model ? <span>{modelName(view.model)}</span> : null}
+        {view?.manual && kind === 'description' ? <span>описание ваше · <button type="button" className="tdesc-plain" onClick={() => void save('')}>вернуть авто</button></span> : null}
+      </div>}
     </div>, document.body)}
   </>;
 }
@@ -162,15 +179,51 @@ function HeaderMount({ threadId }: ExperimentalThreadHeaderRowProps) {
   return <><span ref={marker} hidden />{anchor && createPortal(<InfoButton key={threadId} threadId={threadId} kind="description" />, anchor)}</>;
 }
 
-function RecapAction() {
+/** Mounted as an empty composer banner; puts the recap icon under the composer's collapse arrow. */
+function ComposerMount() {
   const { scope } = useComposer();
-  return scope.kind === 'thread' ? <InfoButton key={scope.threadId} threadId={scope.threadId} kind="recap" /> : null;
+  const marker = useRef<HTMLSpanElement | null>(null);
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const threadId = scope.kind === 'thread' ? scope.threadId : null;
+  useEffect(() => {
+    if (!threadId) return;
+    const node = document.createElement('span');
+    node.className = 'tdesc-composer-anchor';
+    node.dataset.threadRecap = '';
+    let timer = 0;
+    let sized: ResizeObserver | null = null;
+    const attach = () => {
+      timer = 0;
+      const spot = marker.current && findComposerSpot(marker.current);
+      sized?.disconnect();
+      if (!spot) { node.remove(); setAnchor(null); return; }
+      const place = () => {
+        const box = spot.composer.getBoundingClientRect();
+        const arrow = spot.arrow.getBoundingClientRect();
+        // Not laid out yet (first paint, hidden pane): try again shortly.
+        if (!arrow.width || !box.width) { window.setTimeout(place, 250); return; }
+        node.style.top = `${Math.round(arrow.bottom - box.top + 4)}px`;
+        node.style.right = `${Math.round(box.right - arrow.right)}px`;
+      };
+      if (node.parentElement !== spot.composer) spot.composer.append(node);
+      place();
+      sized = new ResizeObserver(place);
+      sized.observe(spot.composer);
+      sized.observe(spot.arrow);
+      setAnchor(node);
+    };
+    attach();
+    const observer = new MutationObserver(() => { if (!node.isConnected && !timer) timer = window.setTimeout(attach, 200); });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => { observer.disconnect(); sized?.disconnect(); window.clearTimeout(timer); node.remove(); };
+  }, [threadId]);
+  return <><span ref={marker} hidden />{threadId && anchor && createPortal(<InfoButton key={threadId} threadId={threadId} kind="recap" />, anchor)}</>;
 }
 
 export default definePluginApp((app) => {
   app.slots.experimental_threadHeaderRow({ id: 'thread-description', order: 100, component: HeaderMount });
   app.composer.customize({
     id: 'thread-description', scopes: ['thread'],
-    actions: [{ id: 'recap', component: RecapAction }],
+    banners: [{ id: 'recap', chrome: 'bare', component: ComposerMount }],
   });
 });

@@ -5,7 +5,7 @@
 A short description and a recap for every BB thread and subthread.
 
 - **Round "i" next to the thread title** — what the thread is about. Hover shows a card, a click pins it: description, recap, refresh, edit.
-- **Button by the composer** — hover shows the recap of where things stand; nothing is shown otherwise, a dot means a new recap.
+- **Icon in the top-right corner of the composer**, under its collapse arrow — hover shows the recap of where things stand; nothing is shown otherwise, a dot means a new recap.
 
 The description is written from the first task; when that has fewer than 15
 words it is rewritten after the first agent reply; afterwards it is refreshed at
