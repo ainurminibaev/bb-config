@@ -1,6 +1,8 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
+import { z } from 'zod';
 import { hostContract, rpcContract } from './contract';
-import { buildMachines, type Identity } from './directory';
+import { buildMachines, withExtraRoots, type Identity } from './directory';
+import { CASCADE_PLUGIN_ID, CASCADE_STATUS_METHOD, cascadeFolder, readPassport } from './cascade-passport';
 export type { rpcContract } from './contract';
 
 export default function projectOpen(bb: BbPluginApi) {
@@ -23,7 +25,7 @@ export default function projectOpen(bb: BbPluginApi) {
       Promise.all(online.map(async h => [h.id, await host.call('identity', null, { hostId: h.id }).catch(() => null)] as const)),
     ]);
     const known = answers.filter((a): a is readonly [string, Identity & { handler: boolean }] => a[1] !== null);
-    const machines = buildMachines(hosts, projects as never, environments, new Map(known));
+    const machines = buildMachines(hosts, projects as never, withExtraRoots(environments, await cascadeRoots()), new Map(known));
     const results = await Promise.all(known.filter(([, identity]) => identity.handler).map(([self]) =>
       host.call('save', { version: 1 as const, self, machines }, { hostId: self }).then(r => r.saved, () => false)));
     return { saved: results.filter(Boolean).length };
@@ -37,6 +39,26 @@ export default function projectOpen(bb: BbPluginApi) {
     }
     return all;
   }
+  // Папки тредов каскада, которые уже открывали: обработчик Finder должен их знать.
+  const ROOTS_KEY = 'cascade-roots';
+  const cascadeRoots = async () => {
+    const raw = await bb.storage.kv.get<Record<string, string[]>>(ROOTS_KEY).catch(() => null);
+    return raw && typeof raw === 'object' ? raw : {};
+  };
+  async function threadFolder(threadId: string) {
+    const thread = await bb.sdk.threads.get({ threadId }).catch(() => null);
+    if (!thread) return null;
+    const folder = cascadeFolder(await readPassport((id, signal) => bb.sdk.plugins.callRpc({
+      pluginId: CASCADE_PLUGIN_ID, method: CASCADE_STATUS_METHOD, input: { threadId: id }, outputSchema: z.unknown(), signal }), { id: threadId, providerId: thread.providerId }));
+    if (!folder) return null;
+    const roots = await cascadeRoots();
+    if (!(roots[folder.hostId] ?? []).includes(folder.path)) {
+      await bb.storage.kv.set(ROOTS_KEY, { ...roots, [folder.hostId]: [...(roots[folder.hostId] ?? []), folder.path].slice(-50) });
+      await prepareOnce().catch(() => undefined);
+    }
+    return folder;
+  }
   // One pass at a time: several clicks share it.
-  bb.rpc.register(rpcContract, { prepare: () => running ??= prepare().finally(() => { running = null; }) });
+  const prepareOnce = () => running ??= prepare().finally(() => { running = null; });
+  bb.rpc.register(rpcContract, { prepare: prepareOnce, threadFolder: ({ threadId }) => threadFolder(threadId) });
 }

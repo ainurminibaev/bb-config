@@ -31,6 +31,12 @@ export function buildMachines(hosts: Machine[], projects: Project[], environment
   return machines;
 }
 
+/** Папки тредов каскада, уже открывавшиеся из BB: «машина → пути», без повторов. */
+export function withExtraRoots(environments: Environment[], extra: Record<string, string[]>): Environment[] {
+  const added = Object.entries(extra).flatMap(([hostId, paths]) => paths.map(path => ({ hostId, path })));
+  return added.length ? [...environments, ...added] : environments;
+}
+
 /** A machine that is offline now keeps the keys it reported earlier. */
 export function keepKnownKeys(next: Directory, previous: unknown): Directory {
   const old = (previous as { machines?: Record<string, Partial<Identity>> } | null)?.machines;

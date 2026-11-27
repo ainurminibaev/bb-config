@@ -60,3 +60,7 @@ and config order; the successful one is in `State/<host-id>.alias.json`. On «SS
 разных пользователей» add `"bindings": {"<host-id>":
 "<alias>"}`. Check `Status/*.json` and `State/*.log` in the handler's support folder; do
 not open Finder on the user's Mac as a probe.
+
+## Каскад подписок
+
+Тред «Каскада подписок»: в режиме Finder кнопка папки открывает машину свежей копии и общий путь (RPC плагина `threadFolder`), папка добавляется в список обработчика. Режимы «Файлы», рабочее окно и пункт меню «…» штатные; каскад не ответил — как раньше.

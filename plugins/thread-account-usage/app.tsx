@@ -311,7 +311,7 @@ function QuotaControl({ threadId, target }: { threadId: string | null; target?:H
         {error && <p className="tau-error" role="alert">{error}</p>}
         {view === 'thread' ? <>
           {snapshot && <div className="tau-account-heading"><strong>{account?.email ?? 'Аккаунт не подтверждён'}</strong>
-            <small>{account?.providerName ?? snapshot.providerId} · {snapshot.hostName ?? 'Нет машины'}{account?.plan ? ` · ${planLabel(account.providerId, account.plan)}` : ''}</small>
+            <small>{account?.providerName ?? snapshot.providerId} · {snapshot.hostName ?? 'Нет машины'}{snapshot.cascade ? ' · ступень каскада' : ''}{account?.plan ? ` · ${planLabel(account.providerId, account.plan)}` : ''}</small>
             {snapshot.model && <small>Модель запуска: {snapshot.model}</small>}{account?.note && <small>{account.note}</small>}</div>}
           {snapshot?.message && <p className="tau-empty">{snapshot.message}</p>}
           {snapshot?.exhausted && <p className="tau-exhausted-note"><strong>Исчерпан: {snapshot.exhausted.title}.</strong> {snapshot.exhausted.detail}{snapshot.exhausted.link && <> <a href={snapshot.exhausted.link} target="_blank" rel="noreferrer">Пополнить ↗</a></>}</p>}

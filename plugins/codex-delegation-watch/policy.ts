@@ -1,3 +1,4 @@
+import { isCascadeProvider } from "./cascade-passport.ts";
 // Pure supervision policy for delegated Codex threads. No BB calls here, so the
 // rules are testable on their own; server.ts gathers facts and applies the result.
 
@@ -327,10 +328,18 @@ export function newWatch(threadId: string, parentThreadId: string | null, mode: 
   };
 }
 
+/**
+ * Тред работает на Codex: сам тред Codex или тред «Каскада подписок», чья
+ * текущая ступень — Codex (`stepProviderId` из паспорта; без каскада — null).
+ */
+export function runsCodex(t: { providerId?: unknown }, stepProviderId: string | null = null): boolean {
+  return t.providerId === "codex" || (isCascadeProvider(t.providerId) && stepProviderId === "codex");
+}
+
 /** Delegated Codex threads created after the plugin started watching are enrolled automatically. */
-export function shouldEnroll(t: { providerId?: unknown; parentThreadId?: unknown; visibility?: unknown; createdAt?: unknown; archivedAt?: unknown }, since: number): boolean {
+export function shouldEnroll(t: { providerId?: unknown; parentThreadId?: unknown; visibility?: unknown; createdAt?: unknown; archivedAt?: unknown }, since: number, stepProviderId: string | null = null): boolean {
   return (
-    t.providerId === "codex" &&
+    runsCodex(t, stepProviderId) &&
     typeof t.parentThreadId === "string" &&
     t.parentThreadId.length > 0 &&
     t.visibility !== "hidden" &&
