@@ -52,7 +52,7 @@ test('«+ Профиль»: заготовки и дублирование с у
 
 test('тестовый источник квоты: только в тестовых тредах; превью и схема его учитывают', () => {
   const c = config();
-  c.testQuota = { enabled: true, threadIds: ['thr_test'], steps: { [TRU_MAX]: { state: 'exhausted', resetsAt: new Date(NOW + 3_600_000).toISOString() }, [MAC_GW]: { state: 'unknown', resetsAt: null } }, threads: {} };
+  c.testQuota = { enabled: true, threadIds: ['thr_test'], steps: { [TRU_MAX]: { state: 'exhausted', resetsAt: new Date(NOW + 3_600_000).toISOString() }, [MAC_GW]: { state: 'unknown', resetsAt: null } }, threads: {}, bridgeIncompatible: false };
   const real: HealthLookup = () => ok;
   const input = (threadId: string) => ({ config: c, requestedModel: 'auto', accounts: ACCOUNTS, now: NOW, thread: thread({ threadId }), health: quotaLookupFor(c, threadId, real, NOW) });
   const t = selectStep(input('thr_test'));
@@ -105,7 +105,7 @@ test('схема «i» строится из движка: отмеченная 
 test('тестовая квота своего треда: главнее общей, действует без общего флага, исчерпание с прошедшим сбросом — «лимит есть»', () => {
   const c = config();
   c.testQuota = { enabled: false, threadIds: [], steps: { [TRU_MAX]: { state: 'exhausted', resetsAt: null } },
-    threads: { thr_live: { [TRU_MAX]: { state: 'exhausted', resetsAt: new Date(NOW + 60_000).toISOString() }, [MAC_GW]: { state: 'unknown', resetsAt: null } } } };
+    threads: { thr_live: { [TRU_MAX]: { state: 'exhausted', resetsAt: new Date(NOW + 60_000).toISOString() }, [MAC_GW]: { state: 'unknown', resetsAt: null } } }, bridgeIncompatible: false };
   const real: HealthLookup = () => ok;
   assert.equal(usesTestQuota(c, 'thr_live'), true);
   assert.equal(usesTestQuota(c, 'thr_other'), false);

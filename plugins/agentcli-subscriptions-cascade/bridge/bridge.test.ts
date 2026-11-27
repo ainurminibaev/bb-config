@@ -467,3 +467,73 @@ test('маршрут: рабочую папку пишет другой живо
   assert.equal(refused.action === 'refuse' && refused.retryable, true);
   assert.match(refused.action === 'refuse' ? refused.message : '', /Ход не запущен: Каскад подписок → синхронизация Mac: .* не освободилась за 1 мин/u);
 });
+
+// ---- P0 №6: ход пишет только в рабочую папку треда; S13 тестовый переключатель ----
+
+test('окружение треда: hostId из include=environment (рядом или внутри треда), признак worktree', async () => {
+  const { threadInfoFrom } = await import('./server-register.ts');
+  const nested = threadInfoFrom({ id: 'thr_w', projectId: 'p', providerId: 'subscriptions-cascade', parentThreadId: null, environmentId: 'env_1',
+    environment: { hostId: TRU, path: null, workspaceProvisionType: 'managed-worktree' } });
+  assert.deepEqual(nested && { hostId: nested.hostId, isolated: nested.isolatedWorkspace, env: nested.environmentId }, { hostId: TRU, isolated: true, env: 'env_1' });
+  const side = threadInfoFrom({ thread: { id: 'thr_w', projectId: 'p', providerId: 'x' }, environment: { environmentProviderSelection: { machine: { hostId: MAC } }, workspaceProvisionType: 'project' } });
+  assert.equal(side?.hostId, MAC);
+  assert.equal(side?.isolatedWorkspace, false);
+  const none = threadInfoFrom({ id: 'thr_w', projectId: 'p', providerId: 'x' });
+  assert.equal(none?.hostId, null, 'без окружения hostId не выдумывается');
+});
+
+test('тред в worktree на опоре: единица синхронизации — его cwd; машина треда неизвестна — отказ, основная папка не трогается', async () => {
+  const seen: { workspace?: string | null }[] = [];
+  const make = (info: { hostId: string | null; isolatedWorkspace?: boolean | null }) => createRouteService({
+    loadConfig: async () => cfg(), accounts: () => ACCOUNTS, health: () => stepId => stepId === TRU_MAX ? exhausted(null) : ok,
+    refreshLimits: async () => {}, observeLimit: () => {},
+    threadInfo: async () => ({ projectId: 'proj_1', parentThreadId: null, providerId: 'subscriptions-cascade', ...info }),
+    load: async () => undefined, save: async () => {},
+    sync: { prepareTurn: async t => { seen.push(t); return { ok: true, cwd: '/opt/bbfs/proj-w1a2b3c4d', env: {}, timings: [], notices: [] }; }, finishTurn: async () => ({ ok: true, cwd: '/x', env: {}, timings: [], notices: [] }) },
+    now: () => Date.parse('2026-11-27T12:00:00Z'),
+  });
+  const worktree = '/data/worktrees/thr_1-1/proj';
+  const out = await make({ hostId: TRU, isolatedWorkspace: true }).routeTurn({ ...turn, cwd: worktree });
+  assert.equal(out.action === 'run' && out.cwd, '/opt/bbfs/proj-w1a2b3c4d');
+  assert.equal(seen[0]!.workspace, worktree, 'единица — cwd треда');
+  seen.length = 0;
+  const unknown = await make({ hostId: null }).routeTurn({ ...turn, cwd: worktree });
+  assert.equal(unknown.action, 'refuse');
+  assert.match(unknown.action === 'refuse' ? unknown.message : '', /рабочая папка треда не определена — машина треда не определена/u);
+  assert.equal(seen.length, 0, 'синхронизация не запускалась — основная папка проекта не тронута');
+  const remoteWorktree = await make({ hostId: MAC, isolatedWorkspace: true }).routeTurn({ ...turn, cwd: '/home/user/wt/proj' });
+  assert.equal(remoteWorktree.action, 'refuse', 'worktree не на опоре не подменяется папкой проекта');
+  assert.equal(seen.length, 0);
+});
+
+test('worktree на опоре → своя папка …-w<хеш> на ступени, основная папка проекта — отдельная единица', async () => {
+  const { syncUnitId, parseUnitId, buildContext } = await import('../sync/service.ts');
+  const unit = syncUnitId('proj_1', '/data/worktrees/thr_1-1/proj', '/srv/projects/proj');
+  const c = cfg();
+  const ctx = buildContext({ config: c, projectId: 'proj_1', projectName: 'proj', anchorSource: '/data/worktrees/thr_1-1/proj', ssh: new Map(), unitId: unit, unitSuffix: parseUnitId(unit).suffix });
+  assert.match(ctx.slug, /^proj-w[0-9a-f]{8}$/u);
+  assert.notEqual(ctx.projectId, 'proj_1');
+  const main = buildContext({ config: c, projectId: 'proj_1', projectName: 'proj', anchorSource: '/srv/projects/proj', ssh: new Map() });
+  assert.equal(main.slug, 'proj');
+  assert.notEqual(ctx.slug, main.slug);
+});
+
+test('S13: тестовый переключатель — мост «несовместим», ход отклонён с подсказкой, initialize цел', async () => {
+  const cache = fakeCache('claude-v1');
+  const out: Record<string, unknown>[] = [];
+  const bridge = createCascadeBridge({
+    providerId: 'subscriptions-cascade', ownArtifactUrl: pathToFileURL('/x/a/b/host.mjs').href,
+    loadDeps: { cacheRoot: cache.root, importModule: async () => ({ experimental_providerBridge: { experimental_apiVersion: 1, handleLine: (l: string) => {
+      const m = JSON.parse(l) as { id?: unknown; method?: string };
+      if (m.method === 'initialize') bridge.ingestInnerOutput(`${JSON.stringify({ jsonrpc: '2.0', id: m.id, result: { ok: true } })}\n`);
+    } } }) },
+    write: line => { out.push(JSON.parse(line) as Record<string, unknown>); },
+  });
+  bridge.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }));
+  bridge.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'turn/start', params: { threadId: 'thr_1', options: { providerOptions: { cascade: { provider: 'claude-code', digests: { 'claude-code': cache.digest }, testBridgeIncompatible: true } } } } }));
+  await bridge.close();
+  assert.ok(out.find(m => m.id === 1)!.result, 'initialize отвечает');
+  const err = out.find(m => m.id === 2)!.error as { message: string; data: { recovery: { kind: string } } };
+  assert.match(err.message, /каскад его не распознал и выключен/u);
+  assert.equal(err.data.recovery.kind, 'restartRecommended');
+});

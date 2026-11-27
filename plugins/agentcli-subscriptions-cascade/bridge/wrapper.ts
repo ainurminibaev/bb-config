@@ -226,22 +226,24 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
     return inner;
   }
 
-  function cascadeOptions(params: Json): { provider: NativeProviderId | null; digests: Record<string, string> } {
+  function cascadeOptions(params: Json): { provider: NativeProviderId | null; digests: Record<string, string>; forceIncompatible: boolean } {
     const cascade = rec(rec(rec(params.options).providerOptions).cascade);
     const provider = cascade.provider === 'codex' || cascade.provider === 'claude-code' ? cascade.provider : null;
     const digests = Object.fromEntries(Object.entries(rec(cascade.digests)).filter((e): e is [string, string] => typeof e[1] === 'string'));
-    return { provider, digests };
+    return { provider, digests, forceIncompatible: cascade.testBridgeIncompatible === true };
   }
 
   async function routeThreadCommand(message: Json, line: string): Promise<void> {
     const params = rec(message.params);
     const threadId = typeof params.threadId === 'string' ? params.threadId : null;
-    const { provider: requested, digests } = cascadeOptions(params);
+    const { provider: requested, digests, forceIncompatible } = cascadeOptions(params);
     const known = threadId ? threadInner.get(threadId) : undefined;
     const provider: NativeProviderId = requested ?? known?.loaded.spec.providerId ?? 'claude-code';
     const digest = digests[provider] ?? null;
     let inner: Inner;
     try {
+      // Приёмка S13: тестовый переключатель делает мост «несовместимым» — тот же путь, что у смены формы моста.
+      if (forceIncompatible) throw new NativeLoadError('shape', provider, 'тестовый переключатель S13: мост помечен несовместимым');
       if (known && known.loaded.spec.providerId === provider && (digest === null || known.loaded.digest === digest)) inner = known;
       else inner = await ensureInner(provider, digest);
     } catch (error) {

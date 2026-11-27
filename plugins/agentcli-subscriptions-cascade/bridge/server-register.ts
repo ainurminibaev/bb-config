@@ -60,6 +60,26 @@ function toAdoptThread(raw: unknown): AdoptThread | null {
   };
 }
 
+/** Ответ threads.get → сведения для маршрута (читается терпимо: окружение рядом с тредом или внутри). */
+export function threadInfoFrom(response: unknown): ThreadInfo | null {
+  const raw = rec(response);
+  const thread = rec(raw.thread ?? raw);
+  if (typeof thread.id !== 'string') return null;
+  const environment = rec(raw.environment ?? thread.environment);
+  const selection = rec(rec(environment.environmentProviderSelection).machine);
+  const hostId = [environment.hostId, selection.hostId, rec(thread.host).id].find((v): v is string => typeof v === 'string' && v !== '') ?? null;
+  const provision = typeof environment.workspaceProvisionType === 'string' ? environment.workspaceProvisionType : null;
+  return {
+    projectId: String(thread.projectId ?? ''),
+    hostId,
+    parentThreadId: typeof thread.parentThreadId === 'string' ? thread.parentThreadId : null,
+    providerId: String(thread.providerId ?? ''),
+    environmentId: typeof thread.environmentId === 'string' ? thread.environmentId : null,
+    // Своя рабочая папка треда (worktree, копия): ход не должен писать в общий checkout.
+    isolatedWorkspace: provision === null ? null : /worktree|copy|clone|isolated/iu.test(provision),
+  };
+}
+
 export interface ExecutorRegistration {
   routes: RouteService;
   /** providerOptions для штатного моста и для нашей обёртки (синхронно, из кэша). */
@@ -67,6 +87,8 @@ export interface ExecutorRegistration {
   /** Состояние штатных мостов для экрана настроек. */
   nativeBridges(): readonly NativeBridgeStatus[];
   refreshNativeBridges(): Promise<readonly NativeBridgeStatus[]>;
+  /** Перечитать тестовые переключатели после изменения настроек. */
+  refreshTestFlags(): Promise<void>;
   /** Схема профиля треда для метки ступени. */
   scheme(threadId: string): ReturnType<RouteService['threadScheme']>;
   /** Предупреждения для настроек: мост не найден, версия не читается. */
@@ -75,6 +97,10 @@ export interface ExecutorRegistration {
 
 export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorRegistration {
   const threadProvider = new Map<string, string>();
+  /** Тестовый переключатель S13 (testQuota.bridgeIncompatible), кэш для синхронного deriveProviderOptions. */
+  let bridgeIncompatible = false;
+  const refreshTestFlags = () => deps.loadConfig().then(c => { bridgeIncompatible = c.testQuota.bridgeIncompatible === true; }).catch(() => undefined);
+  void refreshTestFlags();
   let bridges: readonly NativeBridgeStatus[] = [];
   let bridgesAt = 0;
 
@@ -100,18 +126,9 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
   timer.unref?.();
   bb.onDispose(() => { disposed = true; clearInterval(timer); });
 
-  const threadInfo = async (threadId: string): Promise<ThreadInfo | null> => {
-    const raw = rec(await bb.sdk.threads.get({ threadId }));
-    const thread = rec(raw.thread ?? raw);
-    const environment = rec(raw.environment);
-    if (typeof thread.id !== 'string') return null;
-    return {
-      projectId: String(thread.projectId ?? ''),
-      hostId: typeof environment.hostId === 'string' ? environment.hostId : null,
-      parentThreadId: typeof thread.parentThreadId === 'string' ? thread.parentThreadId : null,
-      providerId: String(thread.providerId ?? ''),
-    };
-  };
+  // Окружение треда приходит только с include: без него hostId пуст, и ход в
+  // worktree на опоре ушёл бы в основную папку проекта (живой S1 на 0.1.7).
+  const threadInfo = async (threadId: string): Promise<ThreadInfo | null> => threadInfoFrom(await bb.sdk.threads.get({ threadId, include: 'environment' } as never));
 
   const routes = createRouteService({
     loadConfig: deps.loadConfig,
@@ -200,6 +217,7 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     commands: [
       { name: 'status', summary: 'Ступень, машина и копия файлов треда', usage: 'bb subscriptions-cascade status --thread <id> [--json]' },
       { name: 'test-quota', summary: 'Тестовая квота ступеней для одного треда (сценарии S1–S13)', usage: "bb subscriptions-cascade test-quota --thread <id> [--set '<ступень>=exhausted|ok|unknown|unavailable[,<сброс ISO|+30m>];…'] [--clear] [--json]" },
+      { name: 'test-bridge', summary: 'Приёмка S13: считать штатный мост несовместимым (без правки BB)', usage: 'bb subscriptions-cascade test-bridge --incompatible|--compatible' },
       { name: 'adopt', summary: 'Перевести треды в каскад (Handoff) и снять автоповтор у исходных', usage: 'bb subscriptions-cascade adopt --stuck|--thread <id>|--project <id> [--dry-run] [--model <профиль>] [--json]' },
     ],
     async run(argv, ctx) {
@@ -223,6 +241,15 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
         if (rest.includes('--json')) return { exitCode: 0, stdout: `${JSON.stringify({ threadId, steps: result.config.testQuota.threads[threadId] ?? null })}\n` };
         return { exitCode: 0, stdout: formatThreadTestQuota(result.config, threadId) };
       }
+      if (command === 'test-bridge') {
+        const on = rest.includes('--incompatible');
+        if (!on && !rest.includes('--compatible')) return { exitCode: 0, stdout: `Тестовый переключатель S13: мост ${bridgeIncompatible ? 'несовместим' : 'совместим'}.\n` };
+        if (!deps.saveConfig) return { exitCode: 2, stderr: 'запись конфигурации недоступна\n' };
+        const config = await deps.loadConfig();
+        await deps.saveConfig({ ...config, testQuota: { ...config.testQuota, bridgeIncompatible: on } });
+        bridgeIncompatible = on;
+        return { exitCode: 0, stdout: on ? 'Мост помечен несовместимым: ходы каскада отклоняются с подсказкой, штатные провайдеры работают. Снять: --compatible.\n' : 'Тестовый переключатель снят.\n' };
+      }
       if (command === 'adopt') {
         const parsed = parseAdoptArgs(rest);
         if ('error' in parsed) return { exitCode: 2, stderr: `${parsed.error}\n` };
@@ -231,18 +258,19 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
         if (rest.includes('--json')) return { exitCode: items.some(i => i.error) ? 1 : 0, stdout: `${JSON.stringify({ dryRun: options.dryRun, items })}\n` };
         return { exitCode: items.some(i => i.error) ? 1 : 0, stdout: formatAdopt(items, options.dryRun) };
       }
-      return { exitCode: 2, stderr: 'команды: status, test-quota, adopt\n' };
+      return { exitCode: 2, stderr: 'команды: status, test-quota, test-bridge, adopt\n' };
     },
   });
 
   return {
     routes,
+    refreshTestFlags,
     deriveProviderOptions(ctx) {
       if (!disposed && Date.now() - bridgesAt > 10 * 60_000) void refreshNativeBridges().catch(() => {});
       return {
         ...claudeBridgeKnobs(ctx.promptMode),
         requestedModel: ctx.model,
-        cascade: { provider: threadProvider.get(ctx.threadId) ?? 'claude-code', digests: digestMap(bridges) },
+        cascade: { provider: threadProvider.get(ctx.threadId) ?? 'claude-code', digests: digestMap(bridges), ...(bridgeIncompatible ? { testBridgeIncompatible: true } : {}) },
       };
     },
     nativeBridges: () => bridges,

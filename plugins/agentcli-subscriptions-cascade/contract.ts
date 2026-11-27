@@ -200,6 +200,11 @@ export const testQuotaSchema = z.object({
    * stepId → лимит. Действует независимо от `enabled`; ступень без записи — «лимит есть».
    */
   threads: z.record(z.string(), z.record(z.string(), testQuotaEntrySchema)).default({}),
+  /**
+   * Приёмка S13: мост считается несовместимым (как после обновления BB с другой
+   * формой моста), без правки BB. Ходы каскада отклоняются с подсказкой.
+   */
+  bridgeIncompatible: z.boolean().default(false),
 });
 export type TestQuota = z.infer<typeof testQuotaSchema>;
 

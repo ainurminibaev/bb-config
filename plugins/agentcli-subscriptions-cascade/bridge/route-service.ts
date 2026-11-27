@@ -30,6 +30,9 @@ export interface ThreadInfo {
   hostId: string | null;
   parentThreadId: string | null;
   providerId: string;
+  environmentId?: string | null;
+  /** У треда своя рабочая папка (worktree): true; общий checkout проекта: false; неизвестно: null. */
+  isolatedWorkspace?: boolean | null;
 }
 
 /** Состояние треда в хранилище плагина: состояние движка + последний ход. */
@@ -258,9 +261,20 @@ export function createRouteService(deps: RouteDeps): RouteService {
       // Опора на чужой машине (мост не на опоре) тоже готовится через sync: так ход
       // получает папку проекта на опоре, а не путь машины моста.
       const needsSync = deps.sync !== null && projectId !== '' && (decision.hostId !== anchor || stored.pendingFlushHostId !== null || !local);
-      // Рабочая папка треда: мост на опоре — его cwd и есть папка на опоре (worktree треда).
-      const workspace = bridgeHost !== null && bridgeHost === anchor ? input.cwd : stored.workspace ?? null;
+      // Единица синхронизации — рабочая папка треда (cwd моста), а не папка проекта:
+      // ход треда никогда не пишет в чужой checkout. Мост на опоре — его cwd и есть
+      // папка на опоре. Определить её нельзя — отказ, а не основная папка проекта.
+      const workspace = bridgeHost !== null && bridgeHost === anchor ? input.cwd : null;
       if (needsSync) {
+        const unknownWorkspace = bridgeHost === null
+          ? 'машина треда не определена (нет окружения треда)'
+          : bridgeHost !== anchor && info?.isolatedWorkspace !== false
+            ? `рабочая папка треда на ${machineLabel(config, bridgeHost)}, а синхронизация идёт от опоры ${anchor ? machineLabel(config, anchor) : '—'}: отдельный worktree не на опоре пока не синхронизируется`
+            : null;
+        if (unknownWorkspace) {
+          const message = refusalText('синхронизация', `рабочая папка треда не определена — ${unknownWorkspace}. Чужую папку ход не трогает.`);
+          return { action: 'refuse', retryable: false, message, notes: [...notes, { kind: 'problem', message: message.slice(0, 300), stage: to, stepId: decision.stepId, note: REFUSAL_ACTIONS }] };
+        }
         // Строка подготовки в ленте: запускатель опрашивает turnProgress, пока ждёт решения.
         prep.begin(input.threadId, { reason: switchReason, from: fromStage, to, stepId: decision.stepId });
         const prepareOnce = () => deps.sync!.prepareTurn({ threadId: input.threadId, projectId, workspace }, { hostId: decision.hostId }, event => prep.event(input.threadId, event)).catch(error => ({

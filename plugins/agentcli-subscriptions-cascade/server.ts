@@ -293,7 +293,7 @@ export default function plugin(bb: BbPluginApi) {
     .then(() => discover(false))
     .then(() => loadConfig()).then(({ config }) => syncProvider(config))
     .catch(error => bb.log.warn(`обнаружение при запуске: ${String(error)}`));
-  settings.onChange(() => { void loadConfig().then(({ config }) => syncProvider(config)).catch(() => undefined); });
+  settings.onChange(() => { void loadConfig().then(({ config }) => syncProvider(config)).catch(() => undefined); void executor.refreshTestFlags(); });
 }
 
 function label(config: CascadeConfig, hostId: string): string {
