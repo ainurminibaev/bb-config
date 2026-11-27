@@ -17,7 +17,7 @@
 import { posix } from 'node:path';
 import type { z } from 'zod';
 import type { SyncHostContract } from './contract.ts';
-import { createArgs, evaluateHealth, listArgs, onlyGitIndexConflict, parseSessionList, projectSelector, sessionArgs, sessionName, specFingerprint, type SessionRole, type SessionSpec, type SessionState, type SyncModeExt } from './mutagen.ts';
+import { createArgs, evaluateHealth, listArgs, onlyGitIndexConflict, parseSessionList, projectSelector, sessionArgs, sessionName, specFingerprint, type SymlinkMode, type SessionRole, type SessionSpec, type SessionState, type SyncModeExt } from './mutagen.ts';
 
 type Method = keyof SyncHostContract & string;
 export type SyncInput<M extends Method> = z.input<SyncHostContract[M]['input']>;
@@ -48,6 +48,8 @@ export interface SyncProjectContext {
   executors: SyncMachine[];
   mode: SyncModeExt;
   ignores: string[];
+  /** Режим symlink сессий (symlinkModeFor); не задан — posix-raw. */
+  symlinkMode?: SymlinkMode;
   /** SSH-цель опоры с машины-исполнителя (`tru`, `root@host`); null — не настроено. */
   anchorSsh(hostId: string): string | null;
 }
@@ -252,6 +254,7 @@ export class SyncOrchestrator {
       await this.mutagenOk(host, sessionArgs('flush', r), created.fresh ? 600_000 : 180_000);
       const health = await this.health(host, ctx.projectId, r);
       await this.mutagenOk(host, sessionArgs('pause', r), 60_000);
+      pushWarnings(notices, `Выравнивание ${machine.label}`, health.warnings);
       if (!health.ok) throw new Refused('error', `Выравнивание ${machine.label} по ${ctx.anchor.label} не прошло: ${health.reasons.join('; ')}`, health.conflicts);
     }, undefined, { from: anchor, to: host });
 
@@ -262,6 +265,7 @@ export class SyncOrchestrator {
       await this.mutagenOk(host, sessionArgs('pause', w), 60_000).catch(() => undefined);
       throw new Refused(health.conflicts.length ? 'conflict' : 'error', `${machine.label}: синхронизация не готова — ${health.reasons.join('; ')}`, health.conflicts);
     }
+    pushWarnings(notices, `${ctx.anchor.label} → ${machine.label}`, health.warnings);
 
     state.writer = { hostId: host, threadId: thread.threadId, since: now, env600 };
     await this.deps.store.set(thread.projectId, state);
@@ -327,6 +331,7 @@ export class SyncOrchestrator {
         if (health.ok) notices.push(`Конфликт .git/index решён в пользу ${machine.label}`);
       }
     }
+    pushWarnings(notices, `${machine.label} → ${ctx.anchor.label}`, health.warnings);
     if (!health.ok) {
       throw new Refused(health.conflicts.length ? 'conflict' : 'error', `${machine.label} → ${ctx.anchor.label}: ход не передаётся — ${health.reasons.join('; ')}`, health.conflicts);
     }
@@ -351,7 +356,7 @@ export class SyncOrchestrator {
     const sessions = await this.sessions(host, ctx.projectId);
     const missing: SessionSpec[] = [];
     for (const role of ['r', 'w'] as SessionRole[]) {
-      const spec: SessionSpec = { projectId: ctx.projectId, hostId: host, role, alpha, beta: root, ignores: ctx.ignores };
+      const spec: SessionSpec = { projectId: ctx.projectId, hostId: host, role, alpha, beta: root, ignores: ctx.ignores, symlinkMode: ctx.symlinkMode ?? 'posix-raw' };
       const existing = sessions.get(sessionName(ctx.projectId, host, role));
       if (existing && existing.labels['bbc-cfg'] === specFingerprint(spec)) continue;
       if (existing) await this.mutagenOk(host, sessionArgs('terminate', existing.name), 60_000);
@@ -367,6 +372,7 @@ export class SyncOrchestrator {
         if (prepared.movedTo) notices.push(`${machine.label}: прежнее содержимое ${root} перенесено в ${prepared.movedTo}`);
       }
       for (const spec of missing) await this.mutagenOk(host, createArgs(spec), 120_000);
+      if (ctx.symlinkMode === 'portable') notices.push('В каскаде есть нативный Windows: символические ссылки переносятся в режиме portable, абсолютные ссылки не синхронизируются');
     }, () => `${missing.map(s => s.role.toUpperCase()).join(' и ')}${beta ? ', первая синхронизация' : ''}`);
     return { beta, fresh: missing.length === 2 };
   }
@@ -458,3 +464,11 @@ export class SyncOrchestrator {
 }
 
 const round = (n: number) => Math.round(n * 100) / 100;
+
+/** Предупреждения сканирования → строки уведомлений (без дублей, не длиннее строки ленты). */
+function pushWarnings(notices: string[], where: string, warnings: readonly string[]): void {
+  for (const w of warnings) {
+    const line = `${where}: ${w}`.slice(0, 280);
+    if (!notices.includes(line)) notices.push(line);
+  }
+}

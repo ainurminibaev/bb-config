@@ -96,6 +96,15 @@ function syncNotes(config: CascadeConfig, outcome: SyncOutcome): RouteNote[] {
     if (t.step !== 'flush' && t.step !== 'align') continue;
     notes.push({ kind: 'sync', from: machineLabel(config, t.from ?? t.hostId), to: machineLabel(config, t.to ?? t.hostId), ms: Math.round(t.seconds * 1000), ok: t.ok, ...(t.detail ? { detail: t.detail.slice(0, 300) } : {}) });
   }
+  // Уведомления синхронизации (пропущенные при сканировании пути, карантин,
+  // режим symlink) — предупреждением в строке синхронизации, ход не блокируют.
+  const notices = outcome.notices.filter(Boolean);
+  const last = [...notes].reverse().find(n => n.kind === 'sync');
+  if (notices.length && last && last.kind === 'sync') {
+    last.detail = [last.detail, ...notices].filter(Boolean).join(' · ').slice(0, 300);
+  } else if (notices.length) {
+    notes.push({ kind: 'problem', message: `Синхронизация: ${notices.join(' · ')}`.slice(0, 300) });
+  }
   return notes;
 }
 

@@ -11,6 +11,7 @@ interface FakeSession {
   conflicts: string[];
   connected: boolean;
   lastError: string | null;
+  symlinkMode: string;
 }
 
 export class FakeMutagen {
@@ -29,6 +30,8 @@ export class FakeMutagen {
   failCommand: string | null = null;
   /** Сколько следующих `sync list` покажут W в статусе scanning (сразу после flush). */
   scanningLists = 0;
+  /** Абсолютные символические ссылки на опоре: в режиме portable Mutagen их отвергает. */
+  absoluteLinks: string[] = [];
 
   private host(hostId: string) {
     let map = this.sessions.get(hostId);
@@ -73,7 +76,7 @@ export class FakeMutagen {
       const name = args[args.indexOf('--name') + 1]!;
       const labels: Record<string, string> = {};
       args.forEach((a, n) => { if (a === '--label') { const [k, v] = args[n + 1]!.split('='); labels[k!] = v!; } });
-      sessions.set(name, { name, labels, mode: args[args.indexOf('--mode') + 1]!, paused: args.includes('--paused'), conflicts: [], connected: true, lastError: null });
+      sessions.set(name, { name, labels, mode: args[args.indexOf('--mode') + 1]!, paused: args.includes('--paused'), conflicts: [], connected: true, lastError: null, symlinkMode: (args.find(a => a.startsWith('--symlink-mode=')) ?? '--symlink-mode=portable').split('=')[1]! });
       return ok();
     }
     if (verb === 'list') {
@@ -82,7 +85,7 @@ export class FakeMutagen {
       const list = [...sessions.values()].filter(s => Object.entries(wanted).every(([k, v]) => s.labels[k] === v)).map(s => ({
         identifier: `sync_${s.name}`, name: s.name, labels: s.labels, mode: s.mode, paused: s.paused,
         status: s.paused ? 'disconnected' : s.labels['bbc-role'] === 'w' && this.scanningLists > 0 ? 'scanning' : 'watching',
-        alpha: { connected: !s.paused && s.connected }, beta: { connected: !s.paused && s.connected },
+        alpha: { connected: !s.paused && s.connected, ...(s.symlinkMode === 'portable' && this.absoluteLinks.length ? { scanProblems: this.absoluteLinks.map(path => ({ path, error: 'invalid symbolic link: target is absolute' })) } : {}) }, beta: { connected: !s.paused && s.connected },
         ...(s.conflicts.length ? { conflicts: s.conflicts.map(root => ({ root, alphaChanges: [], betaChanges: [] })) } : {}),
         ...(s.lastError ? { lastError: s.lastError } : {}),
       }));

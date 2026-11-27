@@ -47,11 +47,26 @@ export interface SessionSpec {
   /** Путь на исполнителе. */
   beta: string;
   ignores: readonly string[];
+  /** Режим symlink; по умолчанию posix-raw (все машины POSIX). */
+  symlinkMode?: SymlinkMode;
+}
+
+/**
+ * posix-raw — ссылки переносятся как есть, включая абсолютные (Linux, macOS, WSL).
+ * portable — режим Mutagen по умолчанию: абсолютные ссылки отвергаются как
+ * ошибки сканирования; нужен, если в каскаде есть нативный Windows.
+ */
+export type SymlinkMode = 'posix-raw' | 'portable';
+
+/** Режим symlink для каскада: portable, только если среди машин есть нативный Windows. */
+export function symlinkModeFor(machines: readonly { platform: string; pathTranslation?: boolean }[]): SymlinkMode {
+  return machines.some(m => m.platform === 'windows' || m.pathTranslation === true) ? 'portable' : 'posix-raw';
 }
 
 /** Отпечаток настроек сессии: если он сменился, сессию пересоздаём. */
-export function specFingerprint(spec: Pick<SessionSpec, 'alpha' | 'beta' | 'ignores' | 'role'>): string {
-  return hash(JSON.stringify([spec.role, spec.alpha, spec.beta, [...spec.ignores].sort()]), 10);
+export function specFingerprint(spec: Pick<SessionSpec, 'alpha' | 'beta' | 'ignores' | 'role' | 'symlinkMode'>): string {
+  // Смена режима symlink меняет отпечаток: сессии прежних версий (portable) пересоздаются.
+  return hash(JSON.stringify([spec.role, spec.alpha, spec.beta, [...spec.ignores].sort(), spec.symlinkMode ?? 'posix-raw']), 10);
 }
 
 /** Аргументы `mutagen sync create` (без имени бинаря). Сессия создаётся на паузе. */
@@ -70,7 +85,7 @@ export function createArgs(spec: SessionSpec): string[] {
     '--no-global-configuration',
     `--default-file-mode=${DEFAULT_FILE_MODE}`,
     `--default-directory-mode=${DEFAULT_DIRECTORY_MODE}`,
-    '--symlink-mode=portable',
+    `--symlink-mode=${spec.symlinkMode ?? 'posix-raw'}`,
     '--paused',
   ];
   for (const ignore of spec.ignores) args.push('--ignore', ignore);
@@ -156,6 +171,11 @@ export interface Health {
   conflicts: string[];
   /** Причины отказа для строки в треде. Пусто, если ok. */
   reasons: string[];
+  /**
+   * Ошибки сканирования отдельных путей: такие пути Mutagen не переносит, но
+   * остальное синхронизировано. Ход не блокируют — показываются предупреждением.
+   */
+  warnings: string[];
 }
 
 /**
@@ -163,7 +183,7 @@ export interface Health {
  * flush ни разу не вернул ошибку, в том числе при конфликтах и проблемах).
  */
 export function evaluateHealth(session: SessionState | undefined): Health {
-  if (!session) return { ok: false, transient: false, conflicts: [], reasons: ['сессия не найдена'] };
+  if (!session) return { ok: false, transient: false, conflicts: [], reasons: ['сессия не найдена'], warnings: [] };
   const reasons: string[] = [];
   if (session.paused) reasons.push('сессия на паузе');
   const statusReason = session.status !== 'watching';
@@ -171,13 +191,16 @@ export function evaluateHealth(session: SessionState | undefined): Health {
   if (!session.alpha.connected) reasons.push('опора не на связи');
   if (!session.beta.connected) reasons.push('исполнитель не на связи');
   if (session.conflicts.length) reasons.push(`конфликты: ${session.conflicts.slice(0, 5).join(', ')}${session.conflicts.length > 5 ? ` и ещё ${session.conflicts.length - 5}` : ''}`);
+  const warnings: string[] = [];
   for (const [side, e] of [['опора', session.alpha], ['исполнитель', session.beta]] as const) {
-    if (e.scanProblems.length) reasons.push(`${side}: ошибки сканирования (${e.scanProblems.slice(0, 3).join('; ')})`);
+    // Сканирование пути не удалось (ссылка, права, имя): путь пропущен, ход идёт.
+    if (e.scanProblems.length) warnings.push(`${side}: не синхронизировано путей — ${e.scanProblems.length} (${e.scanProblems.slice(0, 3).join('; ')}${e.scanProblems.length > 3 ? '; …' : ''})`);
+    // Ошибка записи — настоящая ошибка передачи: ход не передаётся.
     if (e.transitionProblems.length) reasons.push(`${side}: ошибки записи (${e.transitionProblems.slice(0, 3).join('; ')})`);
   }
   if (session.lastError) reasons.push(`ошибка: ${session.lastError}`);
   const transient = statusReason && reasons.length === 1 && TRANSIENT_STATUSES.has(session.status);
-  return { ok: reasons.length === 0, transient, conflicts: session.conflicts, reasons };
+  return { ok: reasons.length === 0, transient, conflicts: session.conflicts, reasons, warnings };
 }
 
 /** Статусы цикла синхронизации, которые проходят сами (после flush идёт пересканирование). */

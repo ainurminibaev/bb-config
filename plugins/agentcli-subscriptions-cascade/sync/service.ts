@@ -11,7 +11,7 @@ import { z } from 'zod';
 import { syncIgnores } from '../config.ts';
 import type { CascadeConfig, Machine } from '../contract.ts';
 import { syncHostContract } from './contract.ts';
-import type { SyncModeExt } from './mutagen.ts';
+import { symlinkModeFor, type SyncModeExt } from './mutagen.ts';
 import { projectSlug, SyncOrchestrator, type ProjectSyncState, type SyncHostCall, type SyncMachine, type SyncProjectContext, type SyncResult, type SyncStepRef, type SyncThreadRef } from './orchestrator.ts';
 
 export interface SyncService {
@@ -70,6 +70,7 @@ export function buildContext(args: { config: CascadeConfig; projectId: string; p
     executors: config.machines.filter(m => m.enabled && !m.anchor).map(toSyncMachine),
     mode: syncModeOf(config, projectId),
     ignores: syncIgnores(config),
+    symlinkMode: symlinkModeFor([anchor, ...config.machines.filter(m => m.enabled && !m.anchor)]),
     anchorSsh: hostId => args.ssh.get(hostId) ?? null,
   };
 }

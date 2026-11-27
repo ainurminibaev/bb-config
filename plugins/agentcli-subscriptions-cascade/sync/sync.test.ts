@@ -270,7 +270,8 @@ test('разбор sync list: конфликты, проблемы сканир�
   const health = evaluateHealth(s);
   assert.equal(health.ok, false);
   assert.match(health.reasons.join('\n'), /конфликты: same.txt/);
-  assert.match(health.reasons.join('\n'), /опора: ошибки сканирования \(abs: invalid symbolic link/);
+  assert.match(health.warnings.join('\n'), /опора: не синхронизировано путей — 1 \(abs: invalid symbolic link/);
+  assert.doesNotMatch(health.reasons.join('\n'), /сканирования/u, 'ошибка сканирования хода не блокирует');
   assert.match(health.reasons.join('\n'), /исполнитель: ошибки записи \(Readme.md: file exists/);
   assert.deepEqual(parseSessionList(''), []);
   assert.throws(() => parseSessionList('Error: daemon'), /не JSON/);
@@ -284,7 +285,7 @@ test('разбор sync list: конфликты, проблемы сканир�
 test('аргументы create: .git синхронизируется, права 0644/0755, portable, на паузе, исключения', () => {
   const args = createArgs({ projectId: 'proj_1', hostId: MAC, role: 'w', alpha: 'tru:/opt/bbfs/app', beta: '/opt/bbfs/app', ignores: ['node_modules', '.env.*'] });
   assert.ok(args.includes('--no-ignore-vcs') && !args.includes('--ignore-vcs'));
-  for (const flag of ['--default-file-mode=0644', '--default-directory-mode=0755', '--symlink-mode=portable', '--paused', '--no-global-configuration']) assert.ok(args.includes(flag), flag);
+  for (const flag of ['--default-file-mode=0644', '--default-directory-mode=0755', '--symlink-mode=posix-raw', '--paused', '--no-global-configuration']) assert.ok(args.includes(flag), flag);
   assert.equal(args[args.indexOf('--mode') + 1], 'two-way-safe');
   assert.deepEqual(args.slice(-2), ['tru:/opt/bbfs/app', '/opt/bbfs/app']);
   assert.ok(args.join(' ').includes('--ignore node_modules --ignore .env.*'));
@@ -487,4 +488,42 @@ test('SSH к опоре: из настроек машины; недопусти�
   assert.equal(machineAnchorSsh({ anchorSsh: null }), null);
   const parsed = configSchema.parse({ machines: [{ hostId: 'h', label: 'Mac' }] });
   assert.equal(parsed.machines[0]!.anchorSsh, null, 'старые настройки без поля читаются');
+});
+
+test('абсолютный symlink: POSIX-каскад — posix-raw, ход идёт; Windows — portable, путь пропущен с предупреждением', async () => {
+  const { symlinkModeFor, evaluateHealth } = await import('./mutagen.ts');
+  assert.equal(symlinkModeFor([{ platform: 'linux' }, { platform: 'macos' }, { platform: 'wsl' }]), 'posix-raw');
+  assert.equal(symlinkModeFor([{ platform: 'linux' }, { platform: 'windows' }]), 'portable');
+  assert.equal(symlinkModeFor([{ platform: 'linux' }, { platform: 'linux', pathTranslation: true }]), 'portable');
+
+  // POSIX: сессии создаются с posix-raw, абсолютная ссылка не мешает.
+  const posix = setup();
+  posix.fake.absoluteLinks = ['.local/config'];
+  const ok = await posix.sync.prepareTurn(T, { hostId: MAC });
+  assert.equal(ok.ok, true, ok.ok ? '' : ok.message);
+  assert.equal(posix.fake.session(MAC, 'w')!.symlinkMode, 'posix-raw');
+  assert.equal(posix.fake.session(MAC, 'r')!.symlinkMode, 'posix-raw');
+
+  // Есть нативный Windows: portable; абсолютная ссылка — ошибка сканирования, но ход не блокируется.
+  const win = setup({ symlinkMode: 'portable' });
+  win.fake.absoluteLinks = ['.local/config'];
+  const warned = await win.sync.prepareTurn(T, { hostId: MAC });
+  assert.equal(warned.ok, true, warned.ok ? '' : warned.message);
+  assert.ok(warned.notices.some(n => /не синхронизировано путей — 1 \(\.local\/config: invalid symbolic link: target is absolute\)/u.test(n)), warned.notices.join('\n'));
+  assert.ok(warned.notices.some(n => /portable/u.test(n)));
+
+  // Ошибка записи по-прежнему блокирует передачу.
+  const base = { name: 'w', identifier: 'x', labels: {}, status: 'watching', paused: false, conflicts: [], lastError: null };
+  const scan = evaluateHealth({ ...base, alpha: { connected: true, scanProblems: ['a: bad'], transitionProblems: [] }, beta: { connected: true, scanProblems: [], transitionProblems: [] } });
+  assert.equal(scan.ok, true);
+  assert.equal(scan.warnings.length, 1);
+  const write = evaluateHealth({ ...base, alpha: { connected: true, scanProblems: [], transitionProblems: ['b: permission denied'] }, beta: { connected: true, scanProblems: [], transitionProblems: [] } });
+  assert.equal(write.ok, false);
+});
+
+test('смена режима symlink пересоздаёт сессии прежних версий', async () => {
+  const { specFingerprint } = await import('./mutagen.ts');
+  const spec = { role: 'w' as const, alpha: 'tru:/opt/bbfs/app', beta: '/opt/bbfs/app', ignores: ['node_modules'] };
+  assert.notEqual(specFingerprint({ ...spec, symlinkMode: 'portable' }), specFingerprint({ ...spec, symlinkMode: 'posix-raw' }));
+  assert.equal(specFingerprint(spec), specFingerprint({ ...spec, symlinkMode: 'posix-raw' }));
 });
