@@ -31,4 +31,4 @@ Git hooks, BB buttons, manual Git, and CI are outside this instruction.
 
 ## Каскад подписок
 
-Правило действует и в тредах «Каскада подписок» (`agentcli-subscriptions-cascade`): они идут нативным Claude Code или Codex.
+Правило действует и в тредах «Каскада подписок» (провайдер `subscriptions-cascade`): они идут нативным Claude Code или Codex.

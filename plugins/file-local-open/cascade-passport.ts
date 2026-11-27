@@ -13,7 +13,7 @@
 
 export const CASCADE_PLUGIN_ID = 'agentcli-subscriptions-cascade';
 /** providerId треда, которым управляет каскад. */
-export const CASCADE_PROVIDER_ID = 'agentcli-subscriptions-cascade';
+export const CASCADE_PROVIDER_ID = 'subscriptions-cascade';
 export const CASCADE_STATUS_METHOD = 'threadStatus';
 
 export type CascadeStepProvider = 'claude-code' | 'codex';

@@ -1,9 +1,9 @@
 import type { CascadeStep } from './cascade-passport.ts';
 import type { Account, Snapshot } from './contract.ts';
 
-/** Ступень через шлюз vclaude: её остаток — пакет VClaude, а не квота подписки машины. */
+/** Ступень шлюза VClaude (каскад 0.2.0: `kind: 'gateway'`, `accountKey: 'vclaude'`): её остаток — пакет VClaude, а не квота подписки машины. */
 export const isVClaudeStep = (step: CascadeStep): boolean =>
-  step.kind === 'gateway' && step.providerId === 'claude-code' && /vclaude/i.test(step.accountKey ?? '');
+  step.kind === 'gateway' && step.accountKey === 'vclaude';
 
 /**
  * Снимок кольца для треда каскада — по текущей ступени: её провайдер, машина и

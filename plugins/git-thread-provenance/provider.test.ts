@@ -9,5 +9,5 @@ test("без каскада всё как раньше: Codex и Claude Code п�
 });
 
 test("тред каскада получает то же правило", () => {
-  assert.equal(appliesTo("agentcli-subscriptions-cascade"), true);
+  assert.equal(appliesTo("subscriptions-cascade"), true);
 });

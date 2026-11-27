@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cascadeFolder, parsePassport, passportCache, readPassport, CASCADE_PROVIDER_ID } from './cascade-passport.ts';
+import { cascadeFolder, parsePassport, passportCache, readPassport, CASCADE_PROVIDER_ID, CASCADE_PLUGIN_ID, CASCADE_STATUS_METHOD } from './cascade-passport.ts';
 
 const full = {
   cascade: true, profileId: 'auto', anchorHostId: 'tru', syncMode: 'lazy', path: '/opt/bbfs/p', freshCopyHostId: 'mac',
@@ -50,4 +50,10 @@ test('кэш: один вызов на тред в пределах срока',
   await read({ id: 't', providerId: CASCADE_PROVIDER_ID });
   await read({ id: 't', providerId: CASCADE_PROVIDER_ID });
   assert.equal(calls, 1);
+});
+
+test('ID провайдера треда каскада — subscriptions-cascade, ID плагина для RPC — agentcli-subscriptions-cascade', () => {
+  assert.equal(CASCADE_PROVIDER_ID, 'subscriptions-cascade');
+  assert.equal(CASCADE_PLUGIN_ID, 'agentcli-subscriptions-cascade');
+  assert.equal(CASCADE_STATUS_METHOD, 'threadStatus');
 });

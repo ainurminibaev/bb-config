@@ -3700,7 +3700,7 @@ proxy-manager 0.3.6: свой значок «Прокси».
 
 limit-guard 0.10.0, thread-account-usage 0.3.0, codex-delegation-watch 0.3.0,
 file-local-open 0.4.0, project-open 0.4.0 и git-thread-provenance 0.2.0
-узнают тред каскада по `providerId` `agentcli-subscriptions-cascade` и мягко
+узнают тред каскада по `providerId` `subscriptions-cascade` и мягко
 читают его паспорт: RPC `agentcli-subscriptions-cascade.threadStatus`
 (поля `step.hostId/providerId/model/accountKey/kind`, `anchorHostId`, `path`,
 `freshCopyHostId`). Опора — этот контракт, а не код каскада. Каскад не

@@ -32,6 +32,9 @@ test('ступень через шлюз: пакет VClaude, иначе — п�
   assert.equal(isVClaudeStep(gw), true);
   assert.equal(isVClaudeStep({ ...gw, accountKey: 'other' }), false);
   assert.equal(isVClaudeStep(sub), false);
+  assert.equal(isVClaudeStep({ ...gw, providerId: 'codex' }), true);
+  assert.equal(isVClaudeStep({ ...gw, kind: 'subscription' }), false);
+  assert.equal(isVClaudeStep({ ...gw, accountKey: 'VClaude-old' }), false);
   assert.equal(cascadeSnapshot('t', gw, null, 'Mac', account({ providerId: 'vclaude', email: null })).binding, 'host-cli');
   assert.match(cascadeSnapshot('t', gw, null, 'Mac', null).message!, /шлюз/);
 });
