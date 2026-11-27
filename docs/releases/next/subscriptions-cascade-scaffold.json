@@ -1,6 +1,6 @@
 {
   "id": "subscriptions-cascade-scaffold",
-  "title": "Каскад подписок 0.1.0 — каркас: настройки, движок выбора ступени, мастер (ходы не исполняет)",
+  "title": "Каскад подписок (экспериментальный): свой провайдер, ход по ступеням машин, синхронизация Mutagen",
   "component": "agentcli-subscriptions-cascade",
   "where": "server",
   "kind": "manual",

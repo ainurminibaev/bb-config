@@ -3696,6 +3696,58 @@ proxy-manager 0.3.6: свой значок «Прокси».
 одной командой — `rollback.sh` в хранилище треда-автора (восстанавливает сохранённые
 `dist/` и `server.ts` Usage, перезагружает плагины), возврат — `apply.sh` рядом.
 
+## Каскад подписок 0.1.1–0.1.6 — исправления живой приёмки (28 ноября 2026)
+
+Плагин ставится тредом приёмки на сервер BB из коммитов ветки плагина;
+`config/plugins.json` по-прежнему `enabled: false`,
+в `config/bundle.json` не входит. Изменения поверх каркаса 0.1.0:
+
+- **Список моделей не пустой** (0.1.1). `model/list` получает каталог в
+  `params.providerOptions` — это `experimental_bridgeOptions` регистрации
+  (проверено по демону BB 0.50.1: sessionless-запросы несут
+  `staticProviderOptions`). Сервер регистрирует провайдера сразу при запуске,
+  машины для каскада по умолчанию берёт лёгким `hosts.list`, после фонового
+  обнаружения перерегистрирует каталог. Мост без каталога отдаёт профили по
+  умолчанию (`bridge/static-catalog.ts`). `executionMode` по умолчанию —
+  `provider`, «Выключено» — явный выбор.
+- **Сессия Claude** (0.1.2): `--resume` только если файл сессии записан;
+  иначе тот же ID как новая сессия.
+- **SSH к опоре** (0.1.2): поле `machines[].anchorSsh` в секции «Машины»
+  (раньше только RPC `syncSetAnchorSsh` и kv `sync:anchor-ssh:<hostId>`, оно
+  читается как запасное). Возврат на приоритетную ступень (S4) — только по
+  подтверждённой квоте.
+- **Mutagen** (0.1.3): все машины POSIX — `--symlink-mode=posix-raw`
+  (абсолютные ссылки как есть), нативный Windows — `portable` с
+  предупреждением. Режим входит в отпечаток сессии `bbc-cfg`: сессии 0.1.0–0.1.2
+  пересоздаются сами. Ошибки сканирования отдельных путей ход не блокируют.
+  Правило: синхронизируется всё, кроме исключений из настроек; `.gitignore` —
+  не правило синхронизации.
+- **Тестовая квота треда** (0.1.4): `bb subscriptions-cascade test-quota
+  --thread <id> --set '<ступень>=exhausted|ok|unknown|unavailable[,<сброс>]'`,
+  RPC `testQuota`; хранится в `testQuota.threads` настройки `config`. RPC
+  исполнителя и синхронизации discoverable.
+- **Без тихого fallback** (0.1.5): сервер каскада не ответил — ход не
+  запускается (раньше запускатель уходил в штатный `claude` машины моста и
+  упирался в исчерпанный лимит). Таймер проверки мостов снимается в
+  `bb.onDispose`: после переустановки прежний экземпляр не зовёт устаревший handle.
+- **Сбои и штатные механизмы** (0.1.6): встроенный `provider-retry` 0.1.0
+  повторяет по `errorInfo` штатного моста без фильтра по провайдеру — 529/5xx
+  повторяются как у Claude. Каскад отвечает на его discoverable-метод
+  `provider-retry.v1.availability` (ready / blocked / unavailable / not-routed),
+  оригинал не правится. Остановка хода гасит CLI и на чужой машине.
+
+**Опирается дополнительно на** (BB 0.50.1): `bb.onDispose`, опции
+`experimental_discoverable` у `bb.rpc.register`, контракт
+`provider-retry.v1.availability` (input `{threadId, requestId}`, output
+`not-routed | ready | blocked{retryAt} | unavailable{reason}`), разбор
+`result.api_error_status` в `errorInfo` штатным мостом Claude. Проверка после
+обновления BB — `npm test` плагина (тесты S14 и перезагрузки) и строка
+`provider-retry` в `bb plugin list`.
+
+Тесты: 145 (`npm test --prefix plugins/agentcli-subscriptions-cascade`).
+Сценарии S1–S17 проходят на стенде с фейками (движок, мост, запускатель,
+фейковый терминал BB и Mutagen); живой прогон в BB ведёт тред приёмки.
+
 ## Каскад подписок 0.1.0 — каркас (27 ноября 2026)
 
 Собственный плагин `agentcli-subscriptions-cascade` (`plugins/agentcli-subscriptions-cascade/`,
