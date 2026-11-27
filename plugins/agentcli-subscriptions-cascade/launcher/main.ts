@@ -50,6 +50,8 @@ export interface LauncherIo {
   stdout: { write(data: Buffer | string): unknown };
   stderr: { write(data: Buffer | string): unknown };
   now(): number;
+  /** Остановка запускателя (SIGTERM от штатного моста): CLI ступени останавливается и там. */
+  signal?: AbortSignal;
 }
 
 function logLine(io: LauncherIo, message: string): void {
@@ -183,7 +185,7 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
     const sessionId = session.sessionId;
     const finishInfo = (r: RunRoute) => ({ threadId, projectId: io.env.BB_PROJECT_ID ?? null, stepId: r.stepId, hostId: r.hostId, probe: false });
     return runSessionRelay(route, sessionArgs, sessionId, {
-      start: (r, childArgs, onLine) => startStageChild(io, provider, r, childArgs, onLine),
+      start: (r, childArgs, onLine) => stopWith(io, startStageChild(io, provider, r, childArgs, onLine)),
       sessionExists: r => localSessionFile(io, sessionId, r.cwd) !== null,
       routeTurn: async () => routeTurnOutputSchema.parse(await callServer(io, 'routeTurn', {
         threadId, projectId: io.env.BB_PROJECT_ID ?? null, provider, requestedModel, probe: false, cwd: io.cwd,
@@ -229,6 +231,7 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
         api, hostId: route.hostId, cwd: remoteCwd, command: 'claude', args: filtered,
         env: { ...remoteEnv(io.env), ...route.env },
         session: session.sessionId ? { id: session.sessionId, put, get: !session.ephemeral } : null,
+        ...(io.signal ? { signal: io.signal } : {}),
         stdin: io.stdin,
         stdout: { write(data: Buffer) {
           io.stdout.write(data);
@@ -270,6 +273,17 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
 }
 
 type RunRoute = Extract<RouteTurnOutput, { action: 'run' }>;
+
+/** CLI ступени останавливается вместе с запускателем (S17): kill доходит до машины ступени. */
+export function stopWith(io: Pick<LauncherIo, 'signal'>, child: StageChild): StageChild {
+  const signal = io.signal;
+  if (!signal) return child;
+  const onAbort = () => child.kill();
+  if (signal.aborted) child.kill();
+  else signal.addEventListener('abort', onAbort, { once: true });
+  void child.done.finally(() => signal.removeEventListener('abort', onAbort));
+  return child;
+}
 
 /**
  * Процесс CLI ступени с построчным stdin/stdout: здесь же (pipe) или на машине
@@ -373,6 +387,7 @@ async function runCodex(io: LauncherIo, args: string[], threadId: string): Promi
     const result = await runRemote({
       api, hostId: route.hostId, cwd: route.cwd ?? io.cwd, command: 'codex', args,
       env: { ...remoteEnv(io.env), ...route.env }, session: null,
+      ...(io.signal ? { signal: io.signal } : {}),
       stdin: io.stdin, stdout: io.stdout as { write(data: Buffer): unknown }, stderr: io.stderr, log: line => logLine(io, line),
       // app-server живёт долго: сторожевой таймер шире.
       watchdogMs: 300_000,
@@ -386,9 +401,19 @@ async function runCodex(io: LauncherIo, args: string[], threadId: string): Promi
 
 /** Вход процесса запускателя (host.ts вызывает его при CASCADE_LAUNCHER_MAIN=1). */
 export async function launcherMain(): Promise<never> {
+  // Штатный мост останавливает ход сигналом процессу CLI (у нас — запускателю):
+  // сигнал гасит CLI ступени (локально или на чужой машине через терминал BB).
+  const stop = new AbortController();
+  for (const name of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+    process.on(name, () => {
+      if (stop.signal.aborted) return;
+      stop.abort();
+      setTimeout(() => process.exit(143), 15_000).unref();
+    });
+  }
   const code = await runLauncher({
     env: process.env, argv: process.argv.slice(2), cwd: process.cwd(), fetch,
-    stdin: process.stdin, stdout: process.stdout, stderr: process.stderr, now: Date.now,
+    stdin: process.stdin, stdout: process.stdout, stderr: process.stderr, now: Date.now, signal: stop.signal,
   }).catch(error => {
     process.stderr.write(`Каскад подписок: сбой запускателя — ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
     return 1;

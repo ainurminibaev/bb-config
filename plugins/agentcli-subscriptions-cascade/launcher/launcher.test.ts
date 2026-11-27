@@ -359,3 +359,84 @@ test('запускатель: сервер каскада не ответил �
   assert.equal(ver, 0);
   assert.equal(existsSync(marker), true);
 });
+
+// ---- S15–S17: обрыв канала, steer и очередь, остановка хода ----
+
+test('S15: обрыв опроса терминала посреди хода — тот же процесс CLI, вывод без повторов, ход не перезапускается', async () => {
+  const fx = remoteFixture();
+  const api = fakeTerminalApi(fx.env, { failOutput: 6 });
+  const stdin = new PassThrough();
+  const stdout = collect();
+  setTimeout(() => stdin.write('ход\n'), 50);
+  const result = await runRemote({
+    api, hostId: 'host_ua', cwd: fx.cwd, command: 'claude', args: [`--resume=${SID}`], env: {}, session: { id: SID, put: null, get: true },
+    stdin, stdout, stderr: collect(), pollMs: 10, idlePollMs: 20, sleep: ms => new Promise(r => setTimeout(r, Math.min(ms, 20))),
+  });
+  assert.equal(result.code, 3);
+  assert.equal(api.created.length, 1, 'CLI запущен один раз — повторного хода нет');
+  assert.equal(stdout.text().trim().split('\n').length, 1, 'кадры после обрыва не продублированы');
+});
+
+test('S17: остановка хода на чужой машине — CLI там получает SIGTERM, запуск завершается', async () => {
+  const fx = remoteFixture();
+  const api = fakeTerminalApi(fx.env);
+  const stop = new AbortController();
+  const stdin = new PassThrough(); // ход идёт: CLI ждёт ввода и сам не завершится
+  setTimeout(() => stop.abort(), 300);
+  const started = Date.now();
+  const result = await runRemote({
+    api, hostId: 'host_ua', cwd: fx.cwd, command: 'claude', args: [`--resume=${SID}`], env: {}, session: null,
+    stdin, stdout: collect(), stderr: collect(), pollMs: 10, idlePollMs: 20, signal: stop.signal,
+  });
+  const terminal = [...api.terminals.values()][0]!;
+  assert.ok(Date.now() - started < 10_000);
+  assert.notEqual(result.code, 0, 'CLI остановлен, а не завершился сам');
+  for (let i = 0; i < 50 && !terminal.exited; i += 1) await new Promise(r => setTimeout(r, 20));
+  assert.equal(terminal.exited, true, 'агент на машине ступени завершился вместе с CLI');
+});
+
+test('S17: stopWith — сигнал запускателя гасит CLI ступени (и уже остановленный не трогает)', async () => {
+  const { stopWith } = await import('./main.ts');
+  const stop = new AbortController();
+  let killed = 0;
+  let finish!: () => void;
+  const done = new Promise<{ code: number; transportError: null }>(r => { finish = () => r({ code: 143, transportError: null }); });
+  stopWith({ signal: stop.signal }, { write() {}, end() {}, kill() { killed += 1; finish(); }, done });
+  stop.abort();
+  await done;
+  assert.equal(killed, 1);
+});
+
+test('S16: steer в идущий ход — тому же процессу без выбора ступени; очередь — выбор ступени на каждом ходе', async () => {
+  const { runSessionRelay } = await import('./session-relay.ts');
+  type Route = { action: 'run'; stepId: string; hostId: string; providerId: string; modelId: string | null; local: boolean; cwd: string | null; env: Record<string, string>; stage: { machine: string }; notes: never[] };
+  const mk = (hostId: string): Route => ({ action: 'run', stepId: hostId, hostId, providerId: 'claude-code', modelId: null, local: true, cwd: null, env: {}, stage: { machine: hostId }, notes: [] });
+  const writes: string[] = [];
+  let routeCalls = 0;
+  let pendingResult: ((line: string) => void) | null = null;
+  const stdin = new PassThrough();
+  const relay = runSessionRelay(mk('tru'), ['--input-format', 'stream-json', `--session-id=${SID}`], SID, {
+    start(_route, _args, onLine) {
+      let resolveDone!: (v: { code: number; transportError: null }) => void;
+      const done = new Promise<{ code: number; transportError: null }>(r => { resolveDone = r; });
+      return { write(line) { writes.push(line); pendingResult = onLine; }, end() { resolveDone({ code: 0, transportError: null }); }, kill() {}, done };
+    },
+    routeTurn: async () => { routeCalls += 1; return mk('tru'); },
+    finishTurn: async () => {}, feed: async () => {}, limitFromLine: () => null,
+    stdin, stdout: { write() {} }, stderr: { write() {} }, now: Date.now, log() {},
+  });
+  const user = (text: string) => stdin.write(`${JSON.stringify({ type: 'user', message: { content: text } })}\n`);
+  const tick = () => new Promise(r => setTimeout(r, 20));
+  user('ход 1'); await tick();
+  user('steer: уточнение'); await tick();          // ход ещё идёт — это steer
+  assert.equal(routeCalls, 0, 'steer не выбирает ступень');
+  pendingResult!(JSON.stringify({ type: 'result' })); await tick();
+  user('из очереди 1'); await tick();               // новый ход
+  pendingResult!(JSON.stringify({ type: 'result' })); await tick();
+  user('из очереди 2'); await tick();
+  pendingResult!(JSON.stringify({ type: 'result' })); await tick();
+  stdin.end();
+  await relay;
+  assert.equal(routeCalls, 2, 'каждый ход из очереди — свой выбор ступени');
+  assert.deepEqual(writes.map(w => (JSON.parse(w) as { message: { content: string } }).message.content), ['ход 1', 'steer: уточнение', 'из очереди 1', 'из очереди 2']);
+});

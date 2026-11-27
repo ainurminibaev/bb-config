@@ -407,3 +407,32 @@ test('маршрут: чужая машина без общего пути — �
   assert.equal(out.action, 'refuse');
   assert.match(out.action === 'refuse' ? out.message : '', /не запущен/u);
 });
+
+test('S14: ошибка без лимита (529, сеть, падение CLI) не переключает ступень; повтор хода — на той же ступени', async () => {
+  const fx = routeFixture();
+  const first = await fx.routes.routeTurn(turn);
+  assert.equal(first.action === 'run' && first.stepId, TRU_MAX);
+  await fx.routes.finishTurn({ threadId: 'thr_1', projectId: 'proj_1', stepId: TRU_MAX, hostId: TRU, exitCode: 1, limits: [] });
+  await fx.routes.finishTurn({ threadId: 'thr_1', projectId: 'proj_1', stepId: TRU_MAX, hostId: TRU, exitCode: null, limits: [], transportError: 'сеть' });
+  const retry = await fx.routes.routeTurn(turn);
+  assert.equal(retry.action === 'run' && retry.stepId, TRU_MAX);
+  assert.ok(retry.action === 'run' && !retry.notes.some(n => n.kind === 'switch'), 'строки переключения нет');
+  assert.deepEqual(fx.observed, [], 'ошибки без лимита не попадают в лимиты');
+});
+
+test('S14: provider-retry после лимита — свой тред: ready / blocked до сброса / unavailable; чужой — not-routed', async () => {
+  const reset = Date.parse('2026-11-27T13:00:00Z');
+  const ready = routeFixture({ health: { [TRU_MAX]: exhausted(reset) } });
+  await ready.routes.routeTurn(turn);
+  assert.deepEqual(await ready.routes.retryAvailability('thr_1'), { kind: 'ready' }, 'следующая ступень свободна — повтор сразу');
+  const blocked = routeFixture({ health: Object.fromEntries([TRU_MAX, MAC_GW, UA_PRO, MAC_CODEX, UA_CODEX].map(id => [id, exhausted(reset)])) });
+  assert.deepEqual(await blocked.routes.retryAvailability('thr_1'), { kind: 'blocked', retryAt: reset });
+  const routes = createRouteService({
+    loadConfig: async () => cfg(), accounts: () => ACCOUNTS, health: () => () => ok, refreshLimits: async () => {}, observeLimit: () => {},
+    threadInfo: async () => ({ projectId: 'p', hostId: TRU, parentThreadId: null, providerId: 'claude-code' }),
+    load: async () => undefined, save: async () => {}, sync: null, now: () => 0,
+  });
+  assert.deepEqual(await routes.retryAvailability('thr_native'), { kind: 'not-routed' }, 'штатный Claude — политика provider-retry не меняется');
+  const off = routeFixture({ mode: 'off' });
+  assert.deepEqual(await off.routes.retryAvailability('thr_1'), { kind: 'not-routed' });
+});

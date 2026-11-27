@@ -128,3 +128,27 @@ export const executorRpcContract = defineRpcContract({
     output: z.object({ threadId: z.string(), steps: z.record(z.string(), z.object({ state: z.string(), resetsAt: z.string().nullable() })).nullable() }),
   },
 });
+
+/**
+ * Ответ штатному provider-retry (BB 0.50, встроенный плагин): при ошибке
+ * лимита (`errorInfo.category === "rate-limit"` или HTTP 429) он спрашивает все
+ * плагины с этим discoverable-методом, можно ли повторить ход. Каскад отвечает
+ * за свои треды: есть готовая ступень — `ready` (повтор сразу, ход пойдёт на
+ * следующую ступень), всё исчерпано — `blocked` до ближайшего сброса,
+ * ждать дольше порога — `unavailable`; чужой тред — `not-routed`.
+ * Форма — дословно контракт provider-retry (`provider-retry.v1.availability`).
+ */
+export const PROVIDER_RETRY_AVAILABILITY = 'provider-retry.v1.availability';
+export const retryAvailabilitySchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('not-routed') }),
+  z.object({ kind: z.literal('ready') }),
+  z.object({ kind: z.literal('blocked'), retryAt: z.number().int().nonnegative() }),
+  z.object({ kind: z.literal('unavailable'), reason: z.enum(['no-enabled-account', 'authentication', 'reset-unknown', 'source-unavailable']) }),
+]);
+export type RetryAvailability = z.infer<typeof retryAvailabilitySchema>;
+export const retryAvailabilityContract = defineRpcContract({
+  [PROVIDER_RETRY_AVAILABILITY]: {
+    input: z.object({ threadId: z.string().min(1), requestId: z.string().min(1) }),
+    output: retryAvailabilitySchema,
+  },
+});

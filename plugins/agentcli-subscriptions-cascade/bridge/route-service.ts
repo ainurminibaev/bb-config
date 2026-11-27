@@ -5,7 +5,7 @@ import type { CascadeConfig, DiscoveredAccount, Step } from '../contract.ts';
 import { explainProfile, nextThreadState, selectStep, type Decision, type HealthLookup, type ThreadCascadeState } from '../engine.ts';
 import { previewText, usesTestQuota } from '../profiles.ts';
 import type {
-  FinishTurnInput, LimitObservation, RouteNote, RouteTurnInput, RouteTurnOutput, StageLabel, ThreadStatus,
+  FinishTurnInput, LimitObservation, RetryAvailability, RouteNote, RouteTurnInput, RouteTurnOutput, StageLabel, ThreadStatus,
 } from './route-contract.ts';
 import { finishTurnInputSchema, routeTurnInputSchema } from './route-contract.ts';
 
@@ -119,6 +119,8 @@ export interface RouteService {
   routeTurn(input: RouteTurnInput): Promise<RouteTurnOutput>;
   finishTurn(input: FinishTurnInput): Promise<{ notes: RouteNote[] }>;
   threadStatus(threadId: string): Promise<ThreadStatus>;
+  /** Ответ provider-retry после ошибки лимита: можно ли повторить ход сейчас (S2, S14). */
+  retryAvailability(threadId: string): Promise<RetryAvailability>;
   /** Схема профиля треда для метки ступени (timeline.provideScheme): тот же движок и то же состояние. */
   threadScheme(threadId: string): Promise<{ name: string; text: string; test: boolean; attempts: unknown[]; config: unknown } | null>;
 }
@@ -318,5 +320,29 @@ export function createRouteService(deps: RouteDeps): RouteService {
     };
   }
 
-  return { routeTurn, finishTurn, threadStatus, threadScheme };
+  async function retryAvailability(threadId: string): Promise<RetryAvailability> {
+    const [config, info, stored] = await Promise.all([
+      deps.loadConfig(), deps.threadInfo(threadId).catch(() => null), deps.load(threadId).catch(() => undefined),
+    ]);
+    // Чужой тред (штатный Claude/Codex) — политика provider-retry не меняется.
+    if (info ? info.providerId !== PROVIDER_ID_LOCAL : !stored) return { kind: 'not-routed' };
+    if (config.policies.executionMode !== 'provider') return { kind: 'not-routed' };
+    const now = deps.now();
+    await deps.refreshLimits(config, config.steps.filter(s => s.enabled)).catch(() => {});
+    const base = stored ?? freshState(threadId, info);
+    const decision = selectStep({
+      config, requestedModel: base.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto', accounts: deps.accounts(),
+      thread: { ...base.engine, turnId: `retry-${now}` }, health: deps.health(config, threadId), now,
+    });
+    switch (decision.kind) {
+      case 'run':
+      case 'confirm': return { kind: 'ready' };
+      case 'wait': return decision.reason === 'exhausted' ? { kind: 'blocked', retryAt: Math.max(now, Math.round(decision.until)) } : { kind: 'unavailable', reason: 'reset-unknown' };
+      // Ждать дольше порога или сброс неизвестен — решает владелец, автоповтора нет.
+      case 'ask-owner': return { kind: 'unavailable', reason: 'reset-unknown' };
+      default: return { kind: 'unavailable', reason: 'no-enabled-account' };
+    }
+  }
+
+  return { routeTurn, finishTurn, threadStatus, threadScheme, retryAvailability };
 }

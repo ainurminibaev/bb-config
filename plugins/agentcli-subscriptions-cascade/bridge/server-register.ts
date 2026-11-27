@@ -14,7 +14,7 @@ import type { CascadeConfig, DiscoveredAccount, Step, TestQuotaEntry } from '../
 import type { HealthLookup } from '../engine.ts';
 import { formatAdopt, parseAdoptArgs, runAdopt, type AdoptPorts, type AdoptThread } from './adopt.ts';
 import { digestMap, nativeBridgeStatus, type NativeBridgeStatus } from './digests.ts';
-import { executorRpcContract, type LimitObservation } from './route-contract.ts';
+import { executorRpcContract, PROVIDER_RETRY_AVAILABILITY, retryAvailabilityContract, type LimitObservation } from './route-contract.ts';
 import { createRouteService, type RouteService, type StoredThreadState, type SyncPort, type ThreadInfo } from './route-service.ts';
 
 export interface ExecutorDeps {
@@ -159,6 +159,15 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     finishTurn: input => routes.finishTurn(input),
     threadStatus: ({ threadId }) => routes.threadStatus(threadId),
   }, { experimental_discoverable: true, experimental_description: 'Каскад подписок: паспорт треда (threadStatus), тестовая квота треда (testQuota), ход исполнителя (routeTurn/finishTurn).' });
+
+  // Штатный provider-retry спрашивает доступность после ошибки лимита у всех
+  // плагинов с этим методом: свои треды каскад отправляет на следующую ступень.
+  bb.rpc.register(retryAvailabilityContract, {
+    [PROVIDER_RETRY_AVAILABILITY]: async ({ threadId }: { threadId: string }) => routes.retryAvailability(threadId).catch(error => {
+      bb.log.warn(`доступность для provider-retry ${threadId}: ${String(error)}`);
+      return { kind: 'not-routed' as const };
+    }),
+  }, { experimental_discoverable: true, experimental_description: 'Каскад подписок: доступность ступени для повтора хода после лимита (provider-retry).' });
 
   // ---- CLI ----
   const adoptPorts: AdoptPorts = {
