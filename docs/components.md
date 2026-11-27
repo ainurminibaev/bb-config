@@ -32,6 +32,7 @@ KodaForge 0.7.100, ChatGPT Realtime 0.1.0; более новая даёт пре
 | `subthread-autocollapse` | свой плагин | `plugins/subthread-autocollapse` | — | — |
 | `codex-goal-queue` | свой плагин | `plugins/codex-goal-queue` | — | — |
 | `thread-account-usage` | свой плагин | `plugins/thread-account-usage` | источник usage для `menubar-status` | — |
+| `thread-description` | свой плагин | `plugins/thread-description` | — | — |
 | `menubar-status` | свой плагин | `plugins/menubar-status` | — | настройки `hostId`, `filePath`; установка на Mac/Windows |
 | `project-open` | свой плагин | `plugins/project-open` | — | обработчик Finder на Mac |
 | `file-local-open` | свой плагин | `plugins/file-local-open` | — | `macHostId` при нескольких компьютерах |

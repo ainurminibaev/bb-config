@@ -21,6 +21,7 @@ Full list with sources and dependencies: [docs/components.md](docs/components.md
 | [Project Open](plugins/project-open) | Thread buttons: open the project folder in Finder and a BB terminal | For Finder, a local handler on the Mac |
 | [Push Button](plugins/push-button) | A "ask the agent to push" button by the branch; runs no Git itself | None |
 | [Thread Account Usage](plugins/thread-account-usage) | Account quota windows of the current thread, separate from token spend | None |
+| [Thread Description](plugins/thread-description) | Description and recap of every thread: icon by the title, button by the composer | None |
 | [Handoff Button](plugins/handoff-button) | A composer button for the original Handoff panel | None (Handoff is in the set) |
 | [Code Open](plugins/code-open), [KodaForge Inspector](plugins/kodaforge-inspector) | Open a project's or thread's code in KodaForge with the chat beside it | None (KodaForge is in the set) |
 | [Web BB Button](plugins/web-bb-button) | A globe in the left rail that opens BB in the browser | Your public BB address |

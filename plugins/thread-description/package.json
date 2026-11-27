@@ -1,0 +1,36 @@
+{
+  "name": "bb-plugin-thread-description",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Keeps a short description and a recap for every BB thread and subthread",
+  "engines": {
+    "bb": ">=0.50",
+    "bbPluginSdk": ">=0.6.157"
+  },
+  "bb": {
+    "name": "Thread Description",
+    "description": "Описание и краткая сводка каждого треда: иконка у названия и маленькая кнопка у поля ввода, обновляются сами.",
+    "branding": {
+      "icon": "FileText"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx",
+    "skills": [
+      "skills"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test logic.test.ts"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.6.157",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.7.0"
+  }
+}

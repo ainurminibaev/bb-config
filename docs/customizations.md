@@ -3320,3 +3320,30 @@ RPC agent-roster 0.5.0 `roster_list`, поля `kind` и `active.threadId` дл�
 сортировка thread-list BB 0.50.1: простаивающие по `latestAttentionAt`, бегущие
 выше всех по `createdAt`; бегущий обычный тред поэтому может стоять выше роли.
 Проверка — headless-браузер: группы непусты, роль первая (`marusya`, `ai_agents`).
+
+## Thread Description: описания и сводки тредов
+
+- **Что:** `plugins/thread-description/` 0.1.0. Иконка у названия треда
+  (описание, «Обновить», ручная правка) и иконка сводки в углу поля ввода; обе
+  показывают карточку по наведению.
+  Правила обновления, выбор модели и команды — в навыке плагина.
+- **Зачем:** готовые Catch Up и Simple Summaries показывают только сводку; описания
+  по первой задаче, правила «короткое — дописать» и иконки у названия в них нет.
+  Код свой, не форк.
+- **Где:** сервер BB; генерация — скрытый тред на машине исходного треда, в личной
+  папке (`workspace: personal`), по событиям `thread.active`/`thread.idle`, без опроса.
+  Расход: до двух запросов на новый тред; дальше — не чаще раза в час и только при
+  открытии карточки (`refreshOnOpen`). Один запрос — около 42 тыс. токенов модели
+  (почти всё — служебный контекст сессии); `bb thread-description stats`.
+- **Хранение:** kv плагина, `d:<threadId>`; в снимок настроек описания не входят и
+  после переустановки создаются заново.
+- **Опора на BB 0.50.1 / SDK 0.6.157:** слот `experimental_threadHeaderRow`,
+  `composer.customize` (actions, banners), `threads.spawn` (hidden), `providers.models`;
+  разметка шапки — `data-thread-header-workflow-actions` и кнопка `Thread actions`,
+  поля ввода — `data-follow-up-composer` и стрелка `Collapse prompt box` (`title-anchor.ts`). Нет разметки — иконка не рисуется, остальное работает.
+  Правила и терпимость к чужим данным проверяет `logic.test.ts`; разметку — открыть
+  любой тред после обновления BB и убедиться, что иконка стоит у названия.
+- **Установка и восстановление:** `python3 scripts/restore.py --plugins --apply` или
+  `bb plugin install <checkout>/plugins/thread-description`; удаление —
+  `bb plugin remove thread-description`.
+- **Обновление для установивших:** шаг `docs/releases/next/plugin-thread-description`.
