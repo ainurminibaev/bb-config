@@ -391,3 +391,19 @@ test('обёртка: model/list без каталога от сервера —
   assert.deepEqual(models(8).map(m => m.id), models(7).map(m => m.id), 'пустой каталог — тоже статический');
   assert.deepEqual(models(9).map(m => m.id), ['mine'], 'каталог сервера главнее');
 });
+
+test('маршрут: чужая машина без общего пути — понятный отказ, а не запуск в несуществующей папке', async () => {
+  const fx = routeFixture({ health: { [TRU_MAX]: exhausted(null) } });
+  // Синхронизации нет (проект не определён): ход на Mac не запускается в папке моста.
+  const noProject = await fx.routes.routeTurn({ ...turn, projectId: null, threadId: 'thr_np' });
+  assert.equal(noProject.action, 'run', 'проект берётся из треда');
+  const store = new Map<string, StoredThreadState>();
+  const routes = createRouteService({
+    loadConfig: async () => cfg(), accounts: () => ACCOUNTS, health: () => stepId => stepId === TRU_MAX ? exhausted(null) : ok,
+    refreshLimits: async () => {}, observeLimit: () => {}, threadInfo: async () => null,
+    load: async id => store.get(id), save: async (id, s) => { store.set(id, s); }, sync: null, now: () => Date.parse('2026-11-27T12:00:00Z'),
+  });
+  const out = await routes.routeTurn({ ...turn, projectId: null, threadId: 'thr_nosync' });
+  assert.equal(out.action, 'refuse');
+  assert.match(out.action === 'refuse' ? out.message : '', /не запущен/u);
+});

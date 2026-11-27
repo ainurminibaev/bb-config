@@ -213,7 +213,9 @@ export function createRouteService(deps: RouteDeps): RouteService {
       let cwd: string | null = null;
       let env: Record<string, string> = {};
       const anchor = anchorHostId(config);
-      const needsSync = deps.sync !== null && projectId !== '' && (decision.hostId !== anchor || stored.pendingFlushHostId !== null);
+      // Опора на чужой машине (мост не на опоре) тоже готовится через sync: так ход
+      // получает папку проекта на опоре, а не путь машины моста.
+      const needsSync = deps.sync !== null && projectId !== '' && (decision.hostId !== anchor || stored.pendingFlushHostId !== null || !local);
       if (needsSync) {
         const outcome = await deps.sync!.prepareTurn({ threadId: input.threadId, projectId }, { hostId: decision.hostId }).catch(error => ({
           ok: false as const, reason: 'error', message: error instanceof Error ? error.message : String(error), conflicts: [], timings: [], notices: [],
@@ -229,6 +231,13 @@ export function createRouteService(deps: RouteDeps): RouteService {
         env = outcome.env;
       }
 
+      if (!local && cwd === null) {
+        // Чужая машина без общего пути: папки моста там нет (ENOENT при запуске).
+        const why = projectId === '' ? 'проект треда не определён' : deps.sync === null ? 'синхронизация файлов недоступна' : 'общий путь проекта не подготовлен';
+        const message = `Ход на ${to.machine} не запущен: ${why}. Проверьте «Файлы» и «Машины» в настройках каскада.`;
+        notes.push({ kind: 'problem', message: message.slice(0, 300), stage: to, stepId: decision.stepId });
+        return { action: 'refuse', retryable: false, message, notes };
+      }
       notes.push({ kind: 'run', stage: to, stepId: decision.stepId });
       notes.push({ kind: 'state', phase: 'running', stage: to, stepId: decision.stepId, profileId });
       await save({

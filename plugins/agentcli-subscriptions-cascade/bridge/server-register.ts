@@ -93,8 +93,12 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
   }
   void refreshNativeBridges().catch(error => bb.log.warn(`проверка штатных мостов: ${String(error)}`));
   // Обновление BB меняет мост: перепроверка раз в 10 минут, по таймеру без нагрузки на CLI.
-  const timer = setInterval(() => { void refreshNativeBridges().catch(() => {}); }, 10 * 60_000);
+  // Таймер снимается при перезагрузке, выключении и удалении плагина: иначе
+  // прежний экземпляр продолжает звать устаревший handle bb.
+  let disposed = false;
+  const timer = setInterval(() => { if (!disposed) void refreshNativeBridges().catch(() => {}); }, 10 * 60_000);
   timer.unref?.();
+  bb.onDispose(() => { disposed = true; clearInterval(timer); });
 
   const threadInfo = async (threadId: string): Promise<ThreadInfo | null> => {
     const raw = rec(await bb.sdk.threads.get({ threadId }));
@@ -224,7 +228,7 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
   return {
     routes,
     deriveProviderOptions(ctx) {
-      if (Date.now() - bridgesAt > 10 * 60_000) void refreshNativeBridges().catch(() => {});
+      if (!disposed && Date.now() - bridgesAt > 10 * 60_000) void refreshNativeBridges().catch(() => {});
       return {
         ...claudeBridgeKnobs(ctx.promptMode),
         requestedModel: ctx.model,

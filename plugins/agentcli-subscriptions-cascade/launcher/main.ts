@@ -6,8 +6,9 @@
 //   3. запускает нативный CLI — здесь же или на машине ступени через терминал BB;
 //   4. переносит файл сессии для --resume туда и обратно (у каждой машины свой ~/.claude);
 //   5. сообщает итог (finishTurn): события лимита, сбой канала, синхронизация после хода.
-// Если сервер каскада не ответил — работает как штатный CLI этой машины, с
-// моделью по умолчанию: тред не ломается (S12).
+// Если сервер каскада не ответил — ход НЕ запускается (код 75, понятный текст):
+// штатный CLI этой машины мог бы молча уйти на исчерпанную ступень. Штатно
+// (без каскада) запускаются только служебные вызовы CLI и запуск вне треда.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { dirname } from 'node:path';
@@ -27,6 +28,18 @@ export const LAUNCHER_ENV = {
   log: 'CASCADE_LAUNCHER_LOG',
   pluginId: 'CASCADE_PLUGIN_ID',
 } as const;
+
+/**
+ * Сколько ждать решения сервера перед ходом. Решение включает синхронизацию
+ * файлов: первая синхронизация проекта на машине ступени идёт минутами.
+ */
+export const ROUTE_TIMEOUT_MS = 20 * 60_000;
+
+/** Текст отказа, когда сервер каскада не ответил: ход не запущен. */
+export function serverDownMessage(error: unknown): string {
+  const reason = error instanceof Error ? error.message : String(error);
+  return `сервер каскада не ответил (${reason.slice(0, 200)}) — ход не запущен, чтобы не уйти на ступень без проверки лимита. Повторите ход; если повторяется — проверьте, что плагин «Каскад подписок» включён (bb plugin list).`;
+}
 
 export interface LauncherIo {
   env: NodeJS.ProcessEnv;
@@ -107,6 +120,15 @@ function realCommand(io: LauncherIo, provider: NativeProvider): string | null {
   return resolveRealExecutable(name, io.env, self ? [self] : []);
 }
 
+/** Сервер каскада не ответил: отказ с понятной строкой в ленте, без запуска CLI. */
+async function refuseServerDown(io: LauncherIo, threadId: string, error: unknown): Promise<number> {
+  const message = serverDownMessage(error);
+  logLine(io, `refuse: ${message}`);
+  await sendFeed(io, threadId, [{ kind: 'problem', message: message.slice(0, 300) }]);
+  io.stderr.write(`Каскад подписок: ${message}\n`);
+  return 75;
+}
+
 /** Запуск без каскада: штатный CLI этой машины, профиль каскада из аргументов убран. */
 async function runFallback(io: LauncherIo, provider: NativeProvider, args: string[], reason: string): Promise<number> {
   logLine(io, `fallback: ${reason}`);
@@ -139,9 +161,9 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
   try {
     route = routeTurnOutputSchema.parse(await callServer(io, 'routeTurn', {
       threadId, projectId: io.env.BB_PROJECT_ID ?? null, provider, requestedModel, probe, cwd: io.cwd,
-    }, 60_000));
+    }, ROUTE_TIMEOUT_MS));
   } catch (error) {
-    return runFallback(io, provider, args, `сервер каскада не ответил: ${error instanceof Error ? error.message : String(error)}`);
+    return refuseServerDown(io, threadId, error);
   }
   await sendFeed(io, threadId, route.notes);
   if (route.action === 'refuse') {
@@ -165,7 +187,7 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
       sessionExists: r => localSessionFile(io, sessionId, r.cwd) !== null,
       routeTurn: async () => routeTurnOutputSchema.parse(await callServer(io, 'routeTurn', {
         threadId, projectId: io.env.BB_PROJECT_ID ?? null, provider, requestedModel, probe: false, cwd: io.cwd,
-      }, 60_000)),
+      }, ROUTE_TIMEOUT_MS)),
       finishTurn: async (r, info) => {
         const finish = await callServer<{ notes: RouteNote[] }>(io, 'finishTurn', { ...finishInfo(r), ...info, limits: info.limits.slice(-20) }, 120_000);
         await sendFeed(io, threadId, finish.notes);
@@ -335,9 +357,9 @@ async function runCodex(io: LauncherIo, args: string[], threadId: string): Promi
   try {
     route = routeTurnOutputSchema.parse(await callServer(io, 'routeTurn', {
       threadId, projectId: io.env.BB_PROJECT_ID ?? null, provider: 'codex', requestedModel: null, probe: false, cwd: io.cwd,
-    }, 60_000));
+    }, ROUTE_TIMEOUT_MS));
   } catch (error) {
-    return runFallback(io, 'codex', args, `сервер каскада не ответил: ${error instanceof Error ? error.message : String(error)}`);
+    return refuseServerDown(io, threadId, error);
   }
   await sendFeed(io, threadId, route.notes);
   if (route.action === 'refuse') { io.stderr.write(`Каскад подписок: ${route.message}\n`); return route.retryable ? 75 : 1; }

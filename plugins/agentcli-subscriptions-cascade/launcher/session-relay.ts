@@ -139,8 +139,10 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
         await switching;
         let next: RouteTurnOutput;
         try { next = await ports.routeTurn(); } catch (error) {
-          ports.log(`routeTurn failed, staying: ${String(error)}`);
-          next = route;
+          // Без решения сервера ход не идёт: прежняя ступень могла исчерпаться.
+          ports.log(`routeTurn failed, refuse: ${String(error)}`);
+          const message = `сервер каскада не ответил перед ходом (${error instanceof Error ? error.message : String(error)}) — ход не запущен. Повторите ход.`;
+          next = { action: 'refuse', retryable: true, message, notes: [{ kind: 'problem', message: message.slice(0, 300) }] };
         }
         await ports.feed(next.notes);
         if (next.action === 'refuse') {

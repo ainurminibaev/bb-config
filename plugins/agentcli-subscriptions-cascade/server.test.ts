@@ -34,6 +34,7 @@ function setup() {
         })) as never,
       },
       plugins: {
+        list: (async () => ({ plugins: [] })) as never,
         callRpc: (async () => ({ usage: { fetchedAt: NOW_ISO, limitUnits: 405_000_000, remainingUnits: 380_730_000, endsAt: '2026-12-27T00:00:00Z' }, error: null })) as never,
       },
       projects: { list: async () => [] },
@@ -102,4 +103,26 @@ test('нет ни одной машины → каталог всё равно �
   assert.deepEqual(models.map(m => m.id), ['auto', 'auto-no-codex', 'opus-then-auto', 'fable-then-auto', 'only-opus-5.5', 'only-fable-5.2']);
   assert.equal(models[0]!.isDefault, true);
   assert.match(models[0]!.description, /ещё не найдены/u);
+});
+
+test('перезагрузка плагина: таймер прежнего экземпляра снят, устаревший handle не используется', async () => {
+  // Живые интервалы считаются напрямую: вызовы через отравленный handle прежнего
+  // экземпляра не записываются, по ним утечку не увидеть.
+  const live = new Set<unknown>();
+  const realSet = globalThis.setInterval;
+  const realClear = globalThis.clearInterval;
+  globalThis.setInterval = ((fn: () => void, ms?: number) => { const t = realSet(fn, ms); live.add(t); return t; }) as typeof setInterval;
+  globalThis.clearInterval = ((t: Parameters<typeof clearInterval>[0]) => { live.delete(t); realClear(t); }) as typeof clearInterval;
+  try {
+    const fake = setup();
+    assert.equal(live.size, 1, 'проверка штатных мостов по таймеру');
+    const next = await fake.harness.reload(plugin);
+    assert.equal(live.size, 1, 'после перезагрузки таймер прежнего экземпляра снят');
+    await next.harness.dispose();
+    assert.equal(live.size, 0, 'после выключения таймеров нет');
+  } finally {
+    for (const t of live) realClear(t as Parameters<typeof clearInterval>[0]);
+    globalThis.setInterval = realSet;
+    globalThis.clearInterval = realClear;
+  }
 });

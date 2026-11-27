@@ -335,3 +335,27 @@ test('реле сессии: прежний процесс не записал �
   await relay;
   assert.deepEqual(children[1], ['--input-format', 'stream-json', `--session-id=${SID}`]);
 });
+
+test('запускатель: сервер каскада не ответил — отказ 75 с понятным текстом, штатный claude не запускается', async () => {
+  const bin = realpathSync(mkdtempSync(join(tmpdir(), 'cxb-')));
+  const marker = join(bin, 'ran');
+  writeFileSync(join(bin, 'claude'), `#!/bin/sh\ntouch '${marker}'\n`);
+  chmodSync(join(bin, 'claude'), 0o755);
+  const err = collect();
+  const code = await runLauncher({
+    env: { PATH: `${bin}:/usr/bin:/bin`, BB_THREAD_ID: 'thr_x', BB_SERVER_URL: 'http://bb.test', CASCADE_LAUNCHER_PROVIDER: 'claude-code' },
+    argv: ['-p', '--model', 'auto'], cwd: tmpdir(), fetch: (async () => { throw new Error('The operation was aborted due to timeout'); }) as typeof fetch,
+    stdin: new PassThrough(), stdout: collect(), stderr: err, now: Date.now,
+  });
+  assert.equal(code, 75);
+  assert.match(err.text(), /сервер каскада не ответил .* ход не запущен/u);
+  assert.equal(existsSync(marker), false, 'ход не ушёл штатным путём на машину моста');
+  // Служебный вызов (версия) по-прежнему идёт штатно.
+  const ver = await runLauncher({
+    env: { PATH: `${bin}:/usr/bin:/bin`, BB_THREAD_ID: 'thr_x', CASCADE_LAUNCHER_PROVIDER: 'claude-code' },
+    argv: ['--version'], cwd: tmpdir(), fetch: (async () => { throw new Error('не должен звать сервер'); }) as typeof fetch,
+    stdin: new PassThrough(), stdout: collect(), stderr: collect(), now: Date.now,
+  });
+  assert.equal(ver, 0);
+  assert.equal(existsSync(marker), true);
+});
