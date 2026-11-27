@@ -82,6 +82,8 @@ export interface RouteDeps {
   sync: SyncPort | null;
   now(): number;
   warn?(message: string): void;
+  /** Бюджет ответа provider-retry (его таймаут — 5 с). По умолчанию 1,5 с. */
+  availabilityBudgetMs?: number;
   /** Пауза ожидания занятой рабочей папки (тесты подменяют). */
   sleep?(ms: number): Promise<void>;
   /** Сколько ждать, пока другой живой тред пишет рабочую папку. По умолчанию 10 мин. */
@@ -610,28 +612,41 @@ export function createRouteService(deps: RouteDeps): RouteService {
     };
   }
 
+  /**
+   * Ответ provider-retry (BB зовёт его с таймаутом 5 с; не успели — «pool-unavailable»,
+   * автоповтора нет). Только уже имеющееся состояние: сохранённое состояние треда,
+   * отметки исчерпания, лимиты из кэша монитора. Ни обнаружения, ни опроса лимитов,
+   * ни запросов треда — перепроверит следующий ход. Свой тред узнаётся по
+   * сохранённому состоянию каскада; чужой — сразу `not-routed`. Бюджет — 1,5 с.
+   */
   async function retryAvailability(threadId: string): Promise<RetryAvailability> {
-    const [config, info, stored] = await Promise.all([
-      deps.loadConfig(), deps.threadInfo(threadId).catch(() => null), deps.load(threadId).catch(() => undefined),
-    ]);
-    // Чужой тред (штатный Claude/Codex) — политика provider-retry не меняется.
-    if (info ? info.providerId !== PROVIDER_ID_LOCAL : !stored) return { kind: 'not-routed' };
-    if (config.policies.executionMode !== 'provider') return { kind: 'not-routed' };
-    const now = deps.now();
-    await deps.refreshLimits(config, config.steps.filter(s => s.enabled)).catch(() => {});
-    const base = stored ?? freshState(threadId, info);
-    const decision = selectStep({
-      config, requestedModel: base.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto', accounts: deps.accounts(),
-      thread: { ...base.engine, turnId: `retry-${now}` }, health: withObserved(deps.health(config, threadId), base.observed, now, base.modelBlocks), now,
+    let ours: boolean | null = null; // null — ещё не знаем, свой ли тред
+    const budget = new Promise<RetryAvailability>(resolve => {
+      const t = setTimeout(() => resolve(ours === true ? { kind: 'ready' } : { kind: 'not-routed' }), deps.availabilityBudgetMs ?? 1_500);
+      (t as { unref?: () => void }).unref?.();
     });
-    switch (decision.kind) {
-      case 'run':
-      case 'confirm': return { kind: 'ready' };
-      case 'wait': return decision.reason === 'exhausted' ? { kind: 'blocked', retryAt: Math.max(now, Math.round(decision.until)) } : { kind: 'unavailable', reason: 'reset-unknown' };
-      // Ждать дольше порога или сброс неизвестен — решает владелец, автоповтора нет.
-      case 'ask-owner': return { kind: 'unavailable', reason: 'reset-unknown' };
-      default: return { kind: 'unavailable', reason: 'no-enabled-account' };
-    }
+    const fast = (async (): Promise<RetryAvailability> => {
+      const stored = await deps.load(threadId).catch(() => undefined);
+      ours = Boolean(stored);
+      if (!stored) return { kind: 'not-routed' };
+      const config = await deps.loadConfig();
+      if (config.policies.executionMode !== 'provider') return { kind: 'not-routed' };
+      const now = deps.now();
+      const decision = selectStep({
+        config, requestedModel: stored.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto', accounts: deps.accounts(),
+        thread: { ...stored.engine, turnId: `retry-${now}` }, health: withObserved(deps.health(config, threadId), stored.observed, now, stored.modelBlocks), now,
+      });
+      switch (decision.kind) {
+        case 'run':
+        case 'confirm': return { kind: 'ready' };
+        case 'wait': return decision.reason === 'exhausted' ? { kind: 'blocked', retryAt: Math.max(now, Math.round(decision.until)) } : { kind: 'unavailable', reason: 'reset-unknown' };
+        // Ждать дольше порога или сброс неизвестен — решает владелец, автоповтора нет.
+        case 'ask-owner': return { kind: 'unavailable', reason: 'reset-unknown' };
+        default: return { kind: 'unavailable', reason: 'no-enabled-account' };
+      }
+    })().catch(error => { warn(`доступность для provider-retry ${threadId}: ${String(error)}`); return (ours ? { kind: 'ready' } : { kind: 'not-routed' }) as RetryAvailability; });
+    // Свой тред и не успели — `ready`: следующий ход сам выберет ступень (или откажет с причиной).
+    return Promise.race([fast, budget]);
   }
 
   async function answerConfirmation(raw: AnswerConfirmationInput): Promise<AnswerConfirmationOutput> {

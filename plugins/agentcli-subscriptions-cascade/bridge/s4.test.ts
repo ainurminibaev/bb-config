@@ -188,3 +188,31 @@ test('S7: плагин обновился посреди подготовки �
   const second = await models.routeTurn({ ...turn, requestedModel: 'only-fable-5.2' });
   assert.equal(stepOf(second), MAC_GW, 'та же модель на следующей ступени профиля');
 });
+
+test('provider-retry availability: свой тред — за доли секунды без обнаружения и опроса лимитов; медленный источник — ready по бюджету; чужой — not-routed', async () => {
+  const cfg: CascadeConfig = { ...baseConfig(), policies: { ...baseConfig().policies, executionMode: 'provider' } };
+  const store = new Map<string, StoredThreadState>();
+  let heavy = 0;
+  const slow = () => new Promise<never>(() => {}); // повисший вызов: обнаружение, сеть
+  const routes = createRouteService({
+    loadConfig: async () => cfg, accounts: () => ACCOUNTS, health: () => id => (id === TRU_MAX ? exhausted(T0 + 3_600_000) : ok),
+    refreshLimits: async () => { heavy += 1; return slow(); }, observeLimit: () => {},
+    threadInfo: async () => { heavy += 1; return slow(); },
+    load: async id => store.get(id), save: async (id, s) => { store.set(id, s); }, sync, now: () => T0,
+  });
+  store.set('thr_own', { engine: { threadId: 'thr_own', projectId: 'p', turnId: '', isSubthread: false, homeHostId: TRU, currentStepId: TRU_MAX, switchedAt: T0 - 60_000, waitingSince: null, consents: [], skippedStepIds: [] }, profileId: 'auto', lastRun: null, pendingFlushHostId: null, observed: { [TRU_MAX]: { until: T0 + 3_600_000, at: T0 } } });
+  const t0 = performance.now();
+  assert.deepEqual(await routes.retryAvailability('thr_own'), { kind: 'ready' });
+  assert.ok(performance.now() - t0 < 200, `ответ за ${Math.round(performance.now() - t0)} мс`);
+  assert.equal(heavy, 0, 'ни обнаружения, ни запросов треда');
+  assert.deepEqual(await routes.retryAvailability('thr_native'), { kind: 'not-routed' });
+
+  // Медленная конфигурация (обнаружение при пустых настройках) — бюджет, свой тред — ready.
+  const stuck = createRouteService({
+    loadConfig: slow, accounts: () => ACCOUNTS, health: () => () => ok, refreshLimits: async () => {}, observeLimit: () => {},
+    threadInfo: async () => null, load: async id => store.get(id), save: async () => {}, sync, now: () => T0, availabilityBudgetMs: 50,
+  });
+  const t1 = performance.now();
+  assert.deepEqual(await stuck.retryAvailability('thr_own'), { kind: 'ready' });
+  assert.ok(performance.now() - t1 < 1_000);
+});

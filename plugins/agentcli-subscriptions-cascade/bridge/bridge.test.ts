@@ -430,6 +430,8 @@ test('S14: provider-retry после лимита — свой тред: ready /
   await ready.routes.routeTurn(turn);
   assert.deepEqual(await ready.routes.retryAvailability('thr_1'), { kind: 'ready' }, 'следующая ступень свободна — повтор сразу');
   const blocked = routeFixture({ health: Object.fromEntries([TRU_MAX, MAC_GW, UA_PRO, MAC_CODEX, UA_CODEX].map(id => [id, exhausted(reset)])) });
+  // Свой тред узнаётся по сохранённому состоянию каскада (ход уже был).
+  blocked.store.set('thr_1', ready.store.get('thr_1')!);
   assert.deepEqual(await blocked.routes.retryAvailability('thr_1'), { kind: 'blocked', retryAt: reset });
   const routes = createRouteService({
     loadConfig: async () => cfg(), accounts: () => ACCOUNTS, health: () => () => ok, refreshLimits: async () => {}, observeLimit: () => {},
