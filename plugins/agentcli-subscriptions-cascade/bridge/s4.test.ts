@@ -140,3 +140,51 @@ test('ленивая настройка: машина не настроена �
   assert.equal(stepOf(next), 'host_ua:claude-code:*', 'следующая ступень');
   assert.ok(next.action === 'run' && next.notes.some(n => n.kind === 'problem' && /Нужно разрешение для Mac/u.test(n.message) && /--allow-ssh/u.test(n.note ?? '')));
 });
+
+test('S3: согласие «на этот ход» переживает автоповтор (новый turnKey) — повтор на Codex без второй карточки', async () => {
+  const cfg: CascadeConfig = { ...baseConfig(), policies: { ...baseConfig().policies, executionMode: 'provider' } };
+  const store = new Map<string, StoredThreadState>();
+  const allClaudeOut = (id: string) => (id.includes(':claude-code:') ? exhausted(T0 + 3_600_000) : ok);
+  const routes = createRouteService({
+    loadConfig: async () => cfg, accounts: () => ACCOUNTS, health: () => allClaudeOut,
+    refreshLimits: async () => {}, observeLimit: () => {},
+    threadInfo: async () => ({ projectId: 'p', hostId: TRU, parentThreadId: null, providerId: 'subscriptions-cascade', isolatedWorkspace: true }),
+    load: async id => store.get(id), save: async (id, s) => { store.set(id, s); }, sync, now: () => T0,
+  });
+  const card = await routes.routeTurn({ ...turn, turnKey: 'k1' });
+  assert.equal(card.action, 'confirm');
+  const stepId = card.action === 'confirm' ? card.prompt.stepId : '';
+  await routes.answerConfirmation({ threadId: 'thr_s4', stepId, turnKey: 'k1', action: 'go', scope: 'turn', threadUntil: null });
+  const inClaude = await routes.routeTurn({ ...turn, turnKey: 'k1' });
+  assert.equal(inClaude.action === 'refuse' && inClaude.retryAs, 'limit', 'ход Claude отдаётся на автоповтор');
+  assert.equal((await routes.retryAvailability('thr_s4')).kind, 'ready');
+  const retry = await routes.routeTurn({ ...turn, provider: 'codex', turnKey: 'k2' });
+  assert.equal(retry.action, 'run', 'повтор (новый ход) — без второй карточки');
+  assert.equal(retry.action === 'run' && retry.providerId, 'codex');
+  const next = await routes.routeTurn({ ...turn, provider: 'codex', turnKey: 'k3' });
+  assert.equal(next.action, 'confirm', 'следующий настоящий ход снова спрашивает');
+});
+
+test('S7: плагин обновился посреди подготовки — отказ с автоповтором как перегрузка; модель недоступна — следующая попытка', async () => {
+  const cfg: CascadeConfig = { ...baseConfig(), policies: { ...baseConfig().policies, executionMode: 'provider' } };
+  const store = new Map<string, StoredThreadState>();
+  const base = {
+    loadConfig: async () => cfg, accounts: () => ACCOUNTS, refreshLimits: async () => {}, observeLimit: () => {},
+    threadInfo: async () => ({ projectId: 'p', hostId: TRU, parentThreadId: null, providerId: 'subscriptions-cascade', isolatedWorkspace: true }),
+    load: async (id: string) => store.get(id), save: async (id: string, s: StoredThreadState) => { store.set(id, s); }, now: () => T0,
+  };
+  const retired = createRouteService({ ...base, health: () => id => (id === TRU_MAX ? exhausted(null) : ok),
+    sync: { prepareTurn: async () => ({ ok: false, reason: 'error', message: 'host plugin agentcli-subscriptions-cascade generation 6af6 is retired', conflicts: [], timings: [], notices: [] }), finishTurn: sync.finishTurn } });
+  const r = await retired.routeTurn(turn);
+  assert.equal(r.action === 'refuse' && r.retryAs, 'overload');
+  assert.match(r.action === 'refuse' ? r.message : '', /обновился во время подготовки хода — ход повторится автоматически/u);
+
+  const blocked: string[] = [];
+  const models = createRouteService({ ...base, health: () => () => ok, sync, blockModel: async (h, m) => { blocked.push(`${h}|${m}`); } });
+  const first = await models.routeTurn({ ...turn, requestedModel: 'only-fable-5.2' });
+  assert.equal(stepOf(first), TRU_MAX);
+  await models.turnModelUnavailable({ threadId: 'thr_s4', stepId: TRU_MAX, modelId: first.action === 'run' ? first.modelId : null, reason: 'Fable 5.2 requires usage credits' });
+  assert.equal(blocked.length, 1, 'ячейка в таблице помечена');
+  const second = await models.routeTurn({ ...turn, requestedModel: 'only-fable-5.2' });
+  assert.equal(stepOf(second), MAC_GW, 'та же модель на следующей ступени профиля');
+});

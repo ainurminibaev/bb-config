@@ -297,7 +297,7 @@ export type WizardPlanStep = z.infer<typeof wizardPlanStepSchema>;
 
 // ---- RPC для экрана настроек ----
 
-const cellStatusSchema = z.enum(['auto', 'manual', 'unmatched', 'ambiguous', 'missing', 'no-cli', 'unknown']);
+const cellStatusSchema = z.enum(['auto', 'manual', 'unmatched', 'ambiguous', 'missing', 'no-cli', 'unknown', 'blocked']);
 export type CellStatus = z.infer<typeof cellStatusSchema>;
 
 export const stateSchema = z.object({
@@ -309,6 +309,8 @@ export const stateSchema = z.object({
     status: cellStatusSchema,
     modelId: z.string().nullable(),
     candidates: z.array(z.string()),
+    /** blocked: почему модель недоступна на аккаунте машины («requires usage credits») и до когда. */
+    reason: z.string().optional(),
   }))),
   wizard: z.array(wizardMachineStateSchema),
   /** Лимиты по ступеням (модуль мониторинга): состояние и строка для экрана. */

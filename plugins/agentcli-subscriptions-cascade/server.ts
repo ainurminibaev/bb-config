@@ -58,11 +58,18 @@ export default function plugin(bb: BbPluginApi) {
     providerId: PROVIDER_ID,
     loadConfig: async () => (await loadConfig()).config,
     setup: input => setup(input),
+    blockModel: async (hostId, modelId, reason) => {
+      modelBlocks = Object.fromEntries(Object.entries(modelBlocks).filter(([, b]) => b.until > Date.now()));
+      modelBlocks[`${hostId}|${modelId}`] = { until: Date.now() + 24 * 3_600_000, reason: reason.slice(0, 200) };
+      await bb.storage.kv.set(MODEL_BLOCKS_KEY, modelBlocks);
+    },
     saveConfig: async config => { await settings.experimental_set({ config: JSON.stringify(normalizeConfig(config), null, 2) }); },
     accounts: () => accounts,
     ensureDiscovered: () => discover(false),
     health: (config, threadId) => quotaLookupFor(config, threadId, (id, modelId) => {
       const step = config.steps.find(s => s.id === id);
+      const blocked = step ? blockedModel(step.hostId, modelId) : null;
+      if (blocked) return { available: false, exhausted: false, unknown: false, resetsAt: null, reason: `модель недоступна: ${blocked.reason}` };
       return healthFromReading(step ? monitor.current(stageOf(step)) : undefined, modelId, { connected: step ? connected.has(step.hostId) : false, now: Date.now(), policies: config.policies });
     }),
     refreshLimits: async (config, steps) => { await Promise.all(steps.map(s => monitor.refresh(stageOf(s), config.policies.preTurnBudgetMs).catch(() => undefined))); },
@@ -71,6 +78,15 @@ export default function plugin(bb: BbPluginApi) {
   });
   // Схема каскада в метке ступени — тот же движок и состояние треда, что у исполнителя.
   timeline.provideScheme(threadId => executor.scheme(threadId));
+
+  // Модели, недоступные на аккаунте машины (ответ CLI в ходе): `hostId|modelId` → до когда и почему.
+  const MODEL_BLOCKS_KEY = 'model-blocks';
+  let modelBlocks: Record<string, { until: number; reason: string }> = {};
+  void bb.storage.kv.get<typeof modelBlocks>(MODEL_BLOCKS_KEY).then(v => { if (v) modelBlocks = v; }).catch(() => undefined);
+  const blockedModel = (hostId: string, modelId: string | null) => {
+    const b = modelId ? modelBlocks[`${hostId}|${modelId}`] : undefined;
+    return b && b.until > Date.now() ? b : null;
+  };
 
   let accounts: DiscoveredAccount[] = [];
   let hosts: CascadeState['hosts'] = [];
@@ -172,8 +188,11 @@ export default function plugin(bb: BbPluginApi) {
     else if (seeded) issues.push('Показан каскад по умолчанию; он ещё не сохранён.');
     const cells: CascadeState['cells'] = {};
     for (const row of config.models) {
-      cells[row.key] = Object.fromEntries(config.machines.map(m => [m.hostId,
-        resolveCell(row, m.hostId, accounts.find(a => a.hostId === m.hostId && a.providerId === row.providerId))]));
+      cells[row.key] = Object.fromEntries(config.machines.map(m => {
+        const cell = resolveCell(row, m.hostId, accounts.find(a => a.hostId === m.hostId && a.providerId === row.providerId));
+        const blocked = blockedModel(m.hostId, cell.modelId);
+        return [m.hostId, blocked ? { ...cell, status: 'blocked' as const, reason: `${blocked.reason} (до ${new Date(blocked.until).toISOString().slice(0, 16).replace('T', ' ')} UTC)` } : cell];
+      }));
     }
     for (const step of config.steps) {
       const account = accounts.find(a => a.hostId === step.hostId && a.providerId === step.providerId);

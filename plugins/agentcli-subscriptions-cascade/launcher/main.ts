@@ -22,7 +22,7 @@ import { claudeSessionInfo, claudeSessionPath, flagValue, remoteArgs, remoteEnv,
 import { spawn } from 'node:child_process';
 import { resolveRealExecutable, runLocal } from './local.ts';
 import { RemoteRunError, runRemote } from './remote.ts';
-import { lineSink, runSessionRelay, type StageChild } from './session-relay.ts';
+import { lineSink, runSessionRelay, syntheticRefusal, type StageChild } from './session-relay.ts';
 import { httpTerminalApi } from './terminal-api.ts';
 
 export const LAUNCHER_ENV = {
@@ -209,6 +209,15 @@ function realCommand(io: LauncherIo, provider: NativeProvider): string | null {
 
 /** Сервер каскада не ответил: отказ с понятной строкой в ленте, без запуска CLI. */
 async function refuseServerDown(io: LauncherIo, threadId: string, error: unknown): Promise<number> {
+  const text = error instanceof Error ? error.message : String(error);
+  if (/generation \S+ is retired|stale API handle|was reloaded or disabled/iu.test(text)) {
+    // Плагин переустановлен: штатный автоповтор (как перегрузка) уже на новой версии.
+    const message = 'Плагин «Каскад подписок» обновился — ход повторится автоматически на новой версии.';
+    logLine(io, `refuse (overload, плагин обновился): ${text}`);
+    await sendFeed(io, threadId, [{ kind: 'problem', message }]);
+    for (const line of syntheticRefusal('overload', message, claudeSessionInfo(io.argv).sessionId, io.now())) io.stdout.write(`${line}\n`);
+    return 0;
+  }
   const message = serverDownMessage(error);
   logLine(io, `refuse: ${message}`);
   await sendFeed(io, threadId, [{ kind: 'problem', message: message.slice(0, 300), note: 'Что сделать: повторите ход · проверьте плагин: bb plugin list' }]);
@@ -251,7 +260,20 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
     return refuseServerDown(io, threadId, error);
   }
   await sendFeed(io, threadId, route.notes);
-  if (route.action === 'refuse') {
+  let pendingRefusal: { kind: 'limit' | 'overload'; message: string } | null = null;
+  if (route.action === 'refuse' && route.retryAs) {
+    logLine(io, `refuse (${route.retryAs}, автоповтор): ${route.message}`);
+    const sid = claudeSessionInfo(args).sessionId;
+    if (flagValue(args, '--input-format') === 'stream-json' && sid && !probe) {
+      // Сессия stream-json: CLI машины моста только отвечает на начало сессии; первое
+      // сообщение получает отказ в штатной форме, следующие идут по каскаду.
+      pendingRefusal = { kind: route.retryAs, message: route.message };
+      route = { action: 'run', stepId: '', hostId: '', providerId: provider, modelId: null, local: true, cwd: null, env: {}, stage: { machine: 'каскад' }, notes: [] };
+    } else {
+      for (const line of syntheticRefusal(route.retryAs, route.message, sid, io.now())) io.stdout.write(`${line}\n`);
+      return 0;
+    }
+  } else if (route.action === 'refuse') {
     logLine(io, `refuse: ${route.message}`);
     io.stderr.write(`${route.message}\n`);
     return route.retryable ? 75 : 1;
@@ -274,7 +296,9 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
       routeTurn: () => routeWithConfirm(io, threadId, { provider, requestedModel, probe: false }),
       // Лимит в ходе — отметка до ответа мосту: provider-retry сразу увидит свободную ступень.
       markLimits: async (r, limits) => { await callServer(io, 'turnLimits', { threadId, stepId: r.stepId, limits: limits.slice(-20) }, 10_000); },
+      markModelUnavailable: async (r, reason) => { await callServer(io, 'turnModelUnavailable', { threadId, stepId: r.stepId, modelId: r.modelId, reason }, 10_000); },
       finishTurn: async (r, info) => {
+        if (!r.stepId) return; // CLI начала сессии: хода не было
         const finish = await callServer<{ notes: RouteNote[] }>(io, 'finishTurn', { ...finishInfo(r), ...info, limits: info.limits.slice(-20) }, 120_000);
         await sendFeed(io, threadId, finish.notes);
       },
@@ -285,7 +309,7 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
       stderr: io.stderr,
       now: io.now,
       log: line => logLine(io, line),
-    });
+    }, { pendingRefusal });
   }
 
   const startedAt = io.now();

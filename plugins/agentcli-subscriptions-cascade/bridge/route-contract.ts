@@ -104,6 +104,13 @@ export const routeTurnOutputSchema = z.discriminatedUnion('action', [
     message: z.string(),
     /** Повторить ход позже имеет смысл (ожидание сброса, машина офлайн). */
     retryable: z.boolean().default(false),
+    /**
+     * Как отдать отказ штатному мосту, чтобы сработал штатный автоповтор BB
+     * (provider-retry): `limit` — как лимит (повтор после ответа доступности
+     * каскада, ход пойдёт на другую ступень/провайдера); `overload` — как
+     * перегрузка (повтор через секунды, без смены ступени: плагин обновился).
+     */
+    retryAs: z.enum(['limit', 'overload']).optional(),
     notes: z.array(routeNoteSchema).default([]),
   }),
   z.object({
@@ -222,6 +229,11 @@ export const executorRpcContract = defineRpcContract({
   routeTurn: { input: routeTurnInputSchema, output: routeTurnOutputSchema },
   finishTurn: { input: finishTurnInputSchema, output: z.object({ notes: z.array(routeNoteSchema) }) },
   threadStatus: { input: z.object({ threadId: z.string().min(1) }), output: threadStatusSchema },
+  /** Модель недоступна на аккаунте ступени («requires usage credits»): попытка ступень × модель снимается. */
+  turnModelUnavailable: {
+    input: z.object({ threadId: z.string().min(1), stepId: z.string(), modelId: z.string().nullable(), reason: z.string().max(300) }),
+    output: z.object({ ok: z.boolean() }),
+  },
   /** Лимит, полученный в ходе (rate_limit_event rejected): ступень сразу помечается исчерпанной. */
   turnLimits: {
     input: z.object({ threadId: z.string().min(1), stepId: z.string(), limits: z.array(limitObservationSchema).max(50) }),

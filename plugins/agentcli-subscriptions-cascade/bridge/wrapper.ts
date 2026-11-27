@@ -150,7 +150,16 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
   let feedServer: Server | null = null;
   let feedPath: string | null = null;
   let internalId = 0;
-  const server: ServerPort = options.server ?? httpServerPort(process.env, () => context?.pluginId ?? 'agentcli-subscriptions-cascade');
+  // Адрес сервера BB: у процесса моста BB_SERVER_URL может не быть — берём его из
+  // envVars запросов runtime (model/list, thread/*, turn/*). Без него peekProvider
+  // падал молча, и ход Codex уходил в мост Claude (петля S3 на 0.2.0).
+  const serverEnv: NodeJS.ProcessEnv = { ...process.env };
+  const server: ServerPort = options.server ?? httpServerPort(serverEnv, () => context?.pluginId ?? 'agentcli-subscriptions-cascade');
+  const learnServerUrl = (params: Json) => {
+    for (const vars of [rec(params.envVars), rec(rec(params.options).envVars)]) {
+      if (typeof vars.BB_SERVER_URL === 'string' && vars.BB_SERVER_URL) { serverEnv.BB_SERVER_URL = vars.BB_SERVER_URL; return; }
+    }
+  };
 
   const send = (message: unknown) => rawWrite(`${JSON.stringify(message)}\n`);
   const reply = (id: unknown, result: unknown) => send({ jsonrpc: '2.0', id, result });
@@ -572,6 +581,7 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
   async function handleOne(line: string): Promise<void> {
     let message: Json;
     try { message = JSON.parse(line) as Json; } catch { inners.get('claude-code')?.loaded.entry.handleLine(line); return; }
+    learnServerUrl(rec(message.params));
     const method = typeof message.method === 'string' ? message.method : null;
     const id = message.id;
     if (method === null) {

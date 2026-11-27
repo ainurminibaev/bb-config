@@ -43,11 +43,12 @@ export interface SettingsViewProps {
 const PROVIDER_LABELS: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', 'gemini-cli': 'Gemini CLI' };
 const providerLabel = (id: string) => PROVIDER_LABELS[id] ?? id;
 const PROBLEM_CELL: Partial<Record<CellStatus, string>> = {
-  unmatched: 'не найдено', ambiguous: 'несколько вариантов', missing: 'нет в каталоге',
+  unmatched: 'не найдено', ambiguous: 'несколько вариантов', missing: 'нет в каталоге', blocked: 'недоступна на аккаунте',
 };
 const CELL_TITLE: Record<CellStatus, string> = {
   auto: 'сопоставлено автоматически', manual: 'указано вручную', unmatched: 'не найдено — укажите ID',
   ambiguous: 'несколько вариантов — выберите', missing: 'ID нет в каталоге машины', 'no-cli': 'на машине нет этого CLI', unknown: 'каталог ещё не получен',
+  blocked: 'модель недоступна на аккаунте машины — ход идёт на следующую ступень',
 };
 const WIZARD_LABELS: Record<string, string> = { probe: 'Машина', folder: 'Папка', mutagen: 'Mutagen', ssh: 'SSH до опоры', verify: 'Проверка' };
 const RESET_CONFIRM = 'Настроить с нуля: снять сессии Mutagen каскада, убрать выданные каскадом ключи из authorized_keys опоры и сбросить шаги мастера. Файлы проектов и общий путь не трогаются. Продолжить?';
@@ -368,7 +369,7 @@ function ModelTable({ draft, state, onChange }: { draft: CascadeConfig; state: C
                 const listId = `asc-${row.key}-${m.hostId}`;
                 const problem = PROBLEM_CELL[cell.status];
                 return (
-                  <td key={m.hostId} className={`asc-cell ${problem ? 'asc-cell-problem' : ''} ${cell.status === 'no-cli' ? 'asc-off' : ''}`} title={CELL_TITLE[cell.status]}>
+                  <td key={m.hostId} className={`asc-cell ${problem ? 'asc-cell-problem' : ''} ${cell.status === 'no-cli' ? 'asc-off' : ''}`} title={cell.status === 'blocked' && 'reason' in cell && cell.reason ? `${CELL_TITLE.blocked}: ${cell.reason}` : CELL_TITLE[cell.status]}>
                     <input list={listId} className="asc-mono" aria-label={`ID ${row.displayName} на ${m.label}`} value={value}
                       placeholder={cell.status === 'no-cli' ? '—' : 'ID модели'} disabled={cell.status === 'no-cli'}
                       onChange={e => {

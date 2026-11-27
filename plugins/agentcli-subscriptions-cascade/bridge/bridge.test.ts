@@ -366,7 +366,7 @@ test('сводка для другого провайдера: справка, �
   assert.doesNotMatch(historyHint('t'), /Ключевые/u);
 });
 
-test('маршрут: следующая ступень другого провайдера — понятный отказ, ступень не меняется', async () => {
+test('маршрут: следующая ступень другого провайдера в ходе Claude — отказ с автоповтором как лимит, ступень не меняется', async () => {
   const all = { [TRU_MAX]: exhausted(null), [MAC_GW]: exhausted(null), [UA_PRO]: exhausted(null) };
   const fx = routeFixture({ health: all });
   const c = cfg();
@@ -379,7 +379,7 @@ test('маршрут: следующая ступень другого пров�
   });
   const r = await routes.routeTurn(turn);
   assert.equal(r.action, 'refuse');
-  if (r.action === 'refuse') assert.match(r.message, /переход между провайдерами/u);
+  if (r.action === 'refuse') { assert.match(r.message, /ход повторится автоматически уже на Codex/u); assert.equal(r.retryAs, 'limit'); }
   void fx;
 });
 
@@ -540,4 +540,21 @@ test('S13: тестовый переключатель — мост «несов
   const err = out.find(m => m.id === 2)!.error as { message: string; data: { recovery: { kind: string } } };
   assert.match(err.message, /каскад его не распознал и выключен/u);
   assert.equal(err.data.recovery.kind, 'restartRecommended');
+});
+
+test('мост: адрес сервера BB берётся из envVars запросов runtime (у процесса моста его может не быть)', async () => {
+  const seen: string[] = [];
+  const saved = process.env.BB_SERVER_URL;
+  delete process.env.BB_SERVER_URL;
+  try {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string) => { seen.push(String(url)); return new Response(JSON.stringify({ ok: true, result: { sessions: null } }), { status: 200 }); }) as typeof fetch;
+    try {
+      const bridge = createCascadeBridge({ providerId: 'subscriptions-cascade', ownArtifactUrl: pathToFileURL('/x/a/b/host.mjs').href, loadDeps: { cacheRoot: '/nowhere', importModule: async () => { throw new Error('нет'); } }, write: () => {} });
+      bridge.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'model/list', params: { envVars: { BB_SERVER_URL: 'http://127.0.0.1:4999' } } }));
+      bridge.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'thread/resume', params: { threadId: 'thr_x', providerThreadId: 'p1', cwd: '/' } }));
+      await bridge.close();
+    } finally { globalThis.fetch = realFetch; }
+  } finally { if (saved !== undefined) process.env.BB_SERVER_URL = saved; }
+  assert.ok(seen.some(u => u.startsWith('http://127.0.0.1:4999/api/v1/plugins/')), seen.join(', '));
 });

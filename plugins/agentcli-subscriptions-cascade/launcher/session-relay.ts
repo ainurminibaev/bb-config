@@ -30,6 +30,8 @@ export interface RelayPorts {
   sessionExists?(route: Extract<RoutedTurn, { action: 'run' }>): boolean;
   /** Лимит исчерпан в ходе: отметить ступень до того, как мост увидит конец хода. */
   markLimits?(route: Extract<RoutedTurn, { action: 'run' }>, limits: LimitObservation[]): Promise<void>;
+  /** Модель недоступна на аккаунте ступени: снять попытку до того, как мост увидит конец хода. */
+  markModelUnavailable?(route: Extract<RoutedTurn, { action: 'run' }>, reason: string): Promise<void>;
   finishTurn(route: Extract<RoutedTurn, { action: 'run' }>, info: { exitCode: number | null; limits: LimitObservation[]; transportError: string | null; durationMs: number }): Promise<void>;
   feed(notes: readonly RouteNote[]): Promise<void>;
   limitFromLine(line: string): LimitObservation | null;
@@ -67,8 +69,27 @@ function requestIdOf(message: Record<string, unknown>): string | null {
   return typeof response?.request_id === 'string' ? response.request_id : null;
 }
 
-export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessionId: string, ports: RelayPorts): Promise<number> {
+/**
+ * Отказ каскада в форме штатного вывода Claude Code, чтобы сработал штатный
+ * автоповтор BB (provider-retry): `limit` — событие лимита и result с 429
+ * (provider-retry спросит доступность каскада и повторит ход на другой
+ * ступени/провайдере); `overload` — result с 529 (повтор через секунды).
+ */
+export function syntheticRefusal(kind: 'limit' | 'overload', message: string, sessionId: string | null, now: number): string[] {
+  const base = { type: 'result', subtype: 'error_during_execution', is_error: true, result: message, errors: [message], duration_ms: 0, num_turns: 0, ...(sessionId ? { session_id: sessionId } : {}) };
+  if (kind === 'overload') return [JSON.stringify({ ...base, api_error_status: 529 })];
+  return [
+    JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: Math.round(now / 1000) + 60, rateLimitType: 'five_hour' }, ...(sessionId ? { session_id: sessionId } : {}) }),
+    JSON.stringify({ ...base, api_error_status: 429 }),
+  ];
+}
+
+/** Ошибка «модель недоступна на этом аккаунте или тарифе» в result Claude Code. */
+export const MODEL_UNAVAILABLE = /requires (?:usage )?credits|not available (?:on|for) (?:your|this) (?:plan|account|subscription)|(?:do(?:es)? not|don't) have access to (?:the )?(?:model|claude|fable|opus|sonnet)|model[^.]{0,40}(?:not found|not supported|is not available|unavailable)|model_not_found|invalid model/iu;
+
+export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessionId: string, ports: RelayPorts, options: { pendingRefusal?: { kind: 'limit' | 'overload'; message: string } | null } = {}): Promise<number> {
   let route = first;
+  let pendingRefusal = options.pendingRefusal ?? null;
   const preamble: string[] = [];
   const swallow = new Set<string>();
   let sawUser = false;
@@ -89,7 +110,15 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
     }
     const limit = ports.limitFromLine(line);
     if (limit) limits.push(limit);
-    if (message?.type === 'result' && turnActive && ports.markLimits && limits.some(l => l.status === 'rejected')) {
+    // Модель недоступна на аккаунте ступени: попытка снимается, ход уходит мосту как лимит —
+    // provider-retry повторит его на следующей попытке профиля.
+    if (message?.type === 'result' && turnActive && message.is_error === true && ports.markModelUnavailable && MODEL_UNAVAILABLE.test(JSON.stringify(message.result ?? message.errors ?? ''))) {
+      const reason = String(message.result ?? '').slice(0, 200) || 'модель недоступна на этом аккаунте';
+      const mark = ports.markModelUnavailable(route, reason);
+      const timeout = new Promise<void>(resolve => { const t = setTimeout(resolve, 10_000); (t as { unref?: () => void }).unref?.(); });
+      const lines = syntheticRefusal('limit', `Модель недоступна на ${route.stage.machine}: ${reason} — ход повторится на следующей ступени.`, typeof message.session_id === 'string' ? message.session_id : null, ports.now());
+      out = out.then(() => Promise.race([mark.catch(error => ports.log(`markModelUnavailable: ${String(error)}`)), timeout])).then(() => { for (const l of lines) ports.stdout.write(`${l}\n`); });
+    } else if (message?.type === 'result' && turnActive && ports.markLimits && limits.some(l => l.status === 'rejected')) {
       const mark = ports.markLimits(route, [...limits]);
       const timeout = new Promise<void>(resolve => { const t = setTimeout(resolve, 10_000); (t as { unref?: () => void }).unref?.(); });
       out = out.then(() => Promise.race([mark.catch(error => ports.log(`markLimits: ${String(error)}`)), timeout])).then(() => { ports.stdout.write(`${line}\n`); });
@@ -144,6 +173,14 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
     const message = parse(line);
     const isUser = message?.type === 'user';
     if (!sawUser && !isUser) { preamble.push(line); child.write(line); continue; }
+    if (isUser && !turnActive && pendingRefusal) {
+      // Первое сообщение: каскад уже ответил отказом с автоповтором (процесс CLI здесь — только для начала сессии).
+      const lines = syntheticRefusal(pendingRefusal.kind, pendingRefusal.message, sessionId, ports.now());
+      pendingRefusal = null;
+      sawUser = true;
+      out = out.then(() => { for (const l of lines) ports.stdout.write(`${l}\n`); });
+      continue;
+    }
     if (isUser && !turnActive) {
       if (sawUser) {
         // Новый ход: решение каскада. Пока решаем — следующие строки ждут.
@@ -156,6 +193,12 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
           next = { action: 'refuse', retryable: true, message, notes: [{ kind: 'problem', message: message.slice(0, 300) }] };
         }
         await ports.feed(next.notes);
+        if (next.action === 'refuse' && next.retryAs) {
+          // Штатный автоповтор: ответ мосту на это сообщение без запуска хода, сессия живёт.
+          const lines = syntheticRefusal(next.retryAs, next.message, sessionId, ports.now());
+          out = out.then(() => { for (const l of lines) ports.stdout.write(`${l}\n`); });
+          continue;
+        }
         if (next.action === 'refuse') {
           ports.stderr.write(`${next.message}\n`);
           child.end();

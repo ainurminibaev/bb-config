@@ -22,6 +22,8 @@ import { createRouteService, type RouteDeps, type RouteService, type StoredThrea
 export interface ExecutorDeps {
   providerId: string;
   loadConfig(): Promise<CascadeConfig>;
+  /** Пометить модель недоступной на аккаунте машины (видно в таблице моделей). */
+  blockModel?(hostId: string, modelId: string, reason: string): Promise<void>;
   /** Мастер «Настроить» на сервере (CLI setup, ленивая настройка при ходе). */
   setup?(input: { hostIds?: string[]; dryRun?: boolean; recheck?: boolean; reset?: boolean; allowSsh?: string[] }): Promise<{ wizard: WizardMachineState[]; notes: string[] }>;
   /** Записать конфигурацию (тестовая квота треда из CLI/RPC). */
@@ -193,6 +195,7 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
       await bb.storage.kv.set(STATE_KEY(threadId), state);
     },
     sync: deps.sync,
+    blockModel: deps.blockModel,
     ensureMachine: deps.setup ? async hostId => {
       const result = await deps.setup!({ hostIds: [hostId] });
       const state = result.wizard.find(w => w.hostId === hostId);
@@ -234,6 +237,7 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     threadStatus: ({ threadId }) => routes.threadStatus(threadId),
     turnProgress: async ({ threadId }) => ({ note: routes.turnProgress(threadId) }),
     turnLimits: input => routes.turnLimits(input),
+    turnModelUnavailable: input => routes.turnModelUnavailable(input),
     answerConfirmation: input => routes.answerConfirmation(input),
     peekProvider: input => routes.peekProvider(input),
     handoffBrief: input => routes.handoffBrief(input),
