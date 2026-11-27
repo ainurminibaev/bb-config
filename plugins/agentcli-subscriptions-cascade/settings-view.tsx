@@ -19,7 +19,7 @@ export interface SettingsActions {
   save(): void;
   refresh(): void;
   adopt(): void;
-  runWizard(dryRun: boolean): void;
+  runWizard(dryRun: boolean, mode?: { hostIds?: string[]; recheck?: boolean; reset?: boolean; allowSsh?: string[] }): void;
   showPlan(hostId: string): void;
 }
 
@@ -49,7 +49,8 @@ const CELL_TITLE: Record<CellStatus, string> = {
   auto: 'сопоставлено автоматически', manual: 'указано вручную', unmatched: 'не найдено — укажите ID',
   ambiguous: 'несколько вариантов — выберите', missing: 'ID нет в каталоге машины', 'no-cli': 'на машине нет этого CLI', unknown: 'каталог ещё не получен',
 };
-const WIZARD_LABELS: Record<string, string> = { probe: 'Машина', folder: 'Папка', mutagen: 'Mutagen', verify: 'Проверка' };
+const WIZARD_LABELS: Record<string, string> = { probe: 'Машина', folder: 'Папка', mutagen: 'Mutagen', ssh: 'SSH до опоры', verify: 'Проверка' };
+const RESET_CONFIRM = 'Настроить с нуля: снять сессии Mutagen каскада, убрать выданные каскадом ключи из authorized_keys опоры и сбросить шаги мастера. Файлы проектов и общий путь не трогаются. Продолжить?';
 
 export function SettingsView({ state, draft, dirty, busy, plans, actions, now, initialInfo, initialProfile, initialSections }: SettingsViewProps) {
   const [open, setOpen] = useState<ReadonlySet<SectionId>>(new Set(initialSections ?? []));
@@ -105,6 +106,11 @@ export function SettingsView({ state, draft, dirty, busy, plans, actions, now, i
             setReordering(!reordering);
             if (!reordering) requestAnimationFrame(() => (document.querySelector('[data-grip^="step:"]') as HTMLElement | null)?.focus());
           }}>{reordering ? 'Готово' : 'Изменить порядок'}</button>
+          {/* Вход в мастер из шапки экрана: раскрывает «Машины» и продолжает настройку. */}
+          <button type="button" className="asc-btn asc-primary" disabled={busy !== null || draft.machines.every(m => !m.enabled)} onClick={() => {
+            if (!open.has('machines')) toggle('machines');
+            actions.runWizard(false);
+          }}>Настроить</button>
         </div>
       </section>
 
@@ -244,13 +250,18 @@ function Machines({ state, draft, busy, plans, actions, set }: {
         {draft.machines.map((m, index) => (
           <MachineRow key={m.hostId} machine={m} host={state.hosts.find(h => h.hostId === m.hostId)} wizard={state.wizard.find(w => w.hostId === m.hostId)}
             onChange={next => set({ machines: draft.machines.map((x, i) => i === index ? next : next.anchor && x.anchor ? { ...x, anchor: false } : x) })}
-            onPlan={() => actions.showPlan(m.hostId)} plan={plans[m.hostId]} />
+            onPlan={() => actions.showPlan(m.hostId)} plan={plans[m.hostId]} busy={busy !== null}
+            onRun={mode => actions.runWizard(false, { hostIds: [m.hostId], ...mode })} />
         ))}
       </ul>
       <div className="asc-row">
-        <button type="button" className="asc-btn asc-primary" disabled={busy !== null || draft.machines.every(m => !m.enabled)} onClick={() => actions.runWizard(false)}>Настроить машины</button>
-        <button type="button" className="asc-btn" disabled={busy !== null} onClick={() => actions.runWizard(true)}>Предпросмотр шагов</button>
-        <Hint>Папка, Mutagen, проверка — по очереди. Повторный запуск продолжает с места остановки. На Mac права спросит системное окно.</Hint>
+        <button type="button" className="asc-btn asc-primary" disabled={busy !== null || draft.machines.every(m => !m.enabled)} onClick={() => actions.runWizard(false)}>
+          {state.wizard.some(w => Object.values(w.steps).some(st => st.status !== 'done' && st.status !== 'skipped')) ? 'Продолжить настройку' : 'Настроить машины'}
+        </button>
+        <button type="button" className="asc-btn" disabled={busy !== null} onClick={() => actions.runWizard(false, { recheck: true })}>Перепроверить всё</button>
+        <button type="button" className="asc-btn asc-btn-quiet" disabled={busy !== null} onClick={() => { if (window.confirm(RESET_CONFIRM)) actions.runWizard(false, { reset: true }); }}>Настроить с нуля</button>
+        <button type="button" className="asc-btn asc-btn-quiet" disabled={busy !== null} onClick={() => actions.runWizard(true)}>Предпросмотр шагов</button>
+        <Hint>Папка, Mutagen, SSH до опоры, проверка — по очереди. Мастер идёт на сервере: можно закрыть экран, повтор продолжит с места остановки. Тот же мастер — `bb subscriptions-cascade setup`.</Hint>
       </div>
       <div className="asc-row">
         <button type="button" className="asc-btn asc-btn-quiet" disabled={busy !== null} onClick={actions.refresh}>Обновить обнаружение</button>
@@ -260,9 +271,10 @@ function Machines({ state, draft, busy, plans, actions, set }: {
   );
 }
 
-function MachineRow({ machine, host, wizard, onChange, onPlan, plan }: {
+function MachineRow({ machine, host, wizard, onChange, onPlan, plan, busy, onRun }: {
   machine: Machine; host: CascadeState['hosts'][number] | undefined; wizard: CascadeState['wizard'][number] | undefined;
   onChange(next: Machine): void; onPlan(): void; plan: WizardPlanStep[] | undefined;
+  busy: boolean; onRun(mode: { recheck?: boolean; reset?: boolean; allowSsh?: string[] }): void;
 }) {
   const platform = host?.platform && host.platform !== 'unknown' ? host.platform : machine.platform;
   const done = WIZARD_IDS.filter(id => ['done', 'skipped'].includes(wizard?.steps[id]?.status ?? '')).length;
@@ -280,9 +292,31 @@ function MachineRow({ machine, host, wizard, onChange, onPlan, plan }: {
         </label>
         <button type="button" className={`asc-link ${failed ? 'asc-warn-text' : ''}`} aria-expanded={!!plan} onClick={onPlan}
           title={WIZARD_IDS.map(id => `${WIZARD_LABELS[id]}: ${wizard?.steps[id]?.status ?? 'pending'}`).join(', ')}>
-          {failed ? `${WIZARD_LABELS[failed]}: нужна помощь` : `настроено ${done}/4`}
+          {failed ? `${WIZARD_LABELS[failed]}: нужна помощь` : `настроено ${done}/${WIZARD_IDS.length}`}
         </button>
       </div>
+      {wizard?.pendingConsent && (
+        <div className="asc-plan">
+          <p className="asc-warn-text asc-small-text">{wizard.pendingConsent.text}</p>
+          <code className="asc-small-text">{wizard.pendingConsent.publicKey}</code>
+          <div className="asc-row">
+            <button type="button" className="asc-btn asc-primary" disabled={busy} onClick={() => onRun({ allowSsh: [machine.hostId] })}>Разрешить вход по ключу</button>
+          </div>
+        </div>
+      )}
+      <div className="asc-row asc-small-text">
+        <button type="button" className="asc-link" disabled={busy} onClick={() => onRun({})}>Продолжить</button>
+        <button type="button" className="asc-link" disabled={busy} onClick={() => onRun({ recheck: true })}>Перепроверить</button>
+        <button type="button" className="asc-link" disabled={busy} onClick={() => { if (window.confirm(RESET_CONFIRM)) onRun({ reset: true }); }}>С нуля</button>
+      </div>
+      {machine.anchor && (
+        <label className="asc-line asc-small-text">
+          <span className="asc-muted">Адрес для SSH</span>
+          <input className="asc-inline-input asc-mono" aria-label={`Адрес ${machine.label} для SSH с других машин`} placeholder="IP или имя"
+            value={machine.sshAddress ?? ''} onChange={e => onChange({ ...machine, sshAddress: e.target.value.trim() === '' ? null : e.target.value.trim() })} />
+          <Hint>Мастер пропишет на других машинах алиас bb-опора с этим адресом.</Hint>
+        </label>
+      )}
       {!machine.anchor && (
         <label className="asc-line asc-small-text">
           <span className="asc-muted">SSH к опоре</span>

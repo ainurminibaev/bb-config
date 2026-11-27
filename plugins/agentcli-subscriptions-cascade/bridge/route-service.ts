@@ -82,6 +82,11 @@ export interface RouteDeps {
   /** Повторы шага подготовки при сбое (обрыв SSH, ошибка Mutagen). По умолчанию 2, пауза 5 с. */
   prepRetries?: number;
   prepRetryPauseMs?: number;
+  /**
+   * Ленивая настройка машины ступени при первом ходе (мастер без шагов, требующих
+   * согласия). consent — текст разрешения, если без него не обойтись.
+   */
+  ensureMachine?(hostId: string): Promise<{ ok: boolean; message: string; consent: string | null }>;
   /** Постоянные правила «навсегда» проекта (карточка подтверждения). Нет порта — правил нет. */
   projectConsents?(projectId: string): Promise<Consent[]>;
   saveProjectConsents?(projectId: string, consents: Consent[]): Promise<void>;
@@ -90,7 +95,7 @@ export interface RouteDeps {
 }
 
 /** Что сделать владельцу, если ход не начался (рядом со строкой отказа). */
-export const REFUSAL_ACTIONS = 'Что сделать: повторите ход · пропустить ступень — выключите её в настройках «Каскада» · настройки: Настройки → Плагины → «Каскад подписок»';
+export const REFUSAL_ACTIONS = 'Что сделать: повторите ход · пропустить ступень — выключите её в настройках «Каскада» · Настроить: Настройки → Плагины → «Каскад подписок» → «Настроить» или bb subscriptions-cascade setup';
 
 /** «Ход не запущен: Каскад подписок → <источник>: <причина>». */
 export function refusalText(source: string, reason: string): string {
@@ -385,6 +390,7 @@ export function createRouteService(deps: RouteDeps): RouteService {
           const message = refusalText('синхронизация', `рабочая папка треда не определена — ${unknownWorkspace}. Чужую папку ход не трогает.`);
           return { action: 'refuse', retryable: false, message, notes: [...notes, { kind: 'problem', message: message.slice(0, 300), stage: to, stepId: decision.stepId, note: REFUSAL_ACTIONS }] };
         }
+        let consentNeeded: { machine: string; hostId: string; text: string } | null = null;
         // Строка подготовки в ленте: запускатель опрашивает turnProgress, пока ждёт решения.
         prep.begin(input.threadId, { reason: switchReason, from: fromStage, to, stepId: decision.stepId });
         const prepareOnce = () => deps.sync!.prepareTurn({ threadId: input.threadId, projectId, workspace }, { hostId: decision.hostId }, event => prep.event(input.threadId, event)).catch(error => ({
@@ -404,6 +410,16 @@ export function createRouteService(deps: RouteDeps): RouteService {
           return result;
         };
         let outcome: SyncOutcome = await prepare();
+        // Машина не настроена (нет SSH, Mutagen, папки) — недостающие шаги мастера сейчас, затем ещё раз.
+        if (!outcome.ok && (outcome.reason === 'not-configured' || outcome.reason === 'error') && deps.ensureMachine) {
+          prep.attempt(input.threadId, `настройка ${to.machine}: мастер`);
+          const ensured = await deps.ensureMachine(decision.hostId).catch((error: unknown) => ({ ok: false, message: String(error), consent: null as string | null }));
+          if (ensured.ok) outcome = await prepare();
+          else if (ensured.consent) {
+            outcome = { ok: false, reason: 'not-configured', message: `Нужно разрешение: ${ensured.consent}`, conflicts: [], timings: [], notices: [] };
+            consentNeeded = { machine: to.machine, hostId: decision.hostId, text: ensured.consent };
+          } else outcome = { ...outcome, message: `${outcome.message} · мастер: ${ensured.message}`.slice(0, 600) };
+        }
         // Папку пишет другой живой тред: ждём его конца с таймаутом, а не роняем ход.
         const waitStarted = deps.now();
         const busyWaitMs = deps.busyWaitMs ?? 10 * 60_000;
@@ -424,13 +440,15 @@ export function createRouteService(deps: RouteDeps): RouteService {
           // Подготовка на этой ступени не удалась и не из-за конфликта файлов:
           // ступень пропускается в этом ходе, берётся следующая разрешённая (сколько ни есть).
           if (FALLBACK_REASONS.has(outcome.reason) && skipped.length < config.steps.length) {
-            const skipNote: RouteNote = { kind: 'problem', message: `${to.machine}: подготовка не удалась (${outcome.message.slice(0, 200)}) — ступень пропущена, беру следующую`.slice(0, 300), stage: to, stepId: decision.stepId };
+            const skipNote: RouteNote = consentNeeded
+              ? { kind: 'problem', message: `Нужно разрешение для ${consentNeeded.machine} — ступень пропущена в этом ходе`, stage: to, stepId: decision.stepId, note: `${consentNeeded.text} Разрешить: Настройки → «Каскад подписок» → Машины → «Настроить» или bb subscriptions-cascade setup --machine ${consentNeeded.machine} --allow-ssh`.slice(0, 300) }
+              : { kind: 'problem', message: `${to.machine}: подготовка не удалась (${outcome.message.slice(0, 200)}) — ступень пропущена, беру следующую`.slice(0, 300), stage: to, stepId: decision.stepId };
             prep.attempt(input.threadId, `${to.machine} пропущена → следующая ступень`);
             const next = await routeOnce(input, [...skipped, decision.stepId]);
             if (next.action === 'run') return { ...next, notes: [...notes, skipNote, ...next.notes] };
           }
           const message = refusalText(`синхронизация ${to.machine}`, outcome.message);
-          notes.push({ kind: 'problem', message: message.slice(0, 300), stage: to, stepId: decision.stepId, note: REFUSAL_ACTIONS });
+          notes.push({ kind: 'problem', message: message.slice(0, 300), stage: to, stepId: decision.stepId, note: consentNeeded ? `Разрешить: bb subscriptions-cascade setup --machine ${consentNeeded.machine} --allow-ssh · или Настройки → «Каскад подписок» → «Настроить»` : REFUSAL_ACTIONS });
           // Ход не передан (S9): ступень и состояние треда не меняются.
           return { action: 'refuse', retryable: false, message, notes };
         }

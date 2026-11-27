@@ -15,6 +15,8 @@ export type SessionRole = 'w' | 'r';
 export type SyncModeExt = 'lazy' | 'warm' | 'off';
 
 export const MUTAGEN_LABEL = 'bbcascade';
+/** Версия Mutagen, под которую создаются сессии (= MUTAGEN_VERSION в sync/setup.ts). */
+export const MUTAGEN_SESSION_VERSION = '0.18.1';
 
 /** Права новых файлов и каталогов: без флагов Mutagen делает 0600/0700 (тест А). */
 export const DEFAULT_FILE_MODE = '0644';
@@ -66,7 +68,8 @@ export function symlinkModeFor(machines: readonly { platform: string; pathTransl
 /** Отпечаток настроек сессии: если он сменился, сессию пересоздаём. */
 export function specFingerprint(spec: Pick<SessionSpec, 'alpha' | 'beta' | 'ignores' | 'role' | 'symlinkMode'>): string {
   // Смена режима symlink меняет отпечаток: сессии прежних версий (portable) пересоздаются.
-  return hash(JSON.stringify([spec.role, spec.alpha, spec.beta, [...spec.ignores].sort(), spec.symlinkMode ?? 'posix-raw']), 10);
+  // Версия Mutagen плагина тоже в отпечатке: после обновления Mutagen сессии пересоздаются (агенты одной версии).
+  return hash(JSON.stringify([spec.role, spec.alpha, spec.beta, [...spec.ignores].sort(), spec.symlinkMode ?? 'posix-raw', MUTAGEN_SESSION_VERSION]), 10);
 }
 
 /** Аргументы `mutagen sync create` (без имени бинаря). Сессия создаётся на паузе. */

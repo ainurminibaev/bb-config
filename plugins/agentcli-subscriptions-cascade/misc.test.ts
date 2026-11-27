@@ -81,7 +81,7 @@ function deps(log: string[], failFolder = false): WizardDeps & { saved: WizardMa
       log.push(command);
       if (command.startsWith('test -d')) return { exitCode: done.has('folder') ? 0 : 1, output: '' };
       if (command.startsWith('mkdir')) { if (failFolder) return { exitCode: 1, output: 'нет места' }; done.add('folder'); return { exitCode: 0, output: '' }; }
-      if (command.startsWith('command -v mutagen')) return { exitCode: done.has('mutagen') ? 0 : 1, output: 'Mutagen 0.18.1' };
+      if (command.startsWith('for b in')) return { exitCode: done.has('mutagen') ? 0 : 1, output: '0.18.1' };
       if (command.startsWith('set -e')) { done.add('mutagen'); return { exitCode: 0, output: '' }; }
       if (command.startsWith('test -w')) return { exitCode: 0, output: '0.18.1' };
       return { exitCode: 1, output: '?' };
@@ -92,13 +92,13 @@ function deps(log: string[], failFolder = false): WizardDeps & { saved: WizardMa
   };
 }
 
-const machine: Machine = { hostId: MAC, label: 'Tru', enabled: true, platform: 'linux', sharedPath: '/opt/bbfs', pathTranslation: false, anchor: true, anchorSsh: null };
+const machine: Machine = { hostId: MAC, label: 'Tru', enabled: true, platform: 'linux', sharedPath: '/opt/bbfs', pathTranslation: false, anchor: true, anchorSsh: null, sshAddress: null };
 
 test('мастер: проходит шаги, повтор безопасен, ошибка останавливает машину', async () => {
   const log: string[] = [];
   const [state] = await runWizard([machine], new Map(), deps(log), false);
   assert.equal(nextStep(state!), null);
-  assert.deepEqual(Object.values(state!.steps).map(s => s.status), ['done', 'done', 'done', 'done']);
+  assert.deepEqual(Object.fromEntries(Object.entries(state!.steps).map(([k, v]) => [k, v.status])), { probe: 'done', folder: 'done', mutagen: 'done', ssh: 'skipped', verify: 'done' }, 'опора — SSH не нужен');
   const failed = await runWizard([machine], new Map(), deps([], true), false);
   assert.equal(failed[0]!.steps.folder!.status, 'failed');
   assert.equal(failed[0]!.steps.mutagen!.status, 'pending', 'после ошибки дальше не идёт');

@@ -12,6 +12,7 @@
 // - на опоре Linux проект подключается bind mount при каждом ходе
 //   (syncEnsureBindMount), fstab не меняется; проверяется право монтировать.
 import type { Machine, WizardPlanStep } from '../contract.ts';
+import { MUTAGEN_LABEL } from './mutagen.ts';
 
 export const MUTAGEN_VERSION = '0.18.1';
 
@@ -34,7 +35,16 @@ export function isSafeUnixPath(path: string): boolean {
 /** Найти рабочий mutagen там же, где его ищет хост-операция (PATH, ~/.local/bin, /usr/local/bin, Homebrew). */
 export const MUTAGEN_FIND = 'for b in "$(command -v mutagen 2>/dev/null)" "$HOME/.local/bin/mutagen" /usr/local/bin/mutagen /opt/homebrew/bin/mutagen; do [ -n "$b" ] && [ -x "$b" ] && "$b" version >/dev/null 2>&1 && { m="$b"; break; }; done';
 
-export const mutagenCheck = `command -v mutagen >/dev/null 2>&1 && mutagen version || { ${MUTAGEN_FIND}; [ -n "$m" ] && "$m" version; }`;
+/**
+ * Проверка Mutagen с версией плагина: та же версия — готово. Другая версия —
+ * обновить (exit 1), но только если на машине нет идущих сессий каскада: тогда
+ * обновление откладывается до следующей подготовки хода (exit 0 с пометкой).
+ */
+export function mutagenVersionCheck(version: string = MUTAGEN_VERSION, label: string = MUTAGEN_LABEL): string {
+  return `${MUTAGEN_FIND}; [ -n "$m" ] || exit 1; v=$("$m" version 2>/dev/null); [ "$v" = "${version}" ] && { echo "$v"; exit 0; }; if "$m" sync list --label-selector ${label}=1 --template '{{range .}}{{if not .Paused}}x{{end}}{{end}}' 2>/dev/null | grep -q x; then echo "Mutagen $v: обновление до ${version} отложено — идут сессии каскада"; exit 0; fi; echo "Mutagen $v → ${version}"; exit 1`;
+}
+
+export const mutagenCheck = mutagenVersionCheck();
 
 /** Скрипт установки Mutagen из архива релиза с проверкой SHA-256. prefix — `$HOME/.local` или `/usr/local`. */
 export function mutagenInstallScript(prefix: string): string {
@@ -56,6 +66,8 @@ export function mutagenInstallScript(prefix: string): string {
     'tar -xzf "$t/$f" -C "$d"',
     'ln -sf "$d/mutagen" "$p/bin/mutagen"',
     'ln -sf "$d/mutagen-agents.tar.gz" "$p/bin/mutagen-agents.tar.gz"',
+    // Демон прежней версии останавливается: его сессии пересоздаются при следующей подготовке хода.
+    '"$p/bin/mutagen" daemon stop >/dev/null 2>&1 || true',
     '"$p/bin/mutagen" version',
   ].join('\n');
 }
@@ -103,6 +115,8 @@ export function setupPlan(machine: Pick<Machine, 'sharedPath' | 'anchor'>, probe
       : { id: 'verify', title: 'Проверить путь и bind mount', check: `test -w ${p} && command -v mount >/dev/null && test "$(id -u)" -eq 0`, apply: null, privilege: probe.isRoot ? 'none' : 'manual', note: 'Проект подключается в общий путь bind mount перед ходом — нужен root. fstab не меняется.' });
     return steps;
   }
+  // SSH до опоры: проверка, ключ каскада, согласие владельца, алиас (sync/ssh-setup.ts; исполняет мастер).
+  steps.push({ id: 'ssh', title: 'SSH до опоры', check: null, apply: null, privilege: 'consent', note: 'Свой ключ ~/.ssh/bb_cascade_ed25519; на опору он добавляется только после вашего разрешения.' });
   steps.push({
     id: 'verify', title: 'Проверить путь и Mutagen', check: `test -w ${p} && { ${MUTAGEN_FIND}; [ -n "$m" ] && { "$m" daemon start >/dev/null 2>&1 || true; } && "$m" version; }`, apply: null, privilege: 'none',
     note: 'Плюс пробная запись файла через bb file. SSH до опоры проверяется при первой сессии проекта.',

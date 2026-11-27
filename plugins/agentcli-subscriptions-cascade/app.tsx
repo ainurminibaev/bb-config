@@ -34,10 +34,11 @@ function CascadeSettings() {
         save: () => void run('Сохранение', async () => accept(await rpc.call('saveConfig', { config: draft }))),
         refresh: () => void run('Обнаружение', async () => accept(await rpc.call('state', { refresh: true }))),
         adopt: () => void run('Добавление найденного', async () => accept(await rpc.call('adoptDiscovered', null))),
-        runWizard: dryRun => void run(dryRun ? 'Предпросмотр' : 'Мастер', async () => {
+        runWizard: (dryRun, mode = {}) => void run(dryRun ? 'Предпросмотр' : mode.reset ? 'Настройка с нуля' : mode.recheck ? 'Перепроверка' : 'Мастер', async () => {
           if (dirty) accept(await rpc.call('saveConfig', { config: draft }));
-          const { wizard } = await rpc.call('wizardRun', { dryRun });
-          setState(prev => prev ? { ...prev, wizard } : prev);
+          // Мастер идёт на сервере: экран можно закрыть, при возврате видно, где остановились.
+          await rpc.call('wizardRun', { dryRun, ...(mode.hostIds ? { hostIds: mode.hostIds } : {}), recheck: mode.recheck ?? false, reset: mode.reset ?? false, allowSsh: mode.allowSsh ?? [] });
+          accept(await rpc.call('state', { refresh: false }));
         }),
         showPlan: hostId => void run('Команды', async () => {
           if (plans[hostId]) { setPlans(({ [hostId]: _, ...rest }) => rest); return; }

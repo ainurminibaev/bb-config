@@ -7,7 +7,7 @@ import type { CascadeConfig, CascadeState, CellStatus, Step } from './contract.t
 export type SectionId = 'machines' | 'models' | 'files' | 'advanced';
 export interface SectionSummary { text: string; tone?: 'warn' | 'muted' }
 
-export const WIZARD_IDS = ['probe', 'folder', 'mutagen', 'verify'] as const;
+export const WIZARD_IDS = ['probe', 'folder', 'mutagen', 'ssh', 'verify'] as const;
 export const PROBLEM_STATUSES: readonly CellStatus[] = ['unmatched', 'ambiguous', 'missing'];
 const DEFAULT_POLICIES = policiesSchema.parse({});
 const DEFAULT_FILES = filesSchema.parse({});

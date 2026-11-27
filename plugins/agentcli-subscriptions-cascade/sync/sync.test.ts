@@ -300,7 +300,7 @@ test('аргументы create: .git синхронизируется, прав
 
 test('мастер: Mac — окно пароля и Mutagen из архива с SHA-256; опора Linux — /usr/local и проверка bind mount', () => {
   const mac = setupPlan({ sharedPath: '/opt/bbfs', anchor: false }, { platform: 'macos', isRoot: false })!;
-  assert.deepEqual(mac.map(s => s.id), ['probe', 'folder', 'mutagen', 'verify']);
+  assert.deepEqual(mac.map(s => s.id), ['probe', 'folder', 'mutagen', 'ssh', 'verify']);
   assert.equal(mac[1]!.privilege, 'macos-dialog');
   assert.match(mac[2]!.apply!, /6f810416d9e5fc4fd5e18431146f8b3c5a2056ba5a24f76c1e66da86eb3257e2/);
   assert.match(mac[2]!.apply!, /\$HOME\/\.local/);
@@ -308,7 +308,7 @@ test('мастер: Mac — окно пароля и Mutagen из архива �
   const tru = setupPlan({ sharedPath: '/opt/bbfs', anchor: true }, { platform: 'linux', isRoot: true })!;
   assert.equal(tru[1]!.apply, "mkdir -p '/opt/bbfs'");
   assert.match(tru[2]!.apply!, /p=\/usr\/local/);
-  assert.match(tru[2]!.check!, /^command -v mutagen/);
+  assert.match(tru[2]!.check!, /^for b in .*"\$m" version/u);
   assert.match(tru[3]!.check!, /command -v mount/);
   const ua = setupPlan({ sharedPath: '/opt/bbfs', anchor: false }, { platform: 'linux', isRoot: false })!;
   assert.equal(ua[1]!.privilege, 'manual');

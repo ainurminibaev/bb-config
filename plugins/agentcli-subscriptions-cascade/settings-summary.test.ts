@@ -8,7 +8,7 @@ import { changedPolicies, limitLine, plural, remainingPercent, sectionSummaries,
 
 function state(patch: Partial<CascadeState> = {}): CascadeState {
   const done = { status: 'done' as const, message: null, at: null };
-  const ready = (hostId: string) => ({ hostId, steps: { probe: done, folder: done, mutagen: done, verify: done } });
+  const ready = (hostId: string) => ({ hostId, steps: { probe: done, folder: done, mutagen: done, ssh: done, verify: done } });
   return {
     config: config(), accounts: ACCOUNTS, cells: {}, stepLimits: {}, projects: [], issues: [],
     hosts: [TRU, MAC, UA].map(hostId => ({ hostId, name: hostId, connected: true, platform: 'linux' as const })),

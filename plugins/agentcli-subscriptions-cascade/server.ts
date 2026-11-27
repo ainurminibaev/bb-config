@@ -14,7 +14,9 @@ import { registerExecutor } from './bridge/server-register.ts';
 import { describeReading, healthFromReading, LimitMonitor, readingFromUsageLimits } from './limits.ts';
 import { applyAutoMatches, resolveCell, suggestRows } from './models.ts';
 import { providerModels, quotaLookupFor } from './profiles.ts';
-import { runWizard, wizardPlan, type ExecResult, type ProbeResult, type WizardDeps } from './wizard.ts';
+import { revokeSsh, runWizard, wizardPlan, type ExecResult, type ProbeResult, type WizardDeps } from './wizard.ts';
+import { MUTAGEN_FIND } from './sync/setup.ts';
+import { MUTAGEN_LABEL } from './sync/mutagen.ts';
 import { timelineExtensionKinds } from './timeline/contract.ts';
 import { registerTimelineServer } from './timeline/server.ts';
 import { registerSyncServer, syncModeOf } from './sync/service.ts';
@@ -55,6 +57,7 @@ export default function plugin(bb: BbPluginApi) {
   const executor = registerExecutor(bb, {
     providerId: PROVIDER_ID,
     loadConfig: async () => (await loadConfig()).config,
+    setup: input => setup(input),
     saveConfig: async config => { await settings.experimental_set({ config: JSON.stringify(normalizeConfig(config), null, 2) }); },
     accounts: () => accounts,
     ensureDiscovered: () => discover(false),
@@ -191,6 +194,13 @@ export default function plugin(bb: BbPluginApi) {
 
   async function save(config: CascadeConfig): Promise<CascadeState> {
     const normalized = normalizeConfig(config);
+    // Машина выключена — ключ каскада снимается с опоры (в фоне, без ошибок наружу).
+    const before = (await loadConfig().catch(() => null))?.config;
+    const anchor = normalized.machines.find(m => m.anchor) ?? null;
+    for (const m of normalized.machines) {
+      const was = before?.machines.find(x => x.hostId === m.hostId);
+      if (was?.enabled && !m.enabled && !m.anchor) void revokeSsh(m, { exec, anchor }).then(n => bb.log.info(`машина ${m.label} выключена: ${n.join('; ')}`)).catch(() => undefined);
+    }
     await settings.experimental_set({ config: JSON.stringify(normalized, null, 2) });
     return state(false);
   }
@@ -202,7 +212,7 @@ export default function plugin(bb: BbPluginApi) {
     for (const h of hosts) {
       if (machines.some(m => m.hostId === h.hostId)) continue;
       // Новые машины добавляются выключенными: включает владелец.
-      machines.push({ hostId: h.hostId, label: h.name, enabled: false, platform: h.platform, anchor: false, anchorSsh: null, ...sharedPathFor(h.platform) });
+      machines.push({ hostId: h.hostId, label: h.name, enabled: false, platform: h.platform, anchor: false, anchorSsh: null, sshAddress: null, ...sharedPathFor(h.platform) });
     }
     const steps = [...config.steps];
     for (const a of accounts.filter(a => a.installed)) {
@@ -262,7 +272,39 @@ export default function plugin(bb: BbPluginApi) {
     },
     save: s => bb.storage.kv.set(wizardKey(s.hostId), s),
     now: () => new Date().toISOString(),
+    async setAnchorSsh(hostId, target) {
+      const { config } = await loadConfig();
+      await save({ ...config, machines: config.machines.map(m => (m.hostId === hostId ? { ...m, anchorSsh: target } : m)) });
+    },
   };
+
+  /**
+   * Мастер целиком на сервере: состояние шагов в bb.storage.kv, повтор продолжает
+   * с места остановки; экран, CLI и ленивая настройка хода вызывают одно и то же.
+   */
+  async function setup(input: { hostIds?: string[]; dryRun?: boolean; recheck?: boolean; reset?: boolean; allowSsh?: string[] }): Promise<{ wizard: WizardMachineState[]; notes: string[] }> {
+    const { config } = await loadConfig();
+    const anchor = config.machines.find(m => m.anchor) ?? null;
+    const machines = config.machines.filter(m => !input.hostIds || input.hostIds.includes(m.hostId));
+    const notes: string[] = [];
+    if (input.reset && !input.dryRun) {
+      // «Настроить с нуля»: сессии Mutagen каскада, выданные ключи и шаги; файлы проектов и общий путь не трогаем.
+      for (const m of machines) {
+        if (!m.anchor) {
+          const r = await exec(m, m.platform, `${MUTAGEN_FIND}; [ -n "$m" ] && "$m" sync terminate --label-selector ${MUTAGEN_LABEL}=1 || true`, 120_000).catch(() => null);
+          notes.push(r?.exitCode === 0 ? `${m.label}: сессии Mutagen каскада сняты` : `${m.label}: сессии не сняты (${(r?.output ?? 'нет связи').slice(-120)})`);
+          notes.push(...await revokeSsh(m, { exec, anchor }));
+        }
+        await bb.storage.kv.delete(wizardKey(m.hostId));
+      }
+      if (machines.some(m => !m.anchor && m.anchorSsh?.startsWith('bb-'))) {
+        await save({ ...config, machines: config.machines.map(m => (machines.includes(m) && m.anchorSsh?.startsWith('bb-') ? { ...m, anchorSsh: null } : m)) });
+      }
+    }
+    const states = new Map((await wizardStates((await loadConfig()).config)).map(st => [st.hostId, st]));
+    const wizard = await runWizard(machines, states, { ...wizardDeps, anchor }, { dryRun: input.dryRun ?? false, recheck: input.recheck ?? false, allowSsh: new Set(input.allowSsh ?? []) });
+    return { wizard, notes };
+  }
 
   let wizardRunning: Promise<WizardMachineState[]> | null = null;
   bb.rpc.register(rpcContract, {
@@ -276,15 +318,12 @@ export default function plugin(bb: BbPluginApi) {
       const facts = await probe(hostId, machine.sharedPath).catch(() => null);
       return { steps: wizardPlan(machine, { platform: facts?.platform ?? machine.platform, isRoot: facts?.isRoot ?? false }) };
     },
-    wizardRun: async ({ hostIds, dryRun }) => {
+    wizardRun: async ({ hostIds, dryRun, recheck, reset, allowSsh }) => {
       if (wizardRunning) return { wizard: await wizardRunning };  // повторный клик не запускает второй проход
-      const { config } = await loadConfig();
-      const machines = config.machines.filter(m => !hostIds || hostIds.includes(m.hostId));
-      const states = new Map((await wizardStates(config)).map(s => [s.hostId, s]));
-      wizardRunning = runWizard(machines, states, wizardDeps, dryRun);
+      wizardRunning = setup({ hostIds, dryRun, recheck, reset, allowSsh }).then(r => r.wizard);
       try { return { wizard: await wizardRunning }; } finally { wizardRunning = null; }
     },
-  });
+  }, { experimental_discoverable: true, experimental_description: 'Каскад подписок: состояние и настройки экрана, мастер «Настроить» (wizardPlan, wizardRun: recheck — перепроверить, reset — с нуля, allowSsh — разрешить вход на опору по ключу).' });
 
   // Регистрация провайдера при загрузке: сразу (каталог есть всегда, см. providerModels),
   // затем в фоне обнаружение машин и уточнённый каталог — без ожидания экрана настроек.

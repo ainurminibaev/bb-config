@@ -10,7 +10,7 @@
 // - фоновая проверка штатных мостов (digest, версия) — для providerOptions и настроек.
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
 import { formatThreadTestQuota, parseTestQuotaSpec, withThreadTestQuota } from '../test-quota.ts';
-import type { CascadeConfig, DiscoveredAccount, Step, TestQuotaEntry } from '../contract.ts';
+import type { CascadeConfig, DiscoveredAccount, Step, TestQuotaEntry, WizardMachineState } from '../contract.ts';
 import type { HealthLookup } from '../engine.ts';
 import { formatAdopt, parseAdoptArgs, runAdopt, type AdoptPorts, type AdoptThread } from './adopt.ts';
 import { digestMap, nativeBridgeStatus, type NativeBridgeStatus } from './digests.ts';
@@ -22,6 +22,8 @@ import { createRouteService, type RouteDeps, type RouteService, type StoredThrea
 export interface ExecutorDeps {
   providerId: string;
   loadConfig(): Promise<CascadeConfig>;
+  /** Мастер «Настроить» на сервере (CLI setup, ленивая настройка при ходе). */
+  setup?(input: { hostIds?: string[]; dryRun?: boolean; recheck?: boolean; reset?: boolean; allowSsh?: string[] }): Promise<{ wizard: WizardMachineState[]; notes: string[] }>;
   /** Записать конфигурацию (тестовая квота треда из CLI/RPC). */
   saveConfig?(config: CascadeConfig): Promise<void>;
   accounts(): readonly DiscoveredAccount[];
@@ -111,6 +113,21 @@ export function threadInfoFrom(response: unknown): ThreadInfo | null {
   };
 }
 
+const STEP_TITLES: Record<string, string> = { probe: 'Машина', folder: 'Папка', mutagen: 'Mutagen', ssh: 'SSH до опоры', verify: 'Проверка' };
+const STATUS_MARK: Record<string, string> = { done: '✓', skipped: '–', failed: '✗', manual: '!', pending: '·', running: '…' };
+
+/** Статус мастера по шагам для CLI; согласие — с командой. */
+export function formatSetup(config: CascadeConfig, result: { wizard: WizardMachineState[]; notes: string[] }): string {
+  const lines: string[] = [...result.notes.map(n => `• ${n}`)];
+  for (const w of result.wizard) {
+    const label = config.machines.find(m => m.hostId === w.hostId)?.label ?? w.hostId;
+    lines.push(`${label}:`);
+    for (const [id, st] of Object.entries(w.steps)) lines.push(`  ${STATUS_MARK[st.status] ?? st.status} ${STEP_TITLES[id] ?? id}${st.message ? ` — ${st.message}` : ''}`);
+    if (w.pendingConsent) lines.push(`  ${w.pendingConsent.text}`, `  Разрешить: bb subscriptions-cascade setup --machine ${label} --allow-ssh`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
 export interface ExecutorRegistration {
   routes: RouteService;
   /** providerOptions для штатного моста и для нашей обёртки (синхронно, из кэша). */
@@ -176,6 +193,14 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
       await bb.storage.kv.set(STATE_KEY(threadId), state);
     },
     sync: deps.sync,
+    ensureMachine: deps.setup ? async hostId => {
+      const result = await deps.setup!({ hostIds: [hostId] });
+      const state = result.wizard.find(w => w.hostId === hostId);
+      if (!state) return { ok: false, message: 'машина выключена в каскаде', consent: null };
+      if (state.pendingConsent) return { ok: false, message: 'нужно разрешение', consent: state.pendingConsent.text };
+      const bad = Object.entries(state.steps).find(([, st]) => st.status !== 'done' && st.status !== 'skipped');
+      return bad ? { ok: false, message: `${bad[0]}: ${bad[1].message ?? bad[1].status}`, consent: null } : { ok: true, message: '', consent: null };
+    } : undefined,
     now: Date.now,
     warn: message => bb.log.warn(message),
     ...consentAndHandoffPorts(bb),
@@ -258,6 +283,7 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     commands: [
       { name: 'status', summary: 'Ступень, машина и копия файлов треда', usage: 'bb subscriptions-cascade status --thread <id> [--json]' },
       { name: 'test-quota', summary: 'Тестовая квота ступеней для одного треда (сценарии S1–S13)', usage: "bb subscriptions-cascade test-quota --thread <id> [--set '<ступень>=exhausted|ok|unknown|unavailable[,<сброс ISO|+30m>];…'] [--clear] [--json]" },
+      { name: 'setup', summary: 'Мастер «Настроить»: продолжить, перепроверить, настроить с нуля; разрешить вход на опору по ключу', usage: 'bb subscriptions-cascade setup [--machine <hostId|имя>] [--recheck] [--reset] [--allow-ssh] [--dry-run] [--json]' },
       { name: 'test-bridge', summary: 'Приёмка S13: считать штатный мост несовместимым (без правки BB)', usage: 'bb subscriptions-cascade test-bridge --incompatible|--compatible' },
       { name: 'adopt', summary: 'Перевести треды в каскад (Handoff) и снять автоповтор у исходных', usage: 'bb subscriptions-cascade adopt --stuck|--thread <id>|--project <id> [--dry-run] [--model <профиль>] [--json]' },
     ],
@@ -282,6 +308,21 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
         if (rest.includes('--json')) return { exitCode: 0, stdout: `${JSON.stringify({ threadId, steps: result.config.testQuota.threads[threadId] ?? null })}\n` };
         return { exitCode: 0, stdout: formatThreadTestQuota(result.config, threadId) };
       }
+      if (command === 'setup') {
+        if (!deps.setup) return { exitCode: 2, stderr: 'мастер недоступен\n' };
+        const config = await deps.loadConfig();
+        const i = rest.indexOf('--machine');
+        const ref = i !== -1 ? rest[i + 1] : undefined;
+        const machine = ref ? config.machines.find(m => m.hostId === ref || m.label.toLowerCase() === ref.toLowerCase()) : undefined;
+        if (ref && !machine) return { exitCode: 2, stderr: `машина «${ref}» не найдена в каскаде (${config.machines.map(m => m.label).join(', ')})\n` };
+        const hostIds = machine ? [machine.hostId] : undefined;
+        const result = await deps.setup({
+          hostIds, dryRun: rest.includes('--dry-run'), recheck: rest.includes('--recheck'), reset: rest.includes('--reset'),
+          allowSsh: rest.includes('--allow-ssh') ? (hostIds ?? config.machines.map(m => m.hostId)) : [],
+        });
+        if (rest.includes('--json')) return { exitCode: 0, stdout: `${JSON.stringify(result)}\n` };
+        return { exitCode: result.wizard.some(w => Object.values(w.steps).some(st => st.status === 'failed')) ? 1 : 0, stdout: formatSetup(config, result) };
+      }
       if (command === 'test-bridge') {
         const on = rest.includes('--incompatible');
         if (!on && !rest.includes('--compatible')) return { exitCode: 0, stdout: `Тестовый переключатель S13: мост ${bridgeIncompatible ? 'несовместим' : 'совместим'}.\n` };
@@ -299,7 +340,7 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
         if (rest.includes('--json')) return { exitCode: items.some(i => i.error) ? 1 : 0, stdout: `${JSON.stringify({ dryRun: options.dryRun, items })}\n` };
         return { exitCode: items.some(i => i.error) ? 1 : 0, stdout: formatAdopt(items, options.dryRun) };
       }
-      return { exitCode: 2, stderr: 'команды: status, test-quota, test-bridge, adopt\n' };
+      return { exitCode: 2, stderr: 'команды: status, setup, test-quota, test-bridge, adopt\n' };
     },
   });
 

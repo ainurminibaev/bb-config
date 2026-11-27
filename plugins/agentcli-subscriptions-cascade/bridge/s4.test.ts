@@ -112,3 +112,31 @@ test('S11: подтред с профилем «Opus → Авто» — толь
   const refused = await orphan.routeTurn({ ...turn, threadId: 'thr_child' });
   assert.match(refused.action === 'refuse' ? refused.message : '', /машина родителя не определена/u);
 });
+
+test('ленивая настройка: машина не настроена — мастер при ходе, затем ход; нужно разрешение — ступень пропущена со строкой «Нужно разрешение»', async () => {
+  const cfg: CascadeConfig = { ...baseConfig(), policies: { ...baseConfig().policies, executionMode: 'provider' } };
+  const make = (ensure: { ok: boolean; message: string; consent: string | null }) => {
+    const calls: string[] = [];
+    let configured = false;
+    const routes = createRouteService({
+      loadConfig: async () => cfg, accounts: () => ACCOUNTS, health: () => id => (id === TRU_MAX ? exhausted(T0 + 3_600_000) : ok),
+      refreshLimits: async () => {}, observeLimit: () => {},
+      threadInfo: async () => ({ projectId: 'p', hostId: TRU, parentThreadId: null, providerId: 'subscriptions-cascade', isolatedWorkspace: true }),
+      load: async () => undefined, save: async () => {}, now: () => T0, sleep: async () => {},
+      sync: {
+        prepareTurn: async (_t, step) => { calls.push(`prepare:${step.hostId}`); return configured || step.hostId !== 'host_mac' ? sync.prepareTurn() : { ok: false, reason: 'not-configured', message: 'Mac: не задан SSH-доступ к Tru', conflicts: [], timings: [], notices: [] }; },
+        finishTurn: sync.finishTurn,
+      },
+      ensureMachine: async hostId => { calls.push(`ensure:${hostId}`); configured = ensure.ok; return ensure; },
+    });
+    return { routes, calls };
+  };
+  const good = make({ ok: true, message: '', consent: null });
+  const ran = await good.routes.routeTurn(turn);
+  assert.equal(stepOf(ran), MAC_GW);
+  assert.deepEqual(good.calls, ['prepare:host_mac', 'ensure:host_mac', 'prepare:host_mac']);
+  const consent = make({ ok: false, message: 'нужно разрешение', consent: 'Разрешить машине Mac входить на Tru по ключу SHA256:x?' });
+  const next = await consent.routes.routeTurn(turn);
+  assert.equal(stepOf(next), 'host_ua:claude-code:*', 'следующая ступень');
+  assert.ok(next.action === 'run' && next.notes.some(n => n.kind === 'problem' && /Нужно разрешение для Mac/u.test(n.message) && /--allow-ssh/u.test(n.note ?? '')));
+});

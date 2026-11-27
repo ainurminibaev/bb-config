@@ -39,7 +39,7 @@ export function seedConfig(hosts: readonly SeedHost[]): CascadeConfig {
   const machines: Machine[] = [];
   const steps: Step[] = [];
   const machine = (h: SeedHost, label: string, anchor: boolean): Machine => ({
-    hostId: h.id, label, enabled: true, platform: h.platform, anchor, anchorSsh: null, ...sharedPathFor(h.platform),
+    hostId: h.id, label, enabled: true, platform: h.platform, anchor, anchorSsh: null, sshAddress: null, ...sharedPathFor(h.platform),
   });
   const step = (h: SeedHost, providerId: string, label: string, confirm: boolean, extra: Partial<Step> = {}): Step => stepSchema.parse({
     id: stepId(h.id, providerId, null), hostId: h.id, providerId, label, confirm, ...extra,

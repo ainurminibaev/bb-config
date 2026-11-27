@@ -36,6 +36,8 @@ export const machineSchema = z.object({
    * плагина (`sync:anchor-ssh:<hostId>`), если оно есть.
    */
   anchorSsh: z.string().max(200).nullable().default(null),
+  /** Адрес этой машины для SSH с других машин каскада (у опоры — HostName алиаса `bb-<опора>`). */
+  sshAddress: z.string().max(253).nullable().default(null),
 });
 export type Machine = z.infer<typeof machineSchema>;
 
@@ -262,7 +264,7 @@ export const discoveredHostSchema = z.object({
 
 // ---- Мастер «Настроить» ----
 
-export const wizardStepIdSchema = z.enum(['probe', 'folder', 'mutagen', 'verify']);
+export const wizardStepIdSchema = z.enum(['probe', 'folder', 'mutagen', 'ssh', 'verify']);
 export type WizardStepId = z.infer<typeof wizardStepIdSchema>;
 export const wizardStepStatusSchema = z.enum(['pending', 'running', 'done', 'failed', 'skipped', 'manual']);
 export const wizardMachineStateSchema = z.object({
@@ -272,6 +274,11 @@ export const wizardMachineStateSchema = z.object({
     message: z.string().nullable(),
     at: z.string().nullable(),
   })),
+  /**
+   * Ждёт согласия владельца (шаг ssh): какой ключ и куда добавить. Согласие —
+   * wizardRun с allowSsh: [hostId] или CLI `setup --machine <id> --allow-ssh`.
+   */
+  pendingConsent: z.object({ text: z.string(), fingerprint: z.string(), publicKey: z.string() }).nullable().optional(),
 });
 export type WizardMachineState = z.infer<typeof wizardMachineStateSchema>;
 
@@ -283,7 +290,7 @@ export const wizardPlanStepSchema = z.object({
   /** Команда применения. null — шаг выполняется вручную. */
   apply: z.string().nullable(),
   /** Права: системное окно macOS, root без запроса, ручной шаг. */
-  privilege: z.enum(['none', 'macos-dialog', 'root', 'manual']),
+  privilege: z.enum(['none', 'macos-dialog', 'root', 'manual', 'consent']),
   note: z.string().nullable(),
 });
 export type WizardPlanStep = z.infer<typeof wizardPlanStepSchema>;
@@ -323,7 +330,20 @@ export const rpcContract = defineRpcContract({
   adoptDiscovered: { input: z.null(), output: stateSchema },
   wizardPlan: { input: z.object({ hostId: z.string() }), output: z.object({ steps: z.array(wizardPlanStepSchema) }) },
   /** Запуск мастера. dryRun — только план, без команд на машинах. */
-  wizardRun: { input: z.object({ hostIds: z.array(z.string()).optional(), dryRun: z.boolean().default(true) }), output: z.object({ wizard: z.array(wizardMachineStateSchema) }) },
+  /**
+   * Запуск мастера; состояние каждого шага хранится на сервере — повтор продолжает
+   * с места остановки. dryRun — только план. recheck — повторить все проверки,
+   * ничего не удаляя. reset — «Настроить с нуля»: снять сессии Mutagen каскада и
+   * выданные ключи, сбросить шаги (файлы проектов и общий путь не трогаются).
+   * allowSsh — машины, которым владелец разрешил вход на опору по ключу.
+   */
+  wizardRun: {
+    input: z.object({
+      hostIds: z.array(z.string()).optional(), dryRun: z.boolean().default(true),
+      recheck: z.boolean().default(false), reset: z.boolean().default(false), allowSsh: z.array(z.string()).default([]),
+    }),
+    output: z.object({ wizard: z.array(wizardMachineStateSchema) }),
+  },
 });
 
 // ---- Хост-RPC: только чтение фактов о машине ----

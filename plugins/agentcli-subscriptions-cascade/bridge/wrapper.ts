@@ -500,6 +500,14 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
     }
     if (threadId && typeof params.providerThreadId === 'string' && !threadOuter.has(threadId) && method !== 'thread/start') threadOuter.set(threadId, params.providerThreadId);
 
+    // Приёмка S13: тестовый переключатель — отказ сразу, до вызовов сервера и переключения сессий.
+    if (forceIncompatible) {
+      const err = new NativeLoadError('shape', requested ?? 'claude-code', 'тестовый переключатель S13: мост помечен несовместимым');
+      const hint = nativeLoadHint(err);
+      log(`refuse ${method}: ${err.message}`);
+      if (message.id !== undefined) fail(message.id, hint, { recovery: { kind: 'restartRecommended', message: hint, retryable: false } });
+      return;
+    }
     const known = threadId ? threadInner.get(threadId) : undefined;
     // Активный провайдер треда (переход Claude ↔ Codex) главнее подсказки сервера.
     const state = threadId && method !== 'thread/start' ? await nativeOf(threadId) : null;
