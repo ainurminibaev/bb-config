@@ -31,6 +31,26 @@ export function claudeSessionInfo(args: readonly string[]): ClaudeSessionInfo {
   return { sessionId: id, resumes: resume !== null && UUID.test(resume), ephemeral: args.includes('--no-session-persistence') };
 }
 
+/**
+ * `--resume <id>` только если сессия реально записана (S-P0): ход, упавший до
+ * запуска CLI, сессию не создал — тогда продолжение начинается как новая
+ * сессия с тем же ID (`--session-id <id>`), иначе CLI отвечает «No conversation found».
+ */
+export function resumeOrStart(args: readonly string[], exists: (sessionId: string) => boolean): string[] {
+  const resume = flagValue(args, '--resume');
+  if (resume === null || !UUID.test(resume) || exists(resume)) return [...args];
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    if (arg === '--resume') { out.push('--session-id', resume); i += 1; continue; }
+    if (arg.startsWith('--resume=')) { out.push(`--session-id=${resume}`); continue; }
+    if (arg === '--session-id') { i += 1; continue; }
+    if (arg.startsWith('--session-id=')) continue;
+    out.push(arg);
+  }
+  return out;
+}
+
 /** Папка сессий Claude повторяет путь проекта: всё, кроме букв и цифр, — «-». */
 export function encodeClaudeProjectDir(cwd: string): string {
   return cwd.replace(/[^a-zA-Z0-9]/gu, '-');

@@ -5,7 +5,7 @@ import { explainProfile, selectStep, type HealthLookup } from './engine.ts';
 import { ACCOUNTS, MAC_CODEX, MAC_GW, NOW, TRU_MAX, UA_CODEX, UA_PRO, config, exhausted, ok, thread, unknown } from './fixtures.ts';
 import type { StepHealth } from './limits.ts';
 import {
-  describeProfile, duplicateProfile, presetProfile, previewLookup, profilePreview, providerModels, quotaLookupFor, testQuotaLookup,
+  describeProfile, duplicateProfile, presetProfile, previewLookup, profilePreview, providerModels, quotaLookupFor, testQuotaLookup, usesTestQuota,
 } from './profiles.ts';
 
 const describe = (id: string, c = config()) => describeProfile(c, c.profiles.find(p => p.id === id)!, ACCOUNTS);
@@ -52,9 +52,9 @@ test('«+ Профиль»: заготовки и дублирование с у
 
 test('тестовый источник квоты: только в тестовых тредах; превью и схема его учитывают', () => {
   const c = config();
-  c.testQuota = { enabled: true, threadIds: ['thr_test'], steps: { [TRU_MAX]: { state: 'exhausted', resetsAt: new Date(NOW + 3_600_000).toISOString() }, [MAC_GW]: { state: 'unknown', resetsAt: null } } };
+  c.testQuota = { enabled: true, threadIds: ['thr_test'], steps: { [TRU_MAX]: { state: 'exhausted', resetsAt: new Date(NOW + 3_600_000).toISOString() }, [MAC_GW]: { state: 'unknown', resetsAt: null } }, threads: {} };
   const real: HealthLookup = () => ok;
-  const input = (threadId: string) => ({ config: c, requestedModel: 'auto', accounts: ACCOUNTS, now: NOW, thread: thread({ threadId }), health: quotaLookupFor(c, threadId, real) });
+  const input = (threadId: string) => ({ config: c, requestedModel: 'auto', accounts: ACCOUNTS, now: NOW, thread: thread({ threadId }), health: quotaLookupFor(c, threadId, real, NOW) });
   const t = selectStep(input('thr_test'));
   assert.equal(t.kind === 'run' && t.stepId, UA_PRO, 'S1/S10 на тестовых лимитах: Tru исчерпан, vclaude неизвестен → UA');
   assert.equal((d => d.kind === 'run' && d.stepId)(selectStep(input('thr_real'))), TRU_MAX, 'обычный тред видит реальные лимиты');
@@ -100,4 +100,20 @@ test('схема «i» строится из движка: отмеченная 
     }
   }
   assert.equal(checked, 6 * 128);
+});
+
+test('тестовая квота своего треда: главнее общей, действует без общего флага, исчерпание с прошедшим сбросом — «лимит есть»', () => {
+  const c = config();
+  c.testQuota = { enabled: false, threadIds: [], steps: { [TRU_MAX]: { state: 'exhausted', resetsAt: null } },
+    threads: { thr_live: { [TRU_MAX]: { state: 'exhausted', resetsAt: new Date(NOW + 60_000).toISOString() }, [MAC_GW]: { state: 'unknown', resetsAt: null } } } };
+  const real: HealthLookup = () => ok;
+  assert.equal(usesTestQuota(c, 'thr_live'), true);
+  assert.equal(usesTestQuota(c, 'thr_other'), false);
+  const now = quotaLookupFor(c, 'thr_live', real, NOW);
+  assert.equal(now(TRU_MAX, null).exhausted, true);
+  assert.equal(now(MAC_GW, null).unknown, true);
+  assert.equal(now(UA_PRO, null).exhausted, false, 'ступень без записи — «лимит есть»');
+  const later = quotaLookupFor(c, 'thr_live', real, NOW + 120_000);
+  assert.equal(later(TRU_MAX, null).exhausted, false, 'сброс прошёл');
+  assert.equal(later(TRU_MAX, null).unknown, false, 'и квота подтверждена (S4)');
 });

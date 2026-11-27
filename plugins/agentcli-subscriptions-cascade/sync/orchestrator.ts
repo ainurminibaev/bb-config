@@ -227,7 +227,7 @@ export class SyncOrchestrator {
     const busy = Object.keys(state.anchorTurns);
     if (busy.length) throw new Refused('busy', `На ${ctx.anchor.label} идёт ход другого треда этого проекта: ход подождёт его конца`);
     const ssh = ctx.anchorSsh(host);
-    if (!ssh) throw new Refused('not-configured', `${machine.label}: не задан SSH-доступ к ${ctx.anchor.label} для Mutagen`);
+    if (!ssh) throw new Refused('not-configured', `${machine.label}: не задан SSH-доступ к ${ctx.anchor.label} для Mutagen. Задайте его в настройках «Каскада»: Машины → ${machine.label} → «SSH к опоре» (имя из ~/.ssh/config на ${machine.label} или user@host).`);
 
     await this.ensureMount(ctx, timings, false);
     const root = projectRoot(machine, ctx.slug);

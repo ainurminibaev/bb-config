@@ -12,7 +12,7 @@
 import { createInterface } from 'node:readline';
 import { PassThrough } from 'node:stream';
 import type { LimitObservation, RouteNote, RouteTurnOutput } from '../bridge/route-contract.ts';
-import { replaceModel } from './cli-args.ts';
+import { replaceModel, resumeOrStart } from './cli-args.ts';
 
 export interface StageChild {
   write(line: string): void;
@@ -26,6 +26,8 @@ export interface RelayPorts {
   /** Запустить CLI ступени: строки stdout — в onLine. */
   start(route: Extract<RouteTurnOutput, { action: 'run' }>, args: string[], onLine: (line: string) => void): StageChild;
   routeTurn(): Promise<RouteTurnOutput>;
+  /** Записал ли CLI файл сессии (для `--resume` на новой ступени). Нет порта — считается записанным. */
+  sessionExists?(route: Extract<RouteTurnOutput, { action: 'run' }>): boolean;
   finishTurn(route: Extract<RouteTurnOutput, { action: 'run' }>, info: { exitCode: number | null; limits: LimitObservation[]; transportError: string | null; durationMs: number }): Promise<void>;
   feed(notes: readonly RouteNote[]): Promise<void>;
   limitFromLine(line: string): LimitObservation | null;
@@ -92,7 +94,13 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
     }
   };
 
-  const argsFor = (r: RunRoute, resume: boolean) => replaceModel(resume ? resumeArgs(baseArgs, sessionId) : baseArgs, r.modelId);
+  // Новый процесс на другой ступени продолжает сессию через --resume, только если
+  // прежний процесс её записал; иначе — тот же ID как новая сессия.
+  const argsFor = (r: RunRoute, resume: boolean) => {
+    const withResume = resume ? resumeArgs(baseArgs, sessionId) : baseArgs;
+    const fixed = resume && ports.sessionExists ? resumeOrStart(withResume, () => ports.sessionExists!(r)) : withResume;
+    return replaceModel(fixed, r.modelId);
+  };
   let child = ports.start(route, argsFor(route, false), onLine);
   let childExit: { code: number; transportError: string | null } | null = null;
   const watchChild = (c: StageChild) => { void c.done.then(result => { if (c === child) childExit = result; }); };

@@ -191,3 +191,24 @@ test('nextThreadState запоминает ступень, модель и мо�
   const next = nextThreadState(t, selectStep(input({ [TRU_MAX]: exhausted(NOW + 60_000) }, { thread: t })), NOW);
   assert.deepEqual([next.currentStepId, next.currentModelId, next.switchedAt], [MAC_GW, 'opus55', NOW]);
 });
+
+test('S4: возврат на приоритетную ступень — только после N минут и по подтверждённой квоте', () => {
+  const gate = (health: Record<string, StepHealth>, switchedAgo: number) => selectStep(input(health, {
+    thread: { ...input(health).thread, currentStepId: MAC_GW, currentModelId: undefined, switchedAt: NOW - switchedAgo },
+  }));
+  const unknownTry = { ...ok, unknown: true };
+  // Tru снова доступна, но прошло 10 минут — остаёмся на Mac, возврат отложен.
+  const early = gate({ [TRU_MAX]: ok, [MAC_GW]: ok, [UA_PRO]: ok }, 10 * 60_000);
+  assert.equal(early.kind === 'run' && early.stepId, MAC_GW);
+  assert.equal(early.kind === 'run' && early.pendingReturn?.stepId, TRU_MAX);
+  // 40 минут и квота Tru подтверждена — возврат.
+  const back = gate({ [TRU_MAX]: ok, [MAC_GW]: ok, [UA_PRO]: ok }, 40 * 60_000);
+  assert.equal(back.kind === 'run' && back.stepId, TRU_MAX);
+  assert.equal(back.kind === 'run' && back.returning, true);
+  // Квота Tru неизвестна (даже с onUnknown: try) — без возврата.
+  const config = input({}).config;
+  const tryConfig = { ...config, steps: config.steps.map(s => s.id === TRU_MAX ? { ...s, onUnknown: 'try' as const } : s) };
+  const unknown = selectStep({ ...input({ [TRU_MAX]: unknownTry, [MAC_GW]: ok, [UA_PRO]: ok }), config: tryConfig,
+    thread: { ...input({}).thread, currentStepId: MAC_GW, switchedAt: NOW - 40 * 60_000 } });
+  assert.equal(unknown.kind === 'run' && unknown.stepId, MAC_GW);
+});

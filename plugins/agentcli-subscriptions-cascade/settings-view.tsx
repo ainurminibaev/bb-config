@@ -283,6 +283,14 @@ function MachineRow({ machine, host, wizard, onChange, onPlan, plan }: {
           {failed ? `${WIZARD_LABELS[failed]}: нужна помощь` : `настроено ${done}/4`}
         </button>
       </div>
+      {!machine.anchor && (
+        <label className="asc-line asc-small-text">
+          <span className="asc-muted">SSH к опоре</span>
+          <input className="asc-inline-input asc-mono" aria-label={`SSH-цель опоры с ${machine.label}`} placeholder="tru или root@host"
+            value={machine.anchorSsh ?? ''} onChange={e => onChange({ ...machine, anchorSsh: e.target.value.trim() === '' ? null : e.target.value.trim() })} />
+          <Hint>Для Mutagen: имя из ~/.ssh/config этой машины или user@host.</Hint>
+        </label>
+      )}
       {machine.pathTranslation && <p className="asc-warn-text asc-small-text">Нативный Windows: пути переводятся.</p>}
       {plan && (
         <div className="asc-plan">{plan.map(step => (

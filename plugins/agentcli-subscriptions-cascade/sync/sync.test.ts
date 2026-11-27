@@ -478,3 +478,13 @@ test('строки ленты: flush и выравнивание с направ
   const busy = await sync.prepareTurn(T2, { hostId: TRU });
   assert.match(summaryLine(busy, label, 'prepare'), /^Синхронизация: Проект сейчас пишет другой тред на Mac/);
 });
+
+test('SSH к опоре: из настроек машины; недопустимое значение не используется', async () => {
+  const { machineAnchorSsh } = await import('./service.ts');
+  assert.equal(machineAnchorSsh({ anchorSsh: 'de-vpn-vps' }), 'de-vpn-vps');
+  assert.equal(machineAnchorSsh({ anchorSsh: 'root@10.0.0.1' }), 'root@10.0.0.1');
+  assert.equal(machineAnchorSsh({ anchorSsh: 'tru; rm -rf /' }), null);
+  assert.equal(machineAnchorSsh({ anchorSsh: null }), null);
+  const parsed = configSchema.parse({ machines: [{ hostId: 'h', label: 'Mac' }] });
+  assert.equal(parsed.machines[0]!.anchorSsh, null, 'старые настройки без поля читаются');
+});

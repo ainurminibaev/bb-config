@@ -92,7 +92,7 @@ function deps(log: string[], failFolder = false): WizardDeps & { saved: WizardMa
   };
 }
 
-const machine: Machine = { hostId: MAC, label: 'Tru', enabled: true, platform: 'linux', sharedPath: '/opt/bbfs', pathTranslation: false, anchor: true };
+const machine: Machine = { hostId: MAC, label: 'Tru', enabled: true, platform: 'linux', sharedPath: '/opt/bbfs', pathTranslation: false, anchor: true, anchorSsh: null };
 
 test('мастер: проходит шаги, повтор безопасен, ошибка останавливает машину', async () => {
   const log: string[] = [];

@@ -2,8 +2,9 @@
 // конфигурации каскада и проектов BB. Исполнитель хода получает отсюда
 // prepareTurn / finishTurn.
 //
-// SSH-цель опоры для каждой машины-исполнителя (`tru`, `root@host`) хранится
-// в bb.storage.kv `sync:anchor-ssh:<hostId>`: в схеме машины такого поля пока нет.
+// SSH-цель опоры для каждой машины-исполнителя (`tru`, `root@host`) задаётся
+// в настройках машины (`machine.anchorSsh`, секция «Машины»). Прежнее значение
+// из bb.storage.kv `sync:anchor-ssh:<hostId>` читается, если поле пустое.
 import { defineRpcContract, type BbPluginApi } from '@get-bb/plugin-sdk';
 import { posix } from 'node:path';
 import { z } from 'zod';
@@ -47,6 +48,11 @@ export function projectSourceOn(project: unknown, hostId: string): string | null
   return typeof chosen?.path === 'string' ? chosen.path : null;
 }
 
+/** SSH-цель из настроек машины, если она допустима. */
+export function machineAnchorSsh(machine: Pick<Machine, 'anchorSsh'>): string | null {
+  return machine.anchorSsh && SSH_TARGET.test(machine.anchorSsh) ? machine.anchorSsh : null;
+}
+
 export function buildContext(args: { config: CascadeConfig; projectId: string; projectName: string; anchorSource: string | null; ssh: ReadonlyMap<string, string> }): SyncProjectContext {
   const { config, projectId } = args;
   const anchor = config.machines.find(m => m.anchor) ?? null;
@@ -85,7 +91,11 @@ export function createSyncService(bb: BbPluginApi, loadConfig: () => Promise<{ c
     const anchor = config.machines.find(m => m.anchor);
     const project = await bb.sdk.projects.get({ projectId } as Parameters<typeof bb.sdk.projects.get>[0]).catch(() => null);
     const ssh = new Map<string, string>();
-    for (const m of config.machines) if (!m.anchor) { const target = await anchorSsh(m.hostId); if (target) ssh.set(m.hostId, target); }
+    for (const m of config.machines) {
+      if (m.anchor) continue;
+      const target = machineAnchorSsh(m) ?? await anchorSsh(m.hostId);
+      if (target) ssh.set(m.hostId, target);
+    }
     const name = (project as { name?: unknown } | null)?.name;
     return buildContext({ config, projectId, projectName: typeof name === 'string' ? name : projectId, anchorSource: anchor ? projectSourceOn(project, anchor.hostId) : null, ssh });
   }

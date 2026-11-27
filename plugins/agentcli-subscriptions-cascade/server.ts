@@ -201,7 +201,7 @@ export default function plugin(bb: BbPluginApi) {
     for (const h of hosts) {
       if (machines.some(m => m.hostId === h.hostId)) continue;
       // Новые машины добавляются выключенными: включает владелец.
-      machines.push({ hostId: h.hostId, label: h.name, enabled: false, platform: h.platform, anchor: false, ...sharedPathFor(h.platform) });
+      machines.push({ hostId: h.hostId, label: h.name, enabled: false, platform: h.platform, anchor: false, anchorSsh: null, ...sharedPathFor(h.platform) });
     }
     const steps = [...config.steps];
     for (const a of accounts.filter(a => a.installed)) {

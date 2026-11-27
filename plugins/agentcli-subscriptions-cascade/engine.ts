@@ -197,10 +197,12 @@ export function selectStep(input: SelectInput): Decision {
   let chosen = best;
   let pendingReturn: Target | null = null;
   if (current && current !== best) {
-    // Возврат на более приоритетную попытку — между ходами и не раньше чем через N минут.
+    // Возврат на более приоритетную попытку (S4) — между ходами (выбор идёт только
+    // перед ходом), не раньше чем через N минут после перехода и только по
+    // подтверждённой квоте: «неизвестно» с onUnknown: try возврата не даёт.
     const gateMs = config.policies.returnAfterMinutes * 60_000;
     const elapsed = thread.switchedAt === null ? Infinity : now - thread.switchedAt;
-    if (elapsed < gateMs) { chosen = current; pendingReturn = target(best); }
+    if (elapsed < gateMs || best.health.unknown) { chosen = current; pendingReturn = target(best); }
   }
   const switched = thread.currentStepId !== null && chosen.stepId !== thread.currentStepId;
   const consented = hasConsent(thread.consents, {

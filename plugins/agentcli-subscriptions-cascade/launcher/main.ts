@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { connect } from 'node:net';
 import { dirname } from 'node:path';
 import { routeTurnOutputSchema, type LimitObservation, type NativeProvider, type RouteNote, type RouteTurnOutput } from '../bridge/route-contract.ts';
-import { claudeSessionInfo, claudeSessionPath, flagValue, remoteArgs, remoteEnv, replaceModel } from './cli-args.ts';
+import { claudeSessionInfo, claudeSessionPath, flagValue, remoteArgs, remoteEnv, replaceModel, resumeOrStart } from './cli-args.ts';
 import { spawn } from 'node:child_process';
 import { resolveRealExecutable, runLocal } from './local.ts';
 import { RemoteRunError, runRemote } from './remote.ts';
@@ -82,6 +82,18 @@ export function limitFromClaudeLine(line: string): LimitObservation | null {
   return { status, resetsAt, windowType: typeof info.rateLimitType === 'string' ? info.rateLimitType : null, raw: info };
 }
 
+/**
+ * Файл сессии Claude на машине моста: под папкой моста или папкой ступени
+ * (локальная ступень с синхронизацией работает в общем пути). null — сессии нет.
+ */
+export function localSessionFile(io: Pick<LauncherIo, 'cwd' | 'env'>, sessionId: string, stageCwd: string | null): string | null {
+  for (const cwd of [io.cwd, ...(stageCwd && stageCwd !== io.cwd ? [stageCwd] : [])]) {
+    const path = claudeSessionPath(cwd, sessionId, io.env);
+    if (existsSync(path)) return path;
+  }
+  return null;
+}
+
 /** Окружение для локального CLI: без служебных переменных запускателя. */
 function childEnv(env: NodeJS.ProcessEnv, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {};
@@ -138,12 +150,19 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
     return route.retryable ? 75 : 1;
   }
 
+  // Сессия считается созданной, только если CLI её записал: ход, упавший до
+  // запуска CLI, оставляет штатному мосту `--resume` на несуществующую сессию.
+  // Файлы сессий возвращаются на машину моста после каждого хода на чужой машине.
+  const sessionArgs = probe ? args : resumeOrStart(args, id => localSessionFile(io, id, route.action === 'run' ? route.cwd : null) !== null);
+  if (sessionArgs.join('\0') !== args.join('\0')) logLine(io, `сессии ${session.sessionId} ещё нет — старт с --session-id вместо --resume`);
+
   // Сессия stream-json: один процесс CLI на всю сессию, ступень — на каждый ход.
   if (flagValue(args, '--input-format') === 'stream-json' && session.sessionId && !probe) {
     const sessionId = session.sessionId;
     const finishInfo = (r: RunRoute) => ({ threadId, projectId: io.env.BB_PROJECT_ID ?? null, stepId: r.stepId, hostId: r.hostId, probe: false });
-    return runSessionRelay(route, args, sessionId, {
+    return runSessionRelay(route, sessionArgs, sessionId, {
       start: (r, childArgs, onLine) => startStageChild(io, provider, r, childArgs, onLine),
+      sessionExists: r => localSessionFile(io, sessionId, r.cwd) !== null,
       routeTurn: async () => routeTurnOutputSchema.parse(await callServer(io, 'routeTurn', {
         threadId, projectId: io.env.BB_PROJECT_ID ?? null, provider, requestedModel, probe: false, cwd: io.cwd,
       }, 60_000)),
@@ -164,7 +183,7 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
   const startedAt = io.now();
   const limits: LimitObservation[] = [];
   const onLine = (line: string) => { const l = limitFromClaudeLine(line); if (l) limits.push(l); };
-  const turnArgs = replaceModel(args, route.modelId);
+  const turnArgs = replaceModel(sessionArgs, route.modelId);
   let exitCode: number | null = null;
   let transportError: string | null = null;
 
@@ -177,7 +196,8 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
   } else {
     const remoteCwd = route.cwd ?? io.cwd;
     const localSession = session.sessionId ? claudeSessionPath(io.cwd, session.sessionId, io.env) : null;
-    const put = session.resumes && localSession && existsSync(localSession) ? readFileSync(localSession) : null;
+    const found = session.sessionId ? localSessionFile(io, session.sessionId, route.cwd) : null;
+    const put = claudeSessionInfo(turnArgs).resumes && found ? readFileSync(found) : null;
     const { args: filtered, dropped } = remoteArgs(turnArgs);
     if (dropped.length > 0) logLine(io, `remote: dropped local-only flags ${dropped.join(',')}`);
     const api = httpTerminalApi(io.env.BB_SERVER_URL ?? '', io.fetch);
@@ -271,7 +291,8 @@ export function startStageChild(io: LauncherIo, provider: NativeProvider, route:
   }
   const session = claudeSessionInfo(args);
   const localSession = provider === 'claude-code' && session.sessionId ? claudeSessionPath(io.cwd, session.sessionId, io.env) : null;
-  const put = session.resumes && localSession && existsSync(localSession) ? readFileSync(localSession) : null;
+  const found = provider === 'claude-code' && session.sessionId ? localSessionFile(io, session.sessionId, route.cwd) : null;
+  const put = session.resumes && found ? readFileSync(found) : null;
   const { args: filtered, dropped } = remoteArgs(args);
   if (dropped.length > 0) logLine(io, `remote: dropped local-only flags ${dropped.join(',')}`);
   const sink = lineSink();

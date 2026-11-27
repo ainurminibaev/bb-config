@@ -30,6 +30,12 @@ export const machineSchema = z.object({
   pathTranslation: z.boolean().default(false),
   /** Машина-опора: после хода на другой машине файлы выравниваются по ней. */
   anchor: z.boolean().default(false),
+  /**
+   * SSH-цель опоры с этой машины (`tru`, `root@host`) для сессий Mutagen.
+   * У опоры не используется. null — берётся прежнее значение из хранилища
+   * плагина (`sync:anchor-ssh:<hostId>`), если оно есть.
+   */
+  anchorSsh: z.string().max(200).nullable().default(null),
 });
 export type Machine = z.infer<typeof machineSchema>;
 
@@ -176,16 +182,24 @@ export type QuotaState = z.infer<typeof quotaStateSchema>;
  * ступени задаётся вручную, реальные лимиты не тратятся. Действует только
  * в перечисленных тредах; превью и схема профиля на экране тоже его учитывают.
  */
+export const testQuotaEntrySchema = z.object({
+  state: quotaStateSchema.default('available'),
+  /** Время сброса (ISO); null — неизвестно. Исчерпание с прошедшим сбросом — «лимит есть». */
+  resetsAt: z.string().nullable().default(null),
+});
+export type TestQuotaEntry = z.infer<typeof testQuotaEntrySchema>;
+
 export const testQuotaSchema = z.object({
   enabled: z.boolean().default(false),
   /** Тестовые треды. Пусто — подмена не действует ни в одном треде. */
   threadIds: z.array(z.string().min(1)).default([]),
   /** stepId → лимит. Ступень без записи считается «лимит есть». */
-  steps: z.record(z.string(), z.object({
-    state: quotaStateSchema.default('available'),
-    /** Время сброса (ISO); null — неизвестно. */
-    resetsAt: z.string().nullable().default(null),
-  })).default({}),
+  steps: z.record(z.string(), testQuotaEntrySchema).default({}),
+  /**
+   * Подмена для одного живого треда (CLI `test-quota --thread`): threadId →
+   * stepId → лимит. Действует независимо от `enabled`; ступень без записи — «лимит есть».
+   */
+  threads: z.record(z.string(), z.record(z.string(), testQuotaEntrySchema)).default({}),
 });
 export type TestQuota = z.infer<typeof testQuotaSchema>;
 

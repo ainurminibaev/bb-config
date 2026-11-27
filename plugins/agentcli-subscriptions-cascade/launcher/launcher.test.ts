@@ -291,3 +291,47 @@ test('файл сессии: проба со старой копией не за
   const lines = readFileSync(remoteFile, 'utf8').trim().split('\n');
   assert.deepEqual(lines.slice(0, 2), ['{"turn":"ранее на Tru"}', '{"turn":"ход на UA"}']);
 });
+
+test('сессия: --resume только если файл сессии есть; иначе тот же ID как новая сессия', async () => {
+  const { resumeOrStart } = await import('./cli-args.ts');
+  const { localSessionFile } = await import('./main.ts');
+  assert.deepEqual(resumeOrStart(['-p', '--resume', SID, '--model=x'], () => false), ['-p', '--session-id', SID, '--model=x']);
+  assert.deepEqual(resumeOrStart(['-p', `--resume=${SID}`, `--session-id=${SID}`], () => false), ['-p', `--session-id=${SID}`]);
+  assert.deepEqual(resumeOrStart(['-p', `--resume=${SID}`], () => true), ['-p', `--resume=${SID}`]);
+  assert.deepEqual(resumeOrStart(['-p', `--session-id=${SID}`], () => false), ['-p', `--session-id=${SID}`], 'первый ход не трогаем');
+  // Файл ищется под папкой моста и папкой ступени.
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'cxh-')));
+  const env = { CLAUDE_CONFIG_DIR: join(home, 'cfg') };
+  assert.equal(localSessionFile({ cwd: '/work/app', env }, SID, '/opt/bbfs/app'), null);
+  const onStage = claudeSessionPath('/opt/bbfs/app', SID, env);
+  mkdirSync(join(onStage, '..'), { recursive: true });
+  writeFileSync(onStage, '{}\n');
+  assert.equal(localSessionFile({ cwd: '/work/app', env }, SID, '/opt/bbfs/app'), onStage);
+});
+
+test('реле сессии: прежний процесс не записал сессию — новая ступень стартует с --session-id', async () => {
+  const { runSessionRelay } = await import('./session-relay.ts');
+  type Route = { action: 'run'; stepId: string; hostId: string; providerId: string; modelId: string | null; local: boolean; cwd: string | null; env: Record<string, string>; stage: { machine: string }; notes: never[] };
+  const mk = (hostId: string): Route => ({ action: 'run', stepId: hostId, hostId, providerId: 'claude-code', modelId: null, local: true, cwd: null, env: {}, stage: { machine: hostId }, notes: [] });
+  const children: string[][] = [];
+  const stdin = new PassThrough();
+  const relay = runSessionRelay(mk('mac'), ['--input-format', 'stream-json', `--session-id=${SID}`], SID, {
+    start(_route, args, onLine) {
+      children.push(args);
+      let resolveDone!: (v: { code: number; transportError: null }) => void;
+      const done = new Promise<{ code: number; transportError: null }>(r => { resolveDone = r; });
+      return { write(line) { if (JSON.parse(line).type === 'user') setTimeout(() => onLine(JSON.stringify({ type: 'result' })), 5); }, end() { resolveDone({ code: 0, transportError: null }); }, kill() {}, done };
+    },
+    routeTurn: async () => mk('ua'),
+    sessionExists: () => false,
+    finishTurn: async () => {}, feed: async () => {}, limitFromLine: () => null,
+    stdin, stdout: { write() {} }, stderr: { write() {} }, now: Date.now, log() {},
+  });
+  stdin.write(`${JSON.stringify({ type: 'user', message: { content: '1' } })}\n`);
+  await new Promise(r => setTimeout(r, 30));
+  stdin.write(`${JSON.stringify({ type: 'user', message: { content: '2' } })}\n`);
+  await new Promise(r => setTimeout(r, 30));
+  stdin.end();
+  await relay;
+  assert.deepEqual(children[1], ['--input-format', 'stream-json', `--session-id=${SID}`]);
+});

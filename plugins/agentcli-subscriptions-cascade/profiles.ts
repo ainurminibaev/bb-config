@@ -1,7 +1,7 @@
 // Профили каскада: умолчания, заготовки «+ Профиль», подписи, список моделей
 // провайдера, превью «куда пошёл бы ход» и тестовый источник квоты.
 // Чистые функции; план и решение берутся только из движка (engine.ts).
-import { AUTO_MODEL_ID, type CascadeConfig, type DiscoveredAccount, type Profile, type QuotaState, type Step } from './contract.ts';
+import { AUTO_MODEL_ID, type CascadeConfig, type DiscoveredAccount, type Profile, type QuotaState, type Step, type TestQuotaEntry } from './contract.ts';
 import { buildPlan, explainProfile, profileSteps, stepConfirm, type Attempt, type Decision, type HealthLookup, type ThreadCascadeState } from './engine.ts';
 import type { StepHealth } from './limits.ts';
 
@@ -194,24 +194,33 @@ export function healthFromState(state: QuotaState, resetsAt: number | null): Ste
   };
 }
 
-/** Тестовые лимиты ступеней (без записи — «лимит есть»). */
-export function testQuotaLookup(config: CascadeConfig): HealthLookup {
-  return stepId => {
-    const entry = config.testQuota.steps[stepId];
-    if (!entry) return healthFromState('available', null);
-    const at = entry.resetsAt ? Date.parse(entry.resetsAt) : NaN;
-    return healthFromState(entry.state, Number.isFinite(at) ? at : null);
-  };
+/** Тестовая запись → лимит. Исчерпание с прошедшим сбросом — «лимит есть» (S4 на тестовом треде). */
+function healthFromTestEntry(entry: TestQuotaEntry | undefined, now: number | null): StepHealth {
+  if (!entry) return healthFromState('available', null);
+  const at = entry.resetsAt ? Date.parse(entry.resetsAt) : NaN;
+  const resetsAt = Number.isFinite(at) ? at : null;
+  if (entry.state === 'exhausted' && resetsAt !== null && now !== null && resetsAt <= now) return healthFromState('available', null);
+  return healthFromState(entry.state, resetsAt);
 }
 
-/** Действует ли тестовый источник в этом треде. */
+/**
+ * Тестовые лимиты ступеней (без записи — «лимит есть»). С threadId записи
+ * этого треда главнее общих; `now` включает автосброс исчерпания.
+ */
+export function testQuotaLookup(config: CascadeConfig, threadId: string | null = null, now: number | null = null): HealthLookup {
+  const own = threadId ? config.testQuota.threads[threadId] : undefined;
+  const shared = threadId === null || (config.testQuota.enabled && config.testQuota.threadIds.includes(threadId));
+  return stepId => healthFromTestEntry(own?.[stepId] ?? (shared ? config.testQuota.steps[stepId] : undefined), now);
+}
+
+/** Действует ли тестовый источник в этом треде: общий флаг со списком или своя подмена треда. */
 export function usesTestQuota(config: CascadeConfig, threadId: string): boolean {
-  return config.testQuota.enabled && config.testQuota.threadIds.includes(threadId);
+  return (config.testQuota.enabled && config.testQuota.threadIds.includes(threadId)) || config.testQuota.threads[threadId] !== undefined;
 }
 
 /** Лимиты, которые движок видит в треде: тестовые для тестовых тредов, иначе реальные. */
-export function quotaLookupFor(config: CascadeConfig, threadId: string, real: HealthLookup): HealthLookup {
-  return usesTestQuota(config, threadId) ? testQuotaLookup(config) : real;
+export function quotaLookupFor(config: CascadeConfig, threadId: string, real: HealthLookup, now: number = Date.now()): HealthLookup {
+  return usesTestQuota(config, threadId) ? testQuotaLookup(config, threadId, now) : real;
 }
 
 /** Лимиты превью и схемы на экране: тестовые, пока флаг включён, иначе по сводке монитора. */
