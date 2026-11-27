@@ -6,6 +6,7 @@
 // в настройках машины (`machine.anchorSsh`, секция «Машины»). Прежнее значение
 // из bb.storage.kv `sync:anchor-ssh:<hostId>` читается, если поле пустое.
 import { defineRpcContract, type BbPluginApi } from '@get-bb/plugin-sdk';
+import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
 import { z } from 'zod';
 import { syncIgnores } from '../config.ts';
@@ -14,9 +15,12 @@ import { syncHostContract } from './contract.ts';
 import { symlinkModeFor, type SyncModeExt } from './mutagen.ts';
 import { projectSlug, SyncOrchestrator, type ProjectSyncState, type SyncHostCall, type SyncMachine, type SyncProjectContext, type SyncResult, type SyncStepRef, type SyncThreadRef } from './orchestrator.ts';
 
+/** Тред для синхронизации: проект и рабочая папка треда на опоре (worktree), если известна. */
+export interface SyncThreadInput { threadId: string; projectId: string; workspace?: string | null }
+
 export interface SyncService {
-  prepareTurn(thread: SyncThreadRef, step: SyncStepRef): Promise<SyncResult>;
-  finishTurn(thread: SyncThreadRef, step: SyncStepRef): Promise<SyncResult>;
+  prepareTurn(thread: SyncThreadInput, step: SyncStepRef): Promise<SyncResult>;
+  finishTurn(thread: SyncThreadInput, step: SyncStepRef): Promise<SyncResult>;
   applyMode(projectId: string): Promise<SyncResult>;
   teardown(projectId: string, options?: { removeMount?: boolean }): Promise<SyncResult>;
   status(projectId: string): Promise<ProjectSyncState & { mode: SyncModeExt }>;
@@ -25,6 +29,25 @@ export interface SyncService {
 }
 
 const SSH_KEY = (hostId: string) => `sync:anchor-ssh:${hostId}`;
+const UNIT_KEY = (unitId: string) => `sync:unit:${unitId}`;
+const UNIT_MARK = '~w';
+
+/**
+ * Единица синхронизации: основная папка проекта на опоре — ключ = ID проекта;
+ * отдельная рабочая папка треда (worktree) — `<проект>~w<хеш пути>`. У каждой
+ * единицы своя папка в общем пути, свои сессии Mutagen и своя блокировка
+ * «один писатель»: треды одного проекта в разных worktree не мешают друг другу.
+ */
+export function syncUnitId(projectId: string, workspace: string | null | undefined, projectDefault: string | null): string {
+  const norm = (path: string) => path.replace(/\/+$/u, '');
+  if (!workspace || (projectDefault !== null && norm(workspace) === norm(projectDefault))) return projectId;
+  return `${projectId}${UNIT_MARK}${createHash('sha256').update(norm(workspace)).digest('hex').slice(0, 8)}`;
+}
+
+export function parseUnitId(unitId: string): { projectId: string; suffix: string | null } {
+  const at = unitId.lastIndexOf(UNIT_MARK);
+  return at === -1 ? { projectId: unitId, suffix: null } : { projectId: unitId.slice(0, at), suffix: unitId.slice(at + UNIT_MARK.length) };
+}
 const STATE_KEY = (projectId: string) => `sync:project:${projectId}`;
 const SSH_TARGET = /^[A-Za-z0-9_.@-]+$/;
 
@@ -53,7 +76,7 @@ export function machineAnchorSsh(machine: Pick<Machine, 'anchorSsh'>): string | 
   return machine.anchorSsh && SSH_TARGET.test(machine.anchorSsh) ? machine.anchorSsh : null;
 }
 
-export function buildContext(args: { config: CascadeConfig; projectId: string; projectName: string; anchorSource: string | null; ssh: ReadonlyMap<string, string> }): SyncProjectContext {
+export function buildContext(args: { config: CascadeConfig; projectId: string; projectName: string; anchorSource: string | null; ssh: ReadonlyMap<string, string>; unitId?: string; unitSuffix?: string | null }): SyncProjectContext {
   const { config, projectId } = args;
   const anchor = config.machines.find(m => m.anchor) ?? null;
   if (!anchor) throw new Error('В каскаде не выбрана опорная машина');
@@ -61,9 +84,11 @@ export function buildContext(args: { config: CascadeConfig; projectId: string; p
   const real = args.anchorSource.replace(/\/+$/, '');
   const shared = anchor.sharedPath.replace(/\/+$/, '');
   // Проект уже лежит в общем пути — его имя и есть папка; иначе имя реальной папки.
-  const slug = posix.dirname(real) === shared ? posix.basename(real) : projectSlug(posix.basename(real) || args.projectName, projectId);
+  const base = posix.dirname(real) === shared ? posix.basename(real) : projectSlug(posix.basename(real) || args.projectName, projectId);
+  // Рабочая папка треда: своя папка в общем пути рядом с основной.
+  const slug = args.unitSuffix ? `${base}-w${args.unitSuffix}` : base;
   return {
-    projectId,
+    projectId: args.unitId ?? projectId,
     slug,
     anchorRealPath: real,
     anchor: toSyncMachine(anchor),
@@ -73,6 +98,28 @@ export function buildContext(args: { config: CascadeConfig; projectId: string; p
     symlinkMode: symlinkModeFor([anchor, ...config.machines.filter(m => m.enabled && !m.anchor)]),
     anchorSsh: hostId => args.ssh.get(hostId) ?? null,
   };
+}
+
+/** Статусы треда, при которых его ход ещё может идти. */
+const LIVE_STATUSES = new Set(['active', 'running', 'starting', 'stopping', 'working', 'busy']);
+
+const isNotFound = (error: unknown) => /not[ _-]?found|404|no such thread/iu.test(error instanceof Error ? error.message : String(error));
+
+/**
+ * Жив ли тред-владелец блокировки (читается терпимо): удалён или заархивирован —
+ * false; статус хода известен и не «идёт» — false; ответ непонятен — null.
+ */
+export function threadActiveFrom(raw: unknown): boolean | null {
+  if (raw === undefined || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (r.missing === true) return false;
+  const thread = (r.thread && typeof r.thread === 'object' ? r.thread : r) as Record<string, unknown>;
+  if (thread.archivedAt !== null && thread.archivedAt !== undefined) return false;
+  if (thread.deletedAt !== null && thread.deletedAt !== undefined) return false;
+  const runtime = (thread.runtime && typeof thread.runtime === 'object' ? thread.runtime : {}) as Record<string, unknown>;
+  const status = typeof runtime.displayStatus === 'string' ? runtime.displayStatus : typeof thread.status === 'string' ? thread.status : null;
+  if (status === null) return null;
+  return LIVE_STATUSES.has(status);
 }
 
 export function createSyncService(bb: BbPluginApi, loadConfig: () => Promise<{ config: CascadeConfig }>): SyncService {
@@ -87,10 +134,28 @@ export function createSyncService(bb: BbPluginApi, loadConfig: () => Promise<{ c
     return typeof value === 'string' && SSH_TARGET.test(value) ? value : null;
   }
 
-  async function context(projectId: string): Promise<SyncProjectContext> {
+  async function projectOf(projectId: string): Promise<unknown> {
+    return bb.sdk.projects.get({ projectId } as Parameters<typeof bb.sdk.projects.get>[0]).catch(() => null);
+  }
+
+  /** Единица синхронизации треда; путь рабочей папки запоминается для context(). */
+  async function unitOf(thread: SyncThreadInput): Promise<SyncThreadRef> {
+    if (!thread.workspace) return { threadId: thread.threadId, projectId: thread.projectId };
     const { config } = await loadConfig();
     const anchor = config.machines.find(m => m.anchor);
-    const project = await bb.sdk.projects.get({ projectId } as Parameters<typeof bb.sdk.projects.get>[0]).catch(() => null);
+    const projectDefault = anchor ? projectSourceOn(await projectOf(thread.projectId), anchor.hostId) : null;
+    const unitId = syncUnitId(thread.projectId, thread.workspace, projectDefault);
+    if (unitId !== thread.projectId) await bb.storage.kv.set(UNIT_KEY(unitId), { projectId: thread.projectId, workspace: thread.workspace });
+    return { threadId: thread.threadId, projectId: unitId };
+  }
+
+  async function context(unitId: string): Promise<SyncProjectContext> {
+    const { config } = await loadConfig();
+    const anchor = config.machines.find(m => m.anchor);
+    const { projectId, suffix } = parseUnitId(unitId);
+    const unit = suffix ? await bb.storage.kv.get<{ projectId: string; workspace: string }>(UNIT_KEY(unitId)).catch(() => undefined) : undefined;
+    if (suffix && !unit) throw new Error(`Рабочая папка ${unitId} неизвестна: начните ход заново`);
+    const project = await projectOf(projectId);
     const ssh = new Map<string, string>();
     for (const m of config.machines) {
       if (m.anchor) continue;
@@ -98,7 +163,8 @@ export function createSyncService(bb: BbPluginApi, loadConfig: () => Promise<{ c
       if (target) ssh.set(m.hostId, target);
     }
     const name = (project as { name?: unknown } | null)?.name;
-    return buildContext({ config, projectId, projectName: typeof name === 'string' ? name : projectId, anchorSource: anchor ? projectSourceOn(project, anchor.hostId) : null, ssh });
+    const anchorSource = unit ? unit.workspace : anchor ? projectSourceOn(project, anchor.hostId) : null;
+    return buildContext({ config, projectId, projectName: typeof name === 'string' ? name : projectId, anchorSource, ssh, unitId, unitSuffix: suffix });
   }
 
   const orchestrator = new SyncOrchestrator({
@@ -108,11 +174,12 @@ export function createSyncService(bb: BbPluginApi, loadConfig: () => Promise<{ c
       get: id => bb.storage.kv.get<ProjectSyncState>(STATE_KEY(id)),
       set: (id, state) => bb.storage.kv.set(STATE_KEY(id), state),
     },
+    threadActive: async threadId => threadActiveFrom(await bb.sdk.threads.get({ threadId }).catch(error => (isNotFound(error) ? { missing: true } : undefined))),
   });
 
   return {
-    prepareTurn: (thread, step) => orchestrator.prepareTurn(thread, step),
-    finishTurn: (thread, step) => orchestrator.finishTurn(thread, step),
+    prepareTurn: async (thread, step) => orchestrator.prepareTurn(await unitOf(thread), step),
+    finishTurn: async (thread, step) => orchestrator.finishTurn(await unitOf(thread), step),
     applyMode: projectId => orchestrator.applyMode(projectId),
     teardown: (projectId, options) => orchestrator.teardown(projectId, options),
     async status(projectId) {

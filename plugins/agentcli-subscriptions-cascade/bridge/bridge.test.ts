@@ -436,3 +436,34 @@ test('S14: provider-retry после лимита — свой тред: ready /
   const off = routeFixture({ mode: 'off' });
   assert.deepEqual(await off.routes.retryAvailability('thr_1'), { kind: 'not-routed' });
 });
+
+test('маршрут: рабочую папку пишет другой живой тред — ждём с таймаутом; освободилась — ход идёт; нет — понятный отказ', async () => {
+  let clock = Date.parse('2026-11-27T12:00:00Z');
+  const busy: SyncOutcome = { ok: false, reason: 'busy', message: 'Рабочую папку сейчас пишет другой тред (thr_x) на Mac', conflicts: [], timings: [], notices: [] };
+  const make = (freeAfter: number) => {
+    let calls = 0;
+    const seen: unknown[] = [];
+    const routes = createRouteService({
+      loadConfig: async () => cfg(), accounts: () => ACCOUNTS, health: () => stepId => stepId === TRU_MAX ? exhausted(null) : ok,
+      refreshLimits: async () => {}, observeLimit: () => {},
+      threadInfo: async () => ({ projectId: 'proj_1', hostId: TRU, parentThreadId: null, providerId: 'subscriptions-cascade' }),
+      load: async () => undefined, save: async () => {},
+      sync: {
+        prepareTurn: async thread => { seen.push(thread); calls += 1; return calls > freeAfter ? { ok: true, cwd: '/opt/bbfs/proj-w1', env: {}, timings: [], notices: [] } : busy; },
+        finishTurn: async () => busy,
+      },
+      now: () => clock, sleep: async ms => { clock += ms; }, busyWaitMs: 60_000,
+    });
+    return { routes, seen };
+  };
+  const freed = make(3);
+  const ran = await freed.routes.routeTurn({ ...turn, cwd: '/data/worktrees/thr_1-1/proj' });
+  assert.equal(ran.action, 'run');
+  assert.ok(ran.action === 'run' && ran.notes.some(n => n.kind === 'wait' && /Ждал освобождения рабочей папки 30 с/u.test(n.note ?? '')));
+  assert.deepEqual((freed.seen[0] as { workspace: string }).workspace, '/data/worktrees/thr_1-1/proj', 'мост на опоре — его cwd и есть рабочая папка');
+  const stuck = make(100);
+  const refused = await stuck.routes.routeTurn(turn);
+  assert.equal(refused.action, 'refuse');
+  assert.equal(refused.action === 'refuse' && refused.retryable, true);
+  assert.match(refused.action === 'refuse' ? refused.message : '', /Ход не запущен: Каскад подписок → синхронизация Mac: .* не освободилась за 1 мин/u);
+});

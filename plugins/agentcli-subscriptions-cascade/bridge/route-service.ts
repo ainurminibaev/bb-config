@@ -15,8 +15,9 @@ export type SyncOutcome =
   | { ok: false; reason: string; message: string; conflicts: string[]; timings: { step: string; hostId: string; from?: string; to?: string; seconds: number; ok: boolean; detail?: string }[]; notices: string[] };
 
 export interface SyncPort {
-  prepareTurn(thread: { threadId: string; projectId: string }, step: { hostId: string }): Promise<SyncOutcome>;
-  finishTurn(thread: { threadId: string; projectId: string }, step: { hostId: string }): Promise<SyncOutcome>;
+  /** workspace — рабочая папка треда на опоре (worktree): своя единица синхронизации и блокировка. */
+  prepareTurn(thread: { threadId: string; projectId: string; workspace?: string | null }, step: { hostId: string }): Promise<SyncOutcome>;
+  finishTurn(thread: { threadId: string; projectId: string; workspace?: string | null }, step: { hostId: string }): Promise<SyncOutcome>;
   /** Режим синхронизации проекта для паспорта. */
   modeOf?(config: CascadeConfig, projectId: string): string;
 }
@@ -36,6 +37,8 @@ export interface StoredThreadState {
   lastRun: { stepId: string; hostId: string; providerId: string; modelId: string | null; at: number } | null;
   /** Ход на машине не-опоре ещё не вернул файлы (finishTurn не прошёл). */
   pendingFlushHostId: string | null;
+  /** Рабочая папка треда на опоре (cwd моста, если мост на опоре); null — основная папка проекта. */
+  workspace?: string | null;
 }
 
 export interface RouteDeps {
@@ -53,6 +56,10 @@ export interface RouteDeps {
   sync: SyncPort | null;
   now(): number;
   warn?(message: string): void;
+  /** Пауза ожидания занятой рабочей папки (тесты подменяют). */
+  sleep?(ms: number): Promise<void>;
+  /** Сколько ждать, пока другой живой тред пишет рабочую папку. По умолчанию 10 мин. */
+  busyWaitMs?: number;
 }
 
 export const PROVIDER_ID_LOCAL = 'subscriptions-cascade';
@@ -218,10 +225,28 @@ export function createRouteService(deps: RouteDeps): RouteService {
       // Опора на чужой машине (мост не на опоре) тоже готовится через sync: так ход
       // получает папку проекта на опоре, а не путь машины моста.
       const needsSync = deps.sync !== null && projectId !== '' && (decision.hostId !== anchor || stored.pendingFlushHostId !== null || !local);
+      // Рабочая папка треда: мост на опоре — его cwd и есть папка на опоре (worktree треда).
+      const workspace = bridgeHost !== null && bridgeHost === anchor ? input.cwd : stored.workspace ?? null;
       if (needsSync) {
-        const outcome = await deps.sync!.prepareTurn({ threadId: input.threadId, projectId }, { hostId: decision.hostId }).catch(error => ({
+        const prepare = () => deps.sync!.prepareTurn({ threadId: input.threadId, projectId, workspace }, { hostId: decision.hostId }).catch(error => ({
           ok: false as const, reason: 'error', message: error instanceof Error ? error.message : String(error), conflicts: [], timings: [], notices: [],
         }));
+        let outcome: SyncOutcome = await prepare();
+        // Папку пишет другой живой тред: ждём его конца с таймаутом, а не роняем ход.
+        const waitStarted = deps.now();
+        const busyWaitMs = deps.busyWaitMs ?? 10 * 60_000;
+        const sleep = deps.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
+        while (!outcome.ok && outcome.reason === 'busy' && deps.now() - waitStarted < busyWaitMs) {
+          await sleep(10_000);
+          outcome = await prepare();
+        }
+        const waited = deps.now() - waitStarted;
+        if (!outcome.ok && outcome.reason === 'busy') {
+          const message = `Ход не запущен: Каскад подписок → синхронизация ${to.machine}: ${outcome.message} — не освободилась за ${Math.round(waited / 60_000)} мин. Повторите ход, когда тот тред закончит.`;
+          notes.push(...syncNotes(config, outcome), { kind: 'problem', message: message.slice(0, 300), stage: to, stepId: decision.stepId });
+          return { action: 'refuse', retryable: true, message, notes };
+        }
+        if (waited >= 10_000) notes.push({ kind: 'wait', cause: 'recheck', until: null, note: `Ждал освобождения рабочей папки ${Math.round(waited / 1000)} с`, stepId: decision.stepId });
         notes.push(...syncNotes(config, outcome));
         if (!outcome.ok) {
           const message = `Файлы не готовы к ходу на ${to.machine}: ${outcome.message}`;
@@ -247,6 +272,7 @@ export function createRouteService(deps: RouteDeps): RouteService {
         engine: nextThreadState(engine, decision, now),
         lastRun: { stepId: decision.stepId, hostId: decision.hostId, providerId: decision.providerId, modelId: decision.modelId, at: now },
         pendingFlushHostId: decision.hostId !== anchor && needsSync ? decision.hostId : stored.pendingFlushHostId,
+        workspace,
       });
       return { action: 'run', stepId: decision.stepId, hostId: decision.hostId, providerId: decision.providerId, modelId: decision.modelId, local, cwd, env, stage: to, notes };
     });
@@ -264,7 +290,7 @@ export function createRouteService(deps: RouteDeps): RouteService {
       const projectId = input.projectId ?? stored?.engine.projectId ?? '';
       const anchor = anchorHostId(config);
       if (deps.sync && projectId && input.hostId !== anchor && stored?.pendingFlushHostId === input.hostId) {
-        const outcome = await deps.sync.finishTurn({ threadId: input.threadId, projectId }, { hostId: input.hostId }).catch(error => ({
+        const outcome = await deps.sync.finishTurn({ threadId: input.threadId, projectId, workspace: stored.workspace ?? null }, { hostId: input.hostId }).catch(error => ({
           ok: false as const, reason: 'error', message: error instanceof Error ? error.message : String(error), conflicts: [], timings: [], notices: [],
         }));
         notes.push(...syncNotes(config, outcome));

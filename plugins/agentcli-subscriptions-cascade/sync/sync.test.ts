@@ -477,7 +477,7 @@ test('строки ленты: flush и выравнивание с направ
   assert.ok(lines.some(l => /^Tru → Mac: flush \d+,\d с ✓$/.test(l)));
   assert.match(summaryLine(prepared, label, 'prepare'), /^Файлы готовы к ходу за \d+,\d с \(Tru, Mac\) ✓$/);
   const busy = await sync.prepareTurn(T2, { hostId: TRU });
-  assert.match(summaryLine(busy, label, 'prepare'), /^Синхронизация: Проект сейчас пишет другой тред на Mac/);
+  assert.match(summaryLine(busy, label, 'prepare'), /^Синхронизация: Рабочую папку сейчас пишет другой тред \(thr_a\) на Mac/);
 });
 
 test('SSH к опоре: из настроек машины; недопустимое значение не используется', async () => {
@@ -526,4 +526,91 @@ test('смена режима symlink пересоздаёт сессии пре
   const spec = { role: 'w' as const, alpha: 'tru:/opt/bbfs/app', beta: '/opt/bbfs/app', ignores: ['node_modules'] };
   assert.notEqual(specFingerprint({ ...spec, symlinkMode: 'portable' }), specFingerprint({ ...spec, symlinkMode: 'posix-raw' }));
   assert.equal(specFingerprint(spec), specFingerprint({ ...spec, symlinkMode: 'posix-raw' }));
+});
+
+// ---- Блокировка «один писатель»: устаревшая и по рабочей папке ----
+
+test('блокировка упавшего треда: тред не идёт — изменения возвращаются, блокировка снимается; живой — busy', async () => {
+  const fake = new FakeMutagen();
+  const states = new Map<string, ProjectSyncState>();
+  let alive = true;
+  const sync = new SyncOrchestrator({
+    call: fake.call, context: async () => context(),
+    store: { get: async id => structuredClone(states.get(id)), set: async (id, s) => { states.set(id, structuredClone(s)); } },
+    now: () => 1_000_000, sleep: async () => {}, gitWaitMs: 0,
+    threadActive: async id => (id === 'thr_a' ? alive : true),
+  });
+  assert.equal((await sync.prepareTurn(T, { hostId: MAC })).ok, true, 'тред A начал ход на Mac');
+  const busy = await sync.prepareTurn(T2, { hostId: MAC });
+  assert.equal(!busy.ok && busy.reason, 'busy', 'A ещё идёт — B ждёт');
+  alive = false; // A упал / заархивирован
+  const taken = await sync.prepareTurn(T2, { hostId: MAC });
+  assert.equal(taken.ok, true, taken.ok ? '' : taken.message);
+  assert.ok(taken.notices.some(n => /Снята блокировка брошенного хода треда thr_a/u.test(n)), taken.notices.join('\n'));
+  assert.equal(states.get('proj_1')!.writer!.threadId, 'thr_b');
+});
+
+test('блокировка брошенного треда снимается, даже если его изменения не вернулись на опору', async () => {
+  const fake = new FakeMutagen();
+  const states = new Map<string, ProjectSyncState>();
+  const sync = new SyncOrchestrator({
+    call: fake.call, context: async () => context(),
+    store: { get: async id => structuredClone(states.get(id)), set: async (id, s) => { states.set(id, structuredClone(s)); } },
+    now: () => 1_000_000, sleep: async () => {}, gitWaitMs: 0, threadActive: async id => id !== 'thr_a',
+  });
+  assert.equal((await sync.prepareTurn(T, { hostId: MAC })).ok, true);
+  fake.conflictsAfterFlush = ['src/a.ts']; // возврат A на опору упрётся в конфликт
+  const taken = await sync.prepareTurn(T2, { hostId: UA });
+  assert.equal(taken.ok, true, taken.ok ? '' : taken.message);
+  assert.ok(taken.notices.some(n => /не вернулись на Tru .*остались на Mac/u.test(n)), taken.notices.join('\n'));
+  assert.equal(states.get('proj_1')!.writer!.hostId, UA);
+});
+
+test('два worktree одного проекта: свои единицы, папки, сессии и блокировки — не мешают друг другу', async () => {
+  const { syncUnitId, parseUnitId } = await import('./service.ts');
+  const main = '/srv/projects/app';
+  const wt1 = '/data/worktrees/thr_a-1/app';
+  const wt2 = '/data/worktrees/thr_b-1/app';
+  assert.equal(syncUnitId('proj_1', main, main), 'proj_1', 'основная папка — ключ проекта');
+  assert.equal(syncUnitId('proj_1', `${main}/`, main), 'proj_1');
+  assert.equal(syncUnitId('proj_1', null, main), 'proj_1');
+  const u1 = syncUnitId('proj_1', wt1, main);
+  const u2 = syncUnitId('proj_1', wt2, main);
+  assert.notEqual(u1, u2);
+  assert.match(u1, /^proj_1~w[0-9a-f]{8}$/u);
+  assert.deepEqual(parseUnitId(u1), { projectId: 'proj_1', suffix: u1.slice(-8) });
+  const config = configSchema.parse({ machines: [{ hostId: TRU, label: 'Tru', anchor: true, platform: 'linux' }, { hostId: MAC, label: 'Mac', platform: 'macos' }] });
+  const ctx1 = buildContext({ config, projectId: 'proj_1', projectName: 'app', anchorSource: wt1, ssh: new Map([[MAC, 'tru']]), unitId: u1, unitSuffix: parseUnitId(u1).suffix });
+  assert.equal(ctx1.projectId, u1);
+  assert.equal(ctx1.slug, `app-w${parseUnitId(u1).suffix}`, 'своя папка в общем пути, рядом с основной');
+  assert.equal(ctx1.anchorRealPath, wt1);
+
+  // Оркестратор: два треда пишут каждый свой worktree на Mac одновременно.
+  const fake = new FakeMutagen();
+  const states = new Map<string, ProjectSyncState>();
+  const sync = new SyncOrchestrator({
+    call: fake.call,
+    context: async id => ({ ...context(), projectId: id, slug: id === u1 ? 'app-w1' : 'app-w2' }),
+    store: { get: async id => structuredClone(states.get(id)), set: async (id, s) => { states.set(id, structuredClone(s)); } },
+    now: () => 1_000_000, sleep: async () => {}, gitWaitMs: 0, threadActive: async () => true,
+  });
+  const a = await sync.prepareTurn({ threadId: 'thr_a', projectId: u1 }, { hostId: MAC });
+  const b = await sync.prepareTurn({ threadId: 'thr_b', projectId: u2 }, { hostId: MAC });
+  assert.equal(a.ok && a.cwd, '/opt/bbfs/app-w1');
+  assert.equal(b.ok && b.cwd, '/opt/bbfs/app-w2');
+  assert.equal(states.get(u1)!.writer!.threadId, 'thr_a');
+  assert.equal(states.get(u2)!.writer!.threadId, 'thr_b');
+  assert.equal(fake.sessions.get(MAC)!.size, 4, 'по две сессии (R, W) на каждый worktree');
+});
+
+test('жив ли тред: архив, удаление, статус хода, непонятный ответ', async () => {
+  const { threadActiveFrom } = await import('./service.ts');
+  assert.equal(threadActiveFrom({ missing: true }), false);
+  assert.equal(threadActiveFrom({ thread: { archivedAt: 1, runtime: { displayStatus: 'active' } } }), false);
+  assert.equal(threadActiveFrom({ thread: { archivedAt: null, runtime: { displayStatus: 'idle' } } }), false);
+  assert.equal(threadActiveFrom({ thread: { archivedAt: null, runtime: { displayStatus: 'error' } } }), false);
+  assert.equal(threadActiveFrom({ thread: { archivedAt: null, runtime: { displayStatus: 'active' } } }), true);
+  assert.equal(threadActiveFrom({ thread: { status: 'running' } }), true);
+  assert.equal(threadActiveFrom(undefined), null);
+  assert.equal(threadActiveFrom({ thread: {} }), null);
 });

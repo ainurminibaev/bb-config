@@ -94,7 +94,15 @@ export type SyncResult =
   | { ok: true; cwd: string; env: Record<string, string>; timings: SyncTiming[]; notices: string[] }
   | { ok: false; reason: SyncRefusal; message: string; conflicts: string[]; timings: SyncTiming[]; notices: string[] };
 
-export interface SyncThreadRef { threadId: string; projectId: string }
+export interface SyncThreadRef {
+  threadId: string;
+  /**
+   * Ключ единицы синхронизации: ID проекта для основной папки проекта или
+   * `<проект>~w<хеш>` для отдельной рабочей папки треда (worktree). Блокировка
+   * «один писатель», сессии Mutagen и папка в общем пути — свои у каждой единицы.
+   */
+  projectId: string;
+}
 export interface SyncStepRef { hostId: string }
 
 export interface SyncOrchestratorDeps {
@@ -109,6 +117,11 @@ export interface SyncOrchestratorDeps {
   gitWaitMs?: number;
   /** Карантин на исполнителе: `<база>/<slug>/<время>/`. */
   quarantineBase?: string;
+  /**
+   * Жив ли тред (идёт ход): false — блокировка этого треда устарела (тред упал,
+   * заархивирован, удалён, ход не идёт). null/undefined — неизвестно: только срок.
+   */
+  threadActive?(threadId: string): Promise<boolean | null>;
 }
 
 class Refused extends Error {
@@ -205,15 +218,38 @@ export class SyncOrchestrator {
     const now = this.now();
     const stale = (since: number) => now - since > (this.deps.staleAfterMs ?? 6 * 3600_000);
 
-    // Открытый писатель: свой незакрытый ход закрываем, чужой живой — отказ.
+    // Блокировка чужого треда устарела по сроку или потому, что тред не идёт
+    // (упал, заархивирован, удалён): её снимаем, а не ждём.
+    const abandoned = async (threadId: string, since: number) => {
+      if (stale(since)) return true;
+      const active = await this.deps.threadActive?.(threadId).catch(() => null);
+      return active === false;
+    };
+
+    // Открытый писатель: свой незакрытый ход закрываем, чужой живой — отказ «busy»
+    // (исполнитель ждёт), брошенный — возвращаем его изменения на опору и снимаем.
     if (state.writer) {
       const writer = state.writer;
-      if (writer.threadId !== thread.threadId && !stale(writer.since)) {
-        throw new Refused('busy', `Проект сейчас пишет другой тред на ${this.label(ctx, writer.hostId)}: ход подождёт его конца`);
+      const foreign = writer.threadId !== thread.threadId;
+      if (foreign && !(await abandoned(writer.threadId, writer.since))) {
+        throw new Refused('busy', `Рабочую папку сейчас пишет другой тред (${writer.threadId}) на ${this.label(ctx, writer.hostId)}`);
       }
-      await this.release(ctx, state, timings, notices);
+      try {
+        await this.release(ctx, state, timings, notices);
+        if (foreign) notices.push(`Снята блокировка брошенного хода треда ${writer.threadId} на ${this.label(ctx, writer.hostId)}: его изменения возвращены на ${ctx.anchor.label}`);
+      } catch (error) {
+        if (!foreign) throw error;
+        // Брошенный ход не вернулся на опору: блокировку снимаем, его файлы остаются на машине.
+        const machine = ctx.executors.find(m => m.hostId === writer.hostId);
+        await this.mutagenOk(writer.hostId, sessionArgs('pause', sessionName(ctx.projectId, writer.hostId, 'w')), 60_000).catch(() => undefined);
+        state.writer = null;
+        await this.deps.store.set(ctx.projectId, state);
+        notices.push(`Снята блокировка брошенного хода треда ${writer.threadId}: его изменения не вернулись на ${ctx.anchor.label} (${error instanceof Error ? error.message : String(error)}) и остались на ${this.label(ctx, writer.hostId)}${machine ? ` в ${projectRoot(machine, ctx.slug)}` : ''}`);
+      }
     }
-    for (const [threadId, since] of Object.entries(state.anchorTurns)) if (threadId === thread.threadId || stale(since)) delete state.anchorTurns[threadId];
+    for (const [threadId, since] of Object.entries(state.anchorTurns)) {
+      if (threadId === thread.threadId || await abandoned(threadId, since)) delete state.anchorTurns[threadId];
+    }
 
     if (host === anchor) {
       const cwd = await this.ensureMount(ctx, timings, ctx.mode === 'off');
@@ -227,7 +263,7 @@ export class SyncOrchestrator {
     if (!machine) throw new Refused('unsupported', `Машина ${host} не участвует в синхронизации проекта`);
     if (machine.pathTranslation || machine.platform === 'windows') throw new Refused('unsupported', `${machine.label}: нативный Windows пока не синхронизируется (нужен перевод путей)`);
     const busy = Object.keys(state.anchorTurns);
-    if (busy.length) throw new Refused('busy', `На ${ctx.anchor.label} идёт ход другого треда этого проекта: ход подождёт его конца`);
+    if (busy.length) throw new Refused('busy', `На ${ctx.anchor.label} идёт ход другого треда (${busy.join(', ')}) в этой рабочей папке`);
     const ssh = ctx.anchorSsh(host);
     if (!ssh) throw new Refused('not-configured', `${machine.label}: не задан SSH-доступ к ${ctx.anchor.label} для Mutagen. Задайте его в настройках «Каскада»: Машины → ${machine.label} → «SSH к опоре» (имя из ~/.ssh/config на ${machine.label} или user@host).`);
 
