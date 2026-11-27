@@ -60,5 +60,8 @@
     "source": "https://github.com/ainurminibaev/bb-plugin-telegram-projects",
     "install": "bb plugin install git:https://github.com/ainurminibaev/bb-plugin-telegram-projects.git@^0.9.1-personal.24 --yes",
     "note": "Personal Telegram bridge; formerly externally-managed-plugins.json"
+  },
+  "thread-description": {
+    "home": "bb-config"
   }
 }
