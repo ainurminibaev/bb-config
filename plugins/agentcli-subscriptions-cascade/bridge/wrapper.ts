@@ -150,6 +150,15 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
   let feedServer: Server | null = null;
   let feedPath: string | null = null;
   let internalId = 0;
+  /**
+   * Тред, команду которого мост последней отдал мосту Codex (он мог поднять app-server).
+   * Процесс моста служит треду своего runtime; запись живёт 10 минут.
+   */
+  let codexThread: { threadId: string; at: number } | null = null;
+  const noteCodexStart = (threadId: string) => {
+    codexThread = { threadId, at: Date.now() };
+    process.env.CASCADE_THREAD_ID = threadId; // запасной путь, если сокета нет
+  };
   // Адрес сервера BB: у процесса моста BB_SERVER_URL может не быть — берём его из
   // envVars запросов runtime (model/list, thread/*, turn/*). Без него peekProvider
   // падал молча, и ход Codex уходил в мост Claude (петля S3 на 0.2.0).
@@ -291,8 +300,16 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
 
   function feedLine(line: string, socket: Socket, signal: AbortSignal): void {
     if (!line.trim()) return;
-    let message: { threadId?: unknown; notes?: unknown; confirm?: unknown };
+    let message: { threadId?: unknown; notes?: unknown; confirm?: unknown; whoami?: unknown };
     try { message = JSON.parse(line) as typeof message; } catch (error) { log(`feed: ${String(error)}`); return; }
+    // Запускатель app-server Codex не знает свой тред (штатный мост Codex не передаёт
+    // ему BB_THREAD_ID): мост отвечает тредом, для которого он только что открывает
+    // сессию Codex. Нет такого — «maintenance» (служебный app-server без треда).
+    if (message.whoami === 'codex') {
+      const threadId = codexThread && Date.now() - codexThread.at < 10 * 60_000 ? codexThread.threadId : null;
+      socket.end(`${JSON.stringify(threadId ? { threadId } : { maintenance: true })}\n`);
+      return;
+    }
     if (typeof message.threadId !== 'string') return;
     const threadId = message.threadId;
     if (message.confirm && typeof message.confirm === 'object') {
@@ -441,8 +458,9 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
     const from = PROVIDER_LABEL[active];
     const to = PROVIDER_LABEL[target];
     const requestId = typeof params.clientRequestId === 'string' ? params.clientRequestId : null;
+    const currentText = (Array.isArray(params.input) ? params.input as unknown[] : []).map(i => rec(i)).filter(i => i.type === 'text').map(i => String(i.text ?? '')).join('\n') || null;
     const brief = async (afterSeq: number, mode: 'snapshot' | 'delta') => server.call<{ text: string; throughSeq: number }>('handoffBrief', {
-      threadId, afterSeq, mode, from, to, currentRequestId: requestId,
+      threadId, afterSeq, mode, from, to, currentRequestId: requestId, currentText: currentText?.slice(0, 20_000) ?? null,
     }).catch(error => {
       log(`handoffBrief ${threadId}: ${String(error)}`);
       // Сводку собрать не удалось: только как дочитать тред; курсор не двигаем.
@@ -455,6 +473,7 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
     const notes: RouteNote[] = [];
     if (existing) {
       // Возврат: прежняя сессия этого провайдера (--resume) + дельта после её курсора.
+      if (target === 'codex') noteCodexStart(threadId);
       const resumed = await innerRequest(inner, 'thread/resume', { ...template, threadId, providerThreadId: existing.nativeId, options: sessionOptions });
       const result = rec(resumed.result);
       if (!resumed.error && result.sessionRestorable !== false) nativeId = typeof result.providerThreadId === 'string' ? result.providerThreadId : existing.nativeId;
@@ -466,6 +485,7 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
       }
     }
     if (!nativeId) {
+      if (target === 'codex') noteCodexStart(threadId);
       const started = await innerRequest(inner, 'thread/start', { ...template, threadId, options: sessionOptions });
       const id = rec(started.result).providerThreadId;
       if (started.error || typeof id !== 'string') throw new Error(`${to}: новая сессия не открылась — ${String(rec(started.error).message ?? 'нет providerThreadId')}`);
@@ -558,6 +578,9 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
       return;
     }
     if (threadId) threadInner.set(threadId, inner);
+    // Команда треда мосту Codex может поднять app-server (старт, возврат, ход после
+    // выхода процесса): запускатель спросит мост, чей это процесс.
+    if (threadId && provider === 'codex') noteCodexStart(threadId);
     inner.loaded.entry.handleLine(outgoing);
   }
 

@@ -104,6 +104,34 @@ export async function routeWithProgress(io: LauncherIo, threadId: string, input:
   try { return await route; } finally { settled = true; await poller.catch(() => undefined); }
 }
 
+/** Чей это app-server Codex: спросить мост каскада (сокет ленты), запасной путь — CASCADE_THREAD_ID. */
+export function askBridgeThread(io: Pick<LauncherIo, 'env'>, timeoutMs = 5_000): Promise<{ threadId: string } | { maintenance: true } | { error: string }> {
+  const path = io.env[LAUNCHER_ENV.feed];
+  const fallback = io.env.CASCADE_THREAD_ID;
+  if (!path) return Promise.resolve(fallback ? { threadId: fallback } : { error: 'нет сокета моста' });
+  return new Promise(resolve => {
+    let buffer = '';
+    let settled = false;
+    const finish = (value: { threadId: string } | { maintenance: true } | { error: string }) => { if (settled) return; settled = true; socket.destroy(); resolve(value); };
+    const socket = connect(path);
+    socket.setEncoding('utf8');
+    socket.setTimeout(timeoutMs, () => finish(fallback ? { threadId: fallback } : { error: 'мост не ответил' }));
+    socket.on('error', error => finish(fallback ? { threadId: fallback } : { error: error.message }));
+    socket.on('data', chunk => {
+      buffer += chunk;
+      const nl = buffer.indexOf('\n');
+      if (nl === -1) return;
+      try {
+        const answer = JSON.parse(buffer.slice(0, nl)) as { threadId?: unknown; maintenance?: unknown };
+        if (typeof answer.threadId === 'string') finish({ threadId: answer.threadId });
+        else if (answer.maintenance === true) finish({ maintenance: true });
+        else finish({ error: 'непонятный ответ моста' });
+      } catch { finish({ error: 'непонятный ответ моста' }); }
+    });
+    socket.on('connect', () => socket.write(`${JSON.stringify({ whoami: 'codex' })}\n`));
+  });
+}
+
 /** События для ленты: в сокет моста; моста нет — молча пропускаем. */
 function sendFeed(io: LauncherIo, threadId: string, notes: readonly RouteNote[]): Promise<void> {
   const path = io.env[LAUNCHER_ENV.feed];
@@ -241,13 +269,21 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
   logLine(io, `start provider=${provider} thread=${threadId ?? '-'} cwd=${io.cwd} args=${JSON.stringify(args).slice(0, 600)}`);
 
   // Служебные вызовы CLI (версия, вход) и запуск вне треда — штатно.
-  if (!threadId || args.includes('--version') || args[0] === 'auth' || args[0] === 'login' || args[0] === 'logout') {
-    return runFallback(io, provider, args, threadId ? 'служебный вызов' : 'нет BB_THREAD_ID');
+  const service = args.includes('--version') || args[0] === 'auth' || args[0] === 'login' || args[0] === 'logout';
+  if (provider === 'codex' && !service) {
+    // App-server Codex: штатный мост поднимает его на тред, но без BB_THREAD_ID —
+    // тред сообщает мост каскада. Без треда ход не идёт штатным путём (S3 на 0.2.4
+    // ушёл в Codex на машине треда мимо маршрута).
+    const who = threadId ? { threadId } : await askBridgeThread(io);
+    if ('threadId' in who && who.threadId) return runCodex(io, args, who.threadId);
+    if ('maintenance' in who) return runFallback(io, provider, args, 'служебный app-server без треда');
+    const message = `Ход не запущен: Каскад подписок → Codex: запускатель не узнал тред (${'error' in who ? who.error : 'нет ответа моста'}) — Codex не запущен мимо каскада. Повторите ход.`;
+    logLine(io, `refuse: ${message}`);
+    io.stderr.write(`${message}\n`);
+    return 75;
   }
-  if (provider === 'codex') {
-    // Codex app-server — долгоживущий процесс на весь runtime: ступень
-    // выбирается при его старте, смена машины требует перезапуска runtime.
-    return runCodex(io, args, threadId);
+  if (!threadId || service) {
+    return runFallback(io, provider, args, threadId ? 'служебный вызов' : 'нет BB_THREAD_ID');
   }
 
   const session = claudeSessionInfo(args);

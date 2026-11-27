@@ -464,3 +464,38 @@ test('реле: конец хода с исчерпанным лимитом у�
   await relay;
   assert.deepEqual(order, ['mark', 'result']);
 });
+
+// ---- S3 на 0.2.4: app-server Codex мимо маршрута ----
+
+test('Codex app-server без BB_THREAD_ID: тред от моста → routeTurn → app-server на машине ступени; тред не узнан — отказ, codex не запускается', async () => {
+  const fx = remoteFixture();
+  const bin = join(fx.root, 'bin-codex');
+  mkdirSync(bin);
+  const marker = join(fx.root, 'codex-ran');
+  writeFileSync(join(bin, 'codex'), `#!/bin/sh\necho "$@" > '${marker}'\n`);
+  chmodSync(join(bin, 'codex'), 0o755);
+  const base = { PATH: `${bin}:/usr/bin:/bin`, BB_PROJECT_ID: 'proj_1', BB_SERVER_URL: 'http://bb.test', CASCADE_LAUNCHER_PROVIDER: 'codex' };
+
+  // Тред не узнан: ни BB_THREAD_ID, ни сокета моста, ни CASCADE_THREAD_ID — отказ, штатный codex не запускается.
+  const err = collect();
+  const refused = await runLauncher({ env: base, argv: [], cwd: fx.cwd, fetch: (async () => { throw new Error('сервер не должен вызываться'); }) as typeof fetch, stdin: new PassThrough(), stdout: collect(), stderr: err, now: Date.now });
+  assert.equal(refused, 75);
+  assert.match(err.text(), /запускатель не узнал тред .* Codex не запущен мимо каскада/u);
+  assert.equal(existsSync(marker), false);
+
+  // Тред известен мосту (запасной путь CASCADE_THREAD_ID): маршрут спрошен, ступень — Mac через терминал BB.
+  const terminalCalls: string[] = [];
+  const route = { action: 'run', stepId: 'host_mac:codex:*', hostId: 'host_mac', providerId: 'codex', modelId: 'gpt-6.2-sol', local: false, cwd: '/opt/bbfs/proj', env: {}, stage: { machine: 'Mac' }, notes: [] };
+  const server = fakeServer(route);
+  const fetchImpl = (async (url: string, init: RequestInit) => {
+    if (String(url).includes('/api/v1/terminals')) { terminalCalls.push(`${init.method ?? 'GET'} ${String(init.body ?? '')}`); throw new Error('нет связи с машиной ступени (тест)'); }
+    return server.fetchImpl(url, init);
+  }) as unknown as typeof fetch;
+  const code = await runLauncher({ env: { ...base, CASCADE_THREAD_ID: 'thr_s3' }, argv: [], cwd: fx.cwd, fetch: fetchImpl, stdin: new PassThrough(), stdout: collect(), stderr: collect(), now: Date.now });
+  assert.equal(server.calls[0]?.method, 'routeTurn');
+  assert.equal(server.calls[0]?.input.threadId, 'thr_s3');
+  assert.equal(server.calls[0]?.input.provider, 'codex');
+  assert.ok(terminalCalls.some(c => c.includes('host_mac')), 'app-server открывается на машине ступени, а не на машине треда');
+  assert.equal(existsSync(marker), false, 'локальный codex не запускался');
+  assert.notEqual(code, 0);
+});

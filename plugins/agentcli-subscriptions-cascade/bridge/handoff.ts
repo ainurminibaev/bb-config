@@ -17,6 +17,8 @@ export interface HandoffInput {
   from: string;
   to: string;
   currentRequestId: string | null;
+  /** Текст текущего ввода (для распознавания автоповтора «Please continue.»). */
+  currentText?: string | null;
   /** Предел текста; ранние события сверх него — ссылкой на `bb thread messages`. */
   maxChars?: number;
 }
@@ -31,6 +33,39 @@ const oneLine = (text: string) => text.replace(/\s+/gu, ' ').trim();
 function inputText(data: Json): string {
   const input = Array.isArray(data.input) ? data.input as unknown[] : [];
   return input.map(i => rec(i)).filter(i => i.type === 'text').map(i => str(i.text)).join('\n').trim();
+}
+
+/** Ввод автоповтора BB после сбоя хода (provider-retry): не новая задача, а продолжение. */
+export const RETRY_CONTINUATION = /^\s*(?:please\s+)?continue[.!]?\s*$/iu;
+
+/**
+ * Исходная просьба для автоповтора: последний ввод пользователя до текущего,
+ * который сам не «продолжи». null — текущий ввод не автоповтор или просьбы нет.
+ */
+export function pendingRequest(events: readonly ThreadEventRow[], input: Pick<HandoffInput, 'currentRequestId' | 'currentText'>): { seq: number; text: string } | null {
+  if (!input.currentText || !RETRY_CONTINUATION.test(input.currentText)) return null;
+  const sorted = [...events].sort((a, b) => a.seq - b.seq);
+  const stop = input.currentRequestId ? sorted.findIndex(e => e.type === 'client/turn/requested' && str(rec(e.data).requestId) === input.currentRequestId) : -1;
+  const before = stop === -1 ? sorted : sorted.slice(0, stop);
+  for (let i = before.length - 1; i >= 0; i -= 1) {
+    const row = before[i]!;
+    if (row.type !== 'client/turn/requested') continue;
+    const text = inputText(rec(row.data));
+    if (text && !RETRY_CONTINUATION.test(text)) return { seq: row.seq, text };
+  }
+  return null;
+}
+
+/** Блок текущей задачи для автоповтора после перехода. */
+function currentTaskBlock(pending: { seq: number; text: string }): string {
+  return [
+    `<current-request seq="${pending.seq}">`,
+    'Этот ход — автоматический повтор после перехода на тебя (ввод «Please continue.» прислал BB, это не новая задача).',
+    'Выполни исходную просьбу пользователя ниже; уже сделанное по сводке не повторяй, тред и дела не исследуй без надобности:',
+    '',
+    clip(pending.text, 8000),
+    '</current-request>',
+  ].join('\n');
 }
 
 /** Одна строка сводки на событие; null — событие не переносится. */
@@ -76,7 +111,8 @@ export function buildHandoff(events: readonly ThreadEventRow[], input: HandoffIn
     const line = eventLine(row);
     if (line) lines.push({ seq: row.seq, line });
   }
-  if (lines.length === 0) return { text: '', throughSeq };
+  const pending = pendingRequest(events, input);
+  if (lines.length === 0) return { text: pending ? currentTaskBlock(pending) : '', throughSeq };
 
   // Сверх предела — сначала уходят ранние события, на них остаётся ссылка.
   let total = 0;
@@ -90,9 +126,10 @@ export function buildHandoff(events: readonly ThreadEventRow[], input: HandoffIn
     ...kept.map(l => l.line),
   ].join('\n');
 
+  const task = pending ? `\n${currentTaskBlock(pending)}` : '';
   if (input.mode === 'snapshot') {
     return {
-      text: crossProviderBrief({ threadId: input.threadId, from: input.from, to: input.to, summary: body, throughSeq, afterSeq: input.afterSeq }),
+      text: crossProviderBrief({ threadId: input.threadId, from: input.from, to: input.to, summary: body, throughSeq, afterSeq: input.afterSeq }) + task,
       throughSeq,
     };
   }
@@ -105,7 +142,7 @@ export function buildHandoff(events: readonly ThreadEventRow[], input: HandoffIn
       '',
       historyHint(input.threadId, [], input.afterSeq),
       '</cascade-delta>',
-    ].join('\n'),
+    ].join('\n') + task,
     throughSeq,
   };
 }

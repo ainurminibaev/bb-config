@@ -479,3 +479,17 @@ test('сквозная карточка: запускатель → сокет �
     if (before.codex === undefined) delete process.env.BB_CODEX_BRIDGE_APP_SERVER_COMMAND; else process.env.BB_CODEX_BRIDGE_APP_SERVER_COMMAND = before.codex;
   }
 });
+
+test('автоповтор после «Да»: Codex получает исходную просьбу, а не «Please continue.» как новую задачу', async () => {
+  const { buildHandoff, pendingRequest } = await import('./handoff.ts');
+  const events: ThreadEventRow[] = [
+    { seq: 3, type: 'client/turn/requested', data: { requestId: 'creq_1', input: [{ type: 'text', text: 'Добавь колонку KEEP-COLUMN в отчёт' }] } },
+    { seq: 9, type: 'item/completed', data: { item: { type: 'agentMessage', text: 'Переход на Codex · Mac: ход повторится автоматически.' } } },
+    { seq: 12, type: 'client/turn/requested', data: { requestId: 'creq_retry', input: [{ type: 'text', text: 'Please continue.' }] } },
+  ];
+  assert.deepEqual(pendingRequest(events, { currentRequestId: 'creq_retry', currentText: 'Please continue.' }), { seq: 3, text: 'Добавь колонку KEEP-COLUMN в отчёт' });
+  assert.equal(pendingRequest(events, { currentRequestId: 'creq_1', currentText: 'Добавь колонку' }), null, 'обычный ход — без блока');
+  const out = buildHandoff(events, { threadId: 'thr_1', afterSeq: 0, mode: 'snapshot', from: 'Claude', to: 'Codex', currentRequestId: 'creq_retry', currentText: 'Please continue.' });
+  assert.match(out.text, /<current-request seq="3">[\s\S]*автоматический повтор[\s\S]*Добавь колонку KEEP-COLUMN в отчёт[\s\S]*<\/current-request>/u);
+  assert.equal(out.throughSeq, 9);
+});

@@ -170,6 +170,8 @@ export const handoffBriefInputSchema = z.object({
   to: text(80),
   /** Текущий запрос пользователя (clientRequestId): он передаётся ходом отдельно и в сводку не входит. */
   currentRequestId: z.string().nullable().default(null),
+  /** Текст текущего ввода: «Please continue.» автоповтора — тогда в сводку идёт исходная просьба. */
+  currentText: z.string().max(20_000).nullable().default(null),
 });
 export const handoffBriefOutputSchema = z.object({
   /** Блок для начала хода; пусто — добавлять нечего. */
