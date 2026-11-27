@@ -1,7 +1,11 @@
 {
   "name": "bb-plugin-thread-account-usage",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "type": "module",
+  "scripts": {
+    "test": "node --test *.test.ts",
+    "typecheck": "tsc --noEmit -p . --skipLibCheck"
+  },
   "engines": {
     "bb": ">=0.49",
     "bbPluginSdk": ">=0.6.132"

@@ -145,3 +145,35 @@ test('a queue term replaces the default 30 days: the tick does not run ahead', a
   // Old shape (no start): 30 days before the end, as before.
   assert.ok(Math.abs(pace({ ...w, startsAt: undefined, endsAt: '2026-11-28T17:15:00Z' }, now)! - 100 * (1 - 34 / 720)) < 0.01);
 });
+test('a Claude Code thread on a VClaude machine shows the package, not «не подтверждён» (0.2.4)', async () => {
+  const { vclaudeRouted, vclaudeThreadSnapshot, vclaudeHeadline } = await import('./logic.ts');
+  const base = { threadId: 't', providerId: 'claude-code', model: null, hostId: 'mac', hostName: 'MacBook Pro',
+    binding: 'unavailable' as const, message: null, account: null };
+  const pkg: Account = { key: 'vclaude', providerId: 'vclaude', providerName: 'VClaude', hostIds: ['mac'], hostNames: ['MacBook Pro'],
+    email: null, plan: null, status: 'ok', message: null, fetchedAt: null, resetCount: null,
+    meter: { total: 405_000_000, left: 380_730_000, tokensPerUnit: 1.25 },
+    windows: [{ label: 'Тариф', kind: 'other', usedPercent: 6, resetsAt: null, endsAt: '2026-12-27T12:00:00Z' }] };
+  assert.equal(vclaudeRouted('claude-code', 'VClaude.ru', 'vclaude.ru'), true);
+  assert.equal(vclaudeRouted('codex', 'vclaude.ru', 'vclaude.ru'), false);
+  const snap = vclaudeThreadSnapshot(base, 'vclaude.ru', 'vclaude.ru', pkg)!;
+  assert.equal(snap.gateway, 'vclaude'); assert.equal(snap.binding, 'host-cli'); assert.equal(snap.account?.providerId, 'vclaude');
+  const head = vclaudeHeadline(snap.account);
+  assert.equal(head.account, 'VClaude');
+  assert.equal(head.text, '380,73 млн из 405 млн · до 27 дек');
+  assert.equal(head.level, 'normal');
+  assert.equal(vclaudeHeadline({ ...pkg, meter: { total: 100, left: 5, tokensPerUnit: null } }).level, 'warning');
+  assert.equal(vclaudeHeadline({ ...pkg, meter: { total: 100, left: 0, tokensPerUnit: null } }).level, 'blocked');
+  // Cabinet unreadable: an honest unknown, still VClaude.
+  const none = vclaudeThreadSnapshot(base, 'vclaude.ru', 'vclaude.ru', null)!;
+  assert.equal(none.account?.status, 'unavailable');
+  const unknown = vclaudeHeadline(none.account);
+  assert.deepEqual([unknown.account, unknown.text, unknown.level], ['VClaude', 'остаток неизвестен', null]);
+});
+test('other threads keep the usual path: no gateway', async () => {
+  const { vclaudeThreadSnapshot } = await import('./logic.ts');
+  const base = { threadId: 't', providerId: 'claude-code', model: null, hostId: 'tru', hostName: 'Tru',
+    binding: 'unavailable' as const, message: null, account: null };
+  assert.equal(vclaudeThreadSnapshot(base, null, 'vclaude.ru', null), null);
+  assert.equal(vclaudeThreadSnapshot(base, 'api.anthropic.com', 'vclaude.ru', null), null);
+  assert.equal(vclaudeThreadSnapshot({ ...base, providerId: 'codex' }, 'vclaude.ru', 'vclaude.ru', null), null);
+});

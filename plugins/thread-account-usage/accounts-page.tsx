@@ -139,10 +139,16 @@ function Discuss() {
   </section>;
 }
 
-export function AccountsPage() {
+// Deep link: /plugins/thread-account-usage/accounts/vclaude opens that tab (thread header of a VClaude thread).
+const tabFromPath = (subPath: string | undefined): Tab => {
+  const first = decodeURIComponent((subPath ?? '').split('/')[0] ?? '');
+  return first === 'volumes' || first === 'history' || first === 'vclaude' ? first : 'overview';
+};
+export function AccountsPage({ subPath }: { subPath?: string } = {}) {
   const rpc = useRpc<typeof rpcContract>();
   const navigate = useBbNavigate();
-  const [tab, setTab] = useState<Tab>('overview');
+  const [tab, setTab] = useState<Tab>(() => tabFromPath(subPath));
+  useEffect(() => { if (subPath !== undefined) setTab(tabFromPath(subPath)); }, [subPath]);
   const [data, setData] = useState<{ accounts: Account[]; googleAnswer: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -167,7 +173,7 @@ export function AccountsPage() {
     <div className="tau-vcl-toolbar"><div><h1 className="tau-page-title">Аккаунты и объёмы</h1>
       <small>{data ? `Обновлено ${new Date(now).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}` : 'Загружаем…'}{error ? ` · ${error}` : ''}</small></div>
       <button type="button" disabled={busy} onClick={() => void load(true)}>{busy ? 'Обновляем…' : 'Обновить'}</button></div>
-    <div className="tau-page-tabs" role="tablist">{tabs.map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>{label}</button>)}</div>
+    <div className="tau-page-tabs" role="tablist">{tabs.map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} onClick={() => { setTab(id); navigate.toPluginPanel('accounts', { subPath: id === 'overview' ? '' : id, replace: true }); }}>{label}</button>)}</div>
     {tab === 'overview' && <><Overview accounts={accounts} now={now} logos={logos} onAccount={a => void openAccount(a)} /><Discuss /></>}
     {tab === 'volumes' && <Volumes accounts={accounts} logos={logos} answer={data?.googleAnswer ?? ''} />}
     {tab === 'history' && <History />}

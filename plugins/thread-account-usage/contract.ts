@@ -35,6 +35,8 @@ export const snapshotSchema = z.object({
   message: z.string().nullable(), account: accountSchema.nullable(),
   // The thread's budget is spent or its last answer was a provider's limit refusal.
   exhausted: z.object({ title: z.string(), detail: z.string(), link: z.string().nullable() }).nullable().optional(),
+  // Claude Code of the thread's machine goes to a gateway: `account` is its package (VClaude).
+  gateway: z.enum(['vclaude']).nullable().optional(),
 });
 export const rpcContract = defineRpcContract({
   comparison: { input: z.object({ refresh: z.boolean().default(false) }), output: comparisonSchema },

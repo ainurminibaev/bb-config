@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { definePluginApp, experimental_useProviders, useBbContext, useBbNavigate, useRpc, useSettings, useSidebarSplitLayout } from '@get-bb/plugin-sdk/app';
 import type { rpcContract, Account, Snapshot, QuotaWindow } from './contract';
-import { accountExhausted, ahead, appliesToModel, isPackageAccount, pace, planLabel, rowLead, wasteRisk, windowRows, type WindowRow } from './logic';
+import { accountExhausted, ahead, appliesToModel, isPackageAccount, pace, planLabel, rowLead, vclaudeHeadline, wasteRisk, windowRows, type WindowRow } from './logic';
 import { AccountsPage } from './accounts-page';
 import { inlineMarks } from './provider-icons';
 import './app.css';
@@ -264,13 +264,15 @@ function QuotaControl({ threadId, target }: { threadId: string | null; target?:H
   const enter = () => { if (closeTimer.current) clearTimeout(closeTimer.current); positionPanel(); setOpen(true); };
   const leave = () => { if (!pinnedRef.current) closeTimer.current = setTimeout(() => {if(!pinnedRef.current)setOpen(false)}, 180); };
   const account = snapshot?.account;
-  const windows = account?.windows.filter(w => appliesToModel(w, snapshot?.model ?? null)) ?? [];
+  // Thread on a machine routed to VClaude: the package left instead of rings (0.2.4).
+  const gateway = threadId && snapshot?.gateway === 'vclaude' ? vclaudeHeadline(account) : null;
+  const windows = gateway ? [] : account?.windows.filter(w => appliesToModel(w, snapshot?.model ?? null)) ?? [];
   const worst = [...windows].sort((a,b)=>b.usedPercent-a.usedPercent)[0];
   const windowOrder = { 'five-hour': 0, weekly: 1, model: 2, other: 3 };
   const importantWindows=[...windows].sort((a,b)=>windowOrder[a.kind]-windowOrder[b.kind]).slice(0,2);
   const list = accounts ?? [];
   const blockedAccounts=list.filter(accountExhausted);
-  const accountName = account?.email?.split('@')[0] ?? 'не подтверждён';
+  const accountName = gateway?.account ?? account?.email?.split('@')[0] ?? 'не подтверждён';
   const logo = snapshot ? withAliases(Object.fromEntries(catalog.providers.map(p => [p.id, p.logoUrl])))[snapshot.providerId] ?? undefined : undefined;
   const resetTotal=list.reduce((sum,a)=>sum+(a.resetCount??0),0);
   const averageWindows:QuotaWindow[]=['five-hour','weekly','model'].flatMap(kind=>{
@@ -278,16 +280,19 @@ function QuotaControl({ threadId, target }: { threadId: string | null; target?:H
     return values.length?[{label:kind==='model'?'Fable':kind,kind:kind as QuotaWindow['kind'],usedPercent:values.reduce((a,b)=>a+b,0)/values.length,resetsAt:null}]:[];
   });
   const footerWindows=averageWindows.filter(w=>w.kind==='five-hour'||w.kind==='weekly');
-  const label = threadId ? `Лимиты аккаунта ${account?.email ?? 'не подтверждён'} · ${snapshot?.hostName ?? 'машина треда'}` : 'Все аккаунты — лимиты и время сброса';
+  const label = gateway ? `Пакет VClaude: ${gateway.text} · ${snapshot?.hostName ?? 'машина треда'}. Открыть вкладку VClaude`
+    : threadId ? `Лимиты аккаунта ${account?.email ?? 'не подтверждён'} · ${snapshot?.hostName ?? 'машина треда'}` : 'Все аккаунты — лимиты и время сброса';
   const buttons=<>
     <button ref={trigger} type="button" className={`tau-trigger ${threadId ? 'tau-thread' : 'tau-global'}`}
       aria-label={label} aria-haspopup="dialog" aria-expanded={open}
       title={threadId ? label : `Средний расход по аккаунтам: ${footerWindows.map(w=>`${short(w)} ${pct(w.usedPercent)}`).join(', ')}. Исчерпан общий лимит у аккаунтов: ${blockedAccounts.length}. +N: подтверждённые доступные сбросы.`}
       onPointerEnter={event=>{if(event.pointerType==='mouse')enter()}} onPointerLeave={event=>{if(event.pointerType==='mouse')leave()}} onFocus={()=>{if(!mobile)enter()}}
-      onClick={() => { if(closeTimer.current)clearTimeout(closeTimer.current);positionPanel(); const next=!(open&&pinned);pinnedRef.current=next;setOpen(next);setPinned(next); }}>
-      {threadId && mobile ? <span className="tau-mobile-quota"><QuotaGlyph windows={importantWindows} logo={logo} agent={account?.providerName??snapshot?.providerId} resets={account?.resetCount??0}/><span data-level={worst?level(worst.usedPercent):undefined}>{worst?`${short(worst)} ${pct(worst.usedPercent)}`:loading?"…":"Лимиты"}</span></span> : threadId ? <><span className="tau-thread-composite"><QuotaGlyph windows={importantWindows} logo={logo} agent={account?.providerName??snapshot?.providerId} resets={account?.resetCount??0}/><span className="tau-thread-text">
-        <span className="tau-thread-owner" title={`${account?.email??'Аккаунт не подтверждён'} · ${snapshot?.hostName??''}`}><span>{accountName}</span><small>{snapshot?.hostName?.replace(/\s*[—–].*$/,'').trim()??'машина треда'}</small></span>
-        {snapshot?.exhausted?<span className="tau-inline-legend tau-exhausted" title={snapshot.exhausted.detail}><strong>Исчерпан</strong><small>{snapshot.exhausted.title}</small></span>:worst?<span className="tau-inline-legend">{importantWindows.map(w=><span key={w.label} data-kind={w.kind} data-level={level(w.usedPercent)} title={`${w.label}: ${pct(w.usedPercent)} использовано. ${resetText(w.resetsAt,now).relative}. ${resetText(w.resetsAt,now).exact}`}><strong><span>{short(w)}</span> {pct(w.usedPercent)}</strong><small>{w.endsAt ? `до ${new Date(w.endsAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}` : <><span aria-hidden="true">↻ </span>{compactReset(w.resetsAt,now)}</>}</small></span>)}</span>:<span className="tau-missing">{loading?'…':'Лимиты не подтверждены'}</span>}
+      onClick={() => { if(closeTimer.current)clearTimeout(closeTimer.current);
+        if(gateway){ pinnedRef.current=false; setOpen(false); setPinned(false); navigate.toPluginPanel('accounts', { subPath: 'vclaude' }); return; }
+        positionPanel(); const next=!(open&&pinned);pinnedRef.current=next;setOpen(next);setPinned(next); }}>
+      {threadId && mobile ? <span className="tau-mobile-quota"><QuotaGlyph windows={importantWindows} logo={logo} agent={account?.providerName??snapshot?.providerId} resets={account?.resetCount??0}/><span data-level={gateway?gateway.level??undefined:worst?level(worst.usedPercent):undefined}>{gateway?gateway.amount:worst?`${short(worst)} ${pct(worst.usedPercent)}`:loading?"…":"Лимиты"}</span></span> : threadId ? <><span className="tau-thread-composite"><QuotaGlyph windows={importantWindows} logo={logo} agent={account?.providerName??snapshot?.providerId} resets={account?.resetCount??0}/><span className="tau-thread-text">
+        <span className="tau-thread-owner" title={`${gateway?'VClaude':account?.email??'Аккаунт не подтверждён'} · ${snapshot?.hostName??''}`}><span>{accountName}</span><small>{snapshot?.hostName?.replace(/\s*[—–].*$/,'').trim()??'машина треда'}</small></span>
+        {snapshot?.exhausted?<span className="tau-inline-legend tau-exhausted" title={snapshot.exhausted.detail}><strong>Исчерпан</strong><small>{snapshot.exhausted.title}</small></span>:gateway?<span className="tau-inline-legend tau-gateway"><span data-kind="other" data-level={gateway.level??undefined} title={gateway.title}><strong>{gateway.amount}</strong>{gateway.until&&<small>{gateway.until}</small>}</span></span>:worst?<span className="tau-inline-legend">{importantWindows.map(w=><span key={w.label} data-kind={w.kind} data-level={level(w.usedPercent)} title={`${w.label}: ${pct(w.usedPercent)} использовано. ${resetText(w.resetsAt,now).relative}. ${resetText(w.resetsAt,now).exact}`}><strong><span>{short(w)}</span> {pct(w.usedPercent)}</strong><small>{w.endsAt ? `до ${new Date(w.endsAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}` : <><span aria-hidden="true">↻ </span>{compactReset(w.resetsAt,now)}</>}</small></span>)}</span>:<span className="tau-missing">{loading?'…':'Лимиты не подтверждены'}</span>}
       </span></span>
         {(error || account?.status === 'stale') && <span className="tau-caution">!</span>}</>
         : <><QuotaGlyph windows={footerWindows} resets={resetTotal} blocked={blockedAccounts.length}/><span className="tau-footer-values">{footerWindows.map(w=><span key={w.kind} data-kind={w.kind}><small>{short(w)}</small><strong>{pct(w.usedPercent)}</strong></span>)}{!footerWindows.length&&<span>—</span>}</span></>}
@@ -310,15 +315,17 @@ function QuotaControl({ threadId, target }: { threadId: string | null; target?:H
       <div className="tau-panel-body">
         {error && <p className="tau-error" role="alert">{error}</p>}
         {view === 'thread' ? <>
-          {snapshot && <div className="tau-account-heading"><strong>{account?.email ?? 'Аккаунт не подтверждён'}</strong>
+          {snapshot && <div className="tau-account-heading"><strong>{account?.email ?? (snapshot.gateway === 'vclaude' ? 'VClaude' : 'Аккаунт не подтверждён')}</strong>
             <small>{account?.providerName ?? snapshot.providerId} · {snapshot.hostName ?? 'Нет машины'}{account?.plan ? ` · ${planLabel(account.providerId, account.plan)}` : ''}</small>
             {snapshot.model && <small>Модель запуска: {snapshot.model}</small>}{account?.note && <small>{account.note}</small>}</div>}
           {snapshot?.message && <p className="tau-empty">{snapshot.message}</p>}
           {snapshot?.exhausted && <p className="tau-exhausted-note"><strong>Исчерпан: {snapshot.exhausted.title}.</strong> {snapshot.exhausted.detail}{snapshot.exhausted.link && <> <a href={snapshot.exhausted.link} target="_blank" rel="noreferrer">Пополнить ↗</a></>}</p>}
           {account && <><WindowRows account={account} filter={filter} model={snapshot?.model} now={now} />
-            <p className="tau-source">Доступные сбросы: {account.resetCount===null?'не сообщены':account.resetCount}</p>
+            {!snapshot?.gateway && <p className="tau-source">Доступные сбросы: {account.resetCount===null?'не сообщены':account.resetCount}</p>}
             {account.status !== 'ok' && <p className="tau-error">Последние известные данные. {account.message}</p>}
-            <p className="tau-source">Вход CLI на машине треда. Это лимиты аккаунта, а не токены одной беседы.</p></>}
+            <p className="tau-source">{snapshot?.gateway === 'vclaude'
+              ? <>Claude Code этой машины идёт через шлюз VClaude: это остаток пакета, а не подписка. <button type="button" className="tau-page-link" onClick={()=>{ setOpen(false); setPinned(false); navigate.toPluginPanel('accounts', { subPath: 'vclaude' }); }}>Вкладка VClaude ›</button></>
+              : 'Вход CLI на машине треда. Это лимиты аккаунта, а не токены одной беседы.'}</p></>}
           {!snapshot && <p className="tau-empty">{loading ? 'Проверяем аккаунт треда…' : 'Данные пока не получены'}</p>}
         </> : <>
           {detailsKey ? <>

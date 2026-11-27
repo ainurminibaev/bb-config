@@ -3498,6 +3498,21 @@ RPC agent-roster 0.5.0 `roster_list`, поля `kind` и `active.threadId` дл�
 ответа `/api/cabinet/tariff/usage`; без них — прежнее поведение по
 `nearest_expiry`. Тесты — `vclaude.test.ts`, `logic.test.ts`.
 
+Шапка треда VClaude (0.2.4). Тред `claude-code` на машине, где Claude Code
+маршрутизирован на `vclaude.ru`, раньше показывал «не подтверждён» и «Лимиты не
+подтверждены»: `usageLimits` для такого Claude отвечает `unauthenticated`.
+Теперь RPC `thread` по маршруту машины (`claudeRoute`, не чаще раза в 2 минуты)
+отдаёт `gateway: "vclaude"` и аккаунтом — строку VClaude. Шапка: «VClaude»
+вместо имени аккаунта и остаток пакета вместо колец, например «380,73 млн из
+405 млн · до 27 дек»; уровень по остатку (≤10 % — предупреждение, 0 — исчерпан).
+Клик открывает «Аккаунты и объёмы» на вкладке VClaude (subPath `vclaude`).
+Кабинет недоступен — «VClaude · остаток неизвестен». Остальные треды без
+изменений. Опора: метод `claudeRoute` машины, поле `meter` и окно «Тариф» строки
+VClaude, `toPluginPanel(path, { subPath })` SDK. Тесты — `logic.test.ts`
+(`vclaudeThreadSnapshot`, `vclaudeHeadline`). Ветка каскада (0.3.0) берёт
+пакет по ступени `kind: gateway`; при слиянии ступень каскада главнее, а
+маршрут машины остаётся запасным признаком для треда без каскада.
+
 Сессия хранится с правами 0600 в `$XDG_STATE_HOME/bb-vclaude/session.json`
 (по умолчанию `~/.local/state/bb-vclaude/session.json`). Для автоматического
 повторного входа серверу нужен файл `login.json` с полями `email` и `password`

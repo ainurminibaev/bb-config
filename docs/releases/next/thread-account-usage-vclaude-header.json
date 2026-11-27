@@ -1,0 +1,13 @@
+{
+  "id": "thread-account-usage-vclaude-header",
+  "title": "Thread Account Usage 0.2.4 — шапка треда Claude Code через VClaude: остаток пакета вместо «не подтверждён»",
+  "component": "thread-account-usage",
+  "where": "server",
+  "kind": "command",
+  "after": ["next/account-usage-vclaude-machine"],
+  "applies": ["{python}", "scripts/plugin_git_update.py", "applicable", "thread-account-usage", "0.2.4"],
+  "apply": ["{python}", "scripts/plugin_git_update.py", "apply", "thread-account-usage", "0.2.4"],
+  "verify": ["{python}", "scripts/plugin_git_update.py", "check", "thread-account-usage", "0.2.4"],
+  "rerun": "Актуальная работающая версия проходит проверку без установки.",
+  "rollback": "Установите предыдущий тег thread-account-usage/v0.2.3: шапка треда VClaude снова «не подтверждён», остальное без изменений."
+}

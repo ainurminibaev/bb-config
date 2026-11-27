@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
 import { rpcContract, type Account, type QuotaWindow, type Snapshot } from './contract';
-import { appliesToModel, carryModelWindows, claudeProfilePlan, classifyWindow, dedupeAccounts, riskyOverride, routedHosts, vclaudeNote } from './logic';
+import { appliesToModel, carryModelWindows, claudeProfilePlan, classifyWindow, dedupeAccounts, riskyOverride, routedHosts, vclaudeNote, vclaudeRouted, vclaudeThreadSnapshot } from './logic';
 import { hostContract } from './host-contract';
 import { createVClaudeReader, origin as vclaudeOrigin } from './vclaude';
 import { createComparisonReader } from './vclaude-comparison';
@@ -51,7 +51,16 @@ export default function plugin(bb: BbPluginApi) {
   );
   // Claude Code route per machine (host of ANTHROPIC_BASE_URL), kept from the last answer of each machine.
   const claudeRoutes = new Map<string, { name: string; baseHost: string | null }>();
+  const routeAt = new Map<string, number>();
   const vclaudeHost = new URL(vclaudeOrigin).hostname;
+  // Route of one machine for a thread header: asked at most every 2 minutes, last known kept.
+  async function hostRoute(hostId: string, hostName: string): Promise<string | null> {
+    if (!claudeRoutes.has(hostId) || Date.now() - (routeAt.get(hostId) ?? 0) > 120_000) {
+      const route = await hostClient.call('claudeRoute', null, { hostId, signal: AbortSignal.timeout(5_000) }).catch(() => null);
+      if (route) { claudeRoutes.set(hostId, { name: hostName, baseHost: route.baseHost }); routeAt.set(hostId, Date.now()); }
+    }
+    return claudeRoutes.get(hostId)?.baseHost ?? null;
+  }
   // `hosts` — BB's current host list: current names, removed machines dropped.
   async function vclaudeAccount(refresh: boolean, hosts?: readonly { id: string; name: string }[]): Promise<Account | null> {
     const { usage, error } = await readVClaude(refresh);
@@ -103,7 +112,7 @@ export default function plugin(bb: BbPluginApi) {
           // Older host bundles lack this method: the last known route stays.
           hostClient.call('claudeRoute', null, { hostId, signal: AbortSignal.timeout(5_000) }).catch(() => null),
         ]);
-        if (route) claudeRoutes.set(hostId, { name: hostName, baseHost: route.baseHost });
+        if (route) { claudeRoutes.set(hostId, { name: hostName, baseHost: route.baseHost }); routeAt.set(hostId, Date.now()); }
         const at = new Date().toISOString();
         const accounts = providers.map(provider => {
           const usage = record(raw[provider.id]);
@@ -166,12 +175,18 @@ export default function plugin(bb: BbPluginApi) {
     const environment = await bb.sdk.environments.get({ environmentId: thread.environmentId });
     const host = await bb.sdk.hosts.get({ hostId: environment.hostId });
     base.hostId = host.id; base.hostName = host.name;
-    const [requested, resolved, plugins] = await Promise.all([
+    const [requested, resolved, plugins, baseHost] = await Promise.all([
       bb.sdk.threads.events.list({ threadId, types: ['client/turn/requested'], order: 'desc', limit: '1' }),
       bb.sdk.threads.events.list({ threadId, types: ['provider.env-resolved'], order: 'desc', limit: '1' }),
       bb.sdk.plugins.list(),
+      thread.providerId === 'claude-code' ? hostRoute(host.id, host.name) : Promise.resolve(null),
     ]);
     base.model = string(record(record(requested[0]?.data).execution).model);
+    // Claude Code of this machine goes to VClaude: the package is the thread's quota, not a subscription.
+    if (vclaudeRouted(thread.providerId, baseHost, vclaudeHost)) {
+      const routed = vclaudeThreadSnapshot(base, baseHost, vclaudeHost, await vclaudeAccount(refresh).catch(() => null));
+      if (routed) return routed;
+    }
     const entries = record(resolved[0]?.data).entries;
     const names = Array.isArray(entries) ? entries.map(e => string(record(e).name)).filter((n): n is string => n !== null) : [];
     const pool = plugins.plugins.some(p => (p.id === 'account-pool' || p.id === 'account-pool-balanced') && p.enabled);

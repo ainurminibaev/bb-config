@@ -1,4 +1,4 @@
-import type { Account, QuotaWindow } from './contract.ts';
+import type { Account, QuotaWindow, Snapshot } from './contract.ts';
 export function classifyWindow(label: string, kind?: unknown): QuotaWindow['kind'] {
   if (/fable|opus|sonnet|haiku|mythos/i.test(label)) return 'model';
   if (kind === 'five-hour' || /5.?hour|five.?hour|current session/i.test(label)) return 'five-hour';
@@ -214,4 +214,43 @@ export function routedHosts(routes: ReadonlyMap<string, { name: string; baseHost
   const list = hosts ?? [...routes].map(([id, r]) => ({ id, name: r.name }));
   const hit = list.filter(h => routes.get(h.id)?.baseHost === targetHost.toLowerCase());
   return { ids: hit.map(h => h.id), names: hit.map(h => h.name) };
+}
+/**
+ * A Claude Code thread on a machine whose Claude goes to the VClaude gateway spends the
+ * VClaude package: BB's usageLimits answers `unauthenticated` there (0.2.4).
+ */
+export function vclaudeRouted(providerId: string, baseHost: string | null | undefined, vclaudeHost: string): boolean {
+  return providerId === 'claude-code' && !!baseHost && baseHost.toLowerCase() === vclaudeHost.toLowerCase();
+}
+/**
+ * Snapshot of a thread routed to VClaude: the package as the account, an honest
+ * «unavailable» package when the cabinet cannot be read. null — not routed, usual path.
+ */
+export function vclaudeThreadSnapshot(base: Snapshot, baseHost: string | null | undefined, vclaudeHost: string,
+  account: Account | null): Snapshot | null {
+  if (!vclaudeRouted(base.providerId, baseHost, vclaudeHost)) return null;
+  return { ...base, binding: 'host-cli', gateway: 'vclaude', message: null, exhausted: null, account: account ?? {
+    key: 'vclaude', providerId: 'vclaude', providerName: 'VClaude',
+    hostIds: base.hostId ? [base.hostId] : [], hostNames: base.hostName ? [base.hostName] : [],
+    email: null, plan: null, status: 'unavailable', message: 'Данные кабинета VClaude недоступны',
+    fetchedAt: null, windows: [], resetCount: null } };
+}
+/** Thread header for a VClaude thread: the package left instead of quota rings. */
+export type GatewayHeadline = { account: string; amount: string; until: string; text: string;
+  level: 'normal' | 'warning' | 'blocked' | null; title: string };
+export function vclaudeHeadline(account: Pick<Account, 'meter' | 'windows' | 'message'> | null | undefined): GatewayHeadline {
+  const meter = account?.meter;
+  if (!meter || !(meter.total > 0) || !Number.isFinite(meter.left)) {
+    return { account: 'VClaude', amount: 'остаток неизвестен', until: '', text: 'остаток неизвестен', level: null,
+      title: account?.message ?? 'Данные кабинета VClaude недоступны' };
+  }
+  const left = Math.max(0, meter.left);
+  const share = 100 * left / meter.total;
+  const end = account?.windows.find(w => w.endsAt)?.endsAt;
+  const until = end && Number.isFinite(Date.parse(end))
+    ? `до ${new Date(end).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', timeZone: 'Europe/Moscow' }).replace(/\.$/, '')}` : '';
+  const amount = `${millions(left)} из ${millions(meter.total)}`;
+  const text = until ? `${amount} · ${until}` : amount;
+  return { account: 'VClaude', amount, until, text, level: share <= 0 ? 'blocked' : share <= 10 ? 'warning' : 'normal',
+    title: `Пакет VClaude: осталось ${Math.round(share)}% — ${text}` };
 }
