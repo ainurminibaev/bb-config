@@ -3721,4 +3721,4 @@ proxy-manager 0.3.6: свой значок «Прокси».
 - **Установка и восстановление:** `python3 scripts/restore.py --plugins --apply` или
   `bb plugin install <checkout>/plugins/thread-description`; удаление —
   `bb plugin remove thread-description`.
-- **Обновление для установивших:** шаг `docs/releases/next/plugin-thread-description`.
+- **Обновление для установивших:** шаг `plugin-thread-description` в релизе v1.20.0.
