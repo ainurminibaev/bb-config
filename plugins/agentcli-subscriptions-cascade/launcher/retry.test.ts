@@ -85,3 +85,35 @@ test('S7: «Fable 5.2 requires usage credits» — попытка снята д�
   const last = r.out.slice(-2).map(l => JSON.parse(l));
   assert.deepEqual([last[0].type, last[1].api_error_status], ['rate_limit_event', 429]);
 });
+
+test('Codex: запускатель всегда отдаёт codex подкоманду app-server (без неё — TUI, «stdin is not a terminal»)', async () => {
+  const { codexAppServerArgs } = await import('./main.ts');
+  assert.deepEqual(codexAppServerArgs([]), ['app-server']);
+  assert.deepEqual(codexAppServerArgs(['-c', 'x=1']), ['app-server', '-c', 'x=1']);
+  assert.deepEqual(codexAppServerArgs(['app-server', '--listen', 'stdio://']), ['app-server', '--listen', 'stdio://']);
+});
+
+test('S3 на новом треде: ступень и карточка — на первом сообщении (ход идёт), а не при старте процесса (thread.start)', async () => {
+  let routed = 0;
+  const started: string[] = [];
+  const stdin = new PassThrough();
+  const done = runSessionRelay(mk(''), ['--input-format', 'stream-json', `--session-id=${SID}`], SID, {
+    start(r, _a, onLine) {
+      started.push(r.hostId || 'начало сессии');
+      let resolveDone!: (v: { code: number; transportError: null }) => void;
+      const finished = new Promise<{ code: number; transportError: null }>(res => { resolveDone = res; });
+      return { write(line) { const m = JSON.parse(line); if (m.type === 'control_request') onLine(JSON.stringify({ type: 'control_response', response: { request_id: m.request_id } })); if (m.type === 'user') setTimeout(() => onLine(JSON.stringify({ type: 'result' })), 5); }, end() { resolveDone({ code: 0, transportError: null }); }, kill() {}, done: finished };
+    },
+    routeTurn: async () => { routed += 1; return mk('ua'); },
+    finishTurn: async () => {}, feed: async () => {}, limitFromLine: () => null,
+    stdin, stdout: { write() {} }, stderr: { write() {} }, now: () => 0, log() {},
+  }, { routeFirst: true });
+  stdin.write(`${JSON.stringify({ type: 'control_request', request_id: 'init', request: { subtype: 'initialize' } })}\n`);
+  await tick();
+  assert.equal(routed, 0, 'при старте сессии ступень не выбирается');
+  stdin.write(user('первый ход')); await tick();
+  stdin.end();
+  await done;
+  assert.equal(routed, 1, 'выбор — на первом сообщении');
+  assert.deepEqual(started, ['начало сессии', 'ua']);
+});

@@ -141,13 +141,16 @@ test('карточка: «Пропустить» — следующая ступ
   assert.ok(dismissed.next === 'refuse' && /без ответа/u.test(dismissed.message));
 });
 
-test('peekProvider: Claude свободен — claude-code; все Claude исчерпаны — codex (и для карточки)', async () => {
+test('peekProvider: Claude свободен — claude-code; Codex требует карточки — мост остаётся на Claude (сессия Codex — после «Да»)', async () => {
   const free = fixture();
   assert.equal((await free.routes.peekProvider({ threadId: 'thr_1' })).providerId, 'claude-code');
   const out = fixture({ health: CLAUDE_OUT });
   seedOnTru(out.store);
   const peek = await out.routes.peekProvider({ threadId: 'thr_1' });
-  assert.equal(peek.providerId, 'codex');
+  assert.equal(peek.providerId, null, 'нужно подтверждение — Codex не открывается до ответа');
+  // «Да» на этот ход → повтор хода: peek выбирает Codex по перенесённому согласию.
+  await out.routes.answerConfirmation({ threadId: 'thr_1', stepId: MAC_CODEX, turnKey: 'k1', action: 'go', scope: 'turn', threadUntil: null });
+  assert.equal((await out.routes.peekProvider({ threadId: 'thr_1' })).providerId, 'codex');
   // Без побочных эффектов: состояние треда не изменилось.
   assert.equal(out.store.get('thr_1')!.engine.currentStepId, TRU_MAX);
 });

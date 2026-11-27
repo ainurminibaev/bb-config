@@ -718,11 +718,17 @@ export function createRouteService(deps: RouteDeps): RouteService {
     const profileId = input.requestedModel ?? state.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto';
     const now = deps.now();
     const forever = await projectConsentsOf(projectId);
+    const turnId = `peek-${now}`;
+    // Согласие «на ход», перенесённое на автоповтор, действует и здесь: мост выберет Codex сразу.
+    const carry = state.carryConsent && state.carryConsent.until > now ? config.steps.find(st => st.id === state.carryConsent!.stepId) : undefined;
+    if (carry) forever.push(grant('turn', { stepId: carry.id, bindingEpoch: bindingEpoch(carry), threadId: input.threadId, turnId, projectId, now }, null));
     const decision = selectStep({
       config, requestedModel: profileId, accounts: deps.accounts(), health: withObserved(deps.health(config, input.threadId), state.observed, now, state.modelBlocks), now,
-      thread: { ...state.engine, projectId, homeHostId: state.engine.homeHostId ?? info?.hostId ?? null, turnId: `peek-${now}`, skippedStepIds: [], consents: [...state.engine.consents, ...forever] },
+      thread: { ...state.engine, projectId, homeHostId: state.engine.homeHostId ?? info?.hostId ?? null, turnId, skippedStepIds: [], consents: [...state.engine.consents, ...forever] },
     });
-    if (decision.kind !== 'run' && decision.kind !== 'confirm') return none;
+    // Только решённый ход: при «нужно подтверждение» мост остаётся на текущем провайдере,
+    // карточку покажет его ход, а сессия другого провайдера откроется уже после «Да».
+    if (decision.kind !== 'run') return none;
     const providerId: NativeProvider | null = decision.providerId === 'codex' || decision.providerId === 'claude-code' ? decision.providerId : null;
     return { providerId, modelId: decision.modelId, stage: stageLabel(config, decision) };
   }

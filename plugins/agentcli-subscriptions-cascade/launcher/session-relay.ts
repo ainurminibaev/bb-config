@@ -87,8 +87,17 @@ export function syntheticRefusal(kind: 'limit' | 'overload', message: string, se
 /** Ошибка «модель недоступна на этом аккаунте или тарифе» в result Claude Code. */
 export const MODEL_UNAVAILABLE = /requires (?:usage )?credits|not available (?:on|for) (?:your|this) (?:plan|account|subscription)|(?:do(?:es)? not|don't) have access to (?:the )?(?:model|claude|fable|opus|sonnet)|model[^.]{0,40}(?:not found|not supported|is not available|unavailable)|model_not_found|invalid model/iu;
 
-export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessionId: string, ports: RelayPorts, options: { pendingRefusal?: { kind: 'limit' | 'overload'; message: string } | null } = {}): Promise<number> {
+export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessionId: string, ports: RelayPorts, options: {
+  pendingRefusal?: { kind: 'limit' | 'overload'; message: string } | null;
+  /**
+   * Ступень первого хода выбирается на первом сообщении, а не при старте процесса
+   * (старт — это thread.start: хода ещё нет, карточку подтверждения BB не покажет).
+   * `first` тогда — процесс машины моста только для начала сессии.
+   */
+  routeFirst?: boolean;
+} = {}): Promise<number> {
   let route = first;
+  let routeFirst = options.routeFirst ?? false;
   let pendingRefusal = options.pendingRefusal ?? null;
   const preamble: string[] = [];
   const swallow = new Set<string>();
@@ -182,7 +191,8 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
       continue;
     }
     if (isUser && !turnActive) {
-      if (sawUser) {
+      if (sawUser || routeFirst) {
+        routeFirst = false;
         // Новый ход: решение каскада. Пока решаем — следующие строки ждут.
         await switching;
         let next: RoutedTurn;

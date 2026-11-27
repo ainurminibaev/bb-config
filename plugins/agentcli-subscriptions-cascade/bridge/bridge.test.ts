@@ -560,3 +560,19 @@ test('мост: адрес сервера BB берётся из envVars зап�
   } finally { if (saved !== undefined) process.env.BB_SERVER_URL = saved; }
   assert.ok(seen.some(u => u.startsWith('http://127.0.0.1:4999/api/v1/plugins/')), seen.join(', '));
 });
+
+test('мост: BB_CODEX_BRIDGE_APP_SERVER_ARGS = ["app-server"] рядом с подменённой командой', async () => {
+  const saved = { cmd: process.env.BB_CODEX_BRIDGE_APP_SERVER_COMMAND, args: process.env.BB_CODEX_BRIDGE_APP_SERVER_ARGS };
+  delete process.env.BB_CODEX_BRIDGE_APP_SERVER_ARGS;
+  const dataDir = realpathSync(mkdtempSync(join(tmpdir(), 'cxa-')));
+  const bridge = createCascadeBridge({ providerId: 'subscriptions-cascade', ownArtifactUrl: pathToFileURL('/x/a/b/host.mjs').href, loadDeps: { cacheRoot: '/nowhere' }, write: () => {}, socketDir: dataDir });
+  bridge.start!({ pluginId: 'agentcli-subscriptions-cascade', dataDir, tempDir: dataDir });
+  try {
+    assert.equal(process.env.BB_CODEX_BRIDGE_APP_SERVER_ARGS, '["app-server"]');
+    assert.equal(process.env.BB_CODEX_BRIDGE_APP_SERVER_COMMAND, join(dataDir, 'launcher', 'codex.sh'));
+  } finally {
+    await bridge.close();
+    if (saved.cmd === undefined) delete process.env.BB_CODEX_BRIDGE_APP_SERVER_COMMAND; else process.env.BB_CODEX_BRIDGE_APP_SERVER_COMMAND = saved.cmd;
+    if (saved.args === undefined) delete process.env.BB_CODEX_BRIDGE_APP_SERVER_ARGS; else process.env.BB_CODEX_BRIDGE_APP_SERVER_ARGS = saved.args;
+  }
+});

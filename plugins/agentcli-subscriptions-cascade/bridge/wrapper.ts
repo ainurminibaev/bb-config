@@ -344,6 +344,10 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
       }));
       chmodSync(self, 0o755);
       process.env[NATIVE_BRIDGES[provider].executableEnv.command] = self;
+      // Штатный мост Codex при заданной COMMAND без ARGS запускает её без аргументов —
+      // codex стартует TUI («stdin is not a terminal»). Аргументы app-server — явно.
+      const argsEnv = NATIVE_BRIDGES[provider].executableEnv.args;
+      if (argsEnv && !process.env[argsEnv]) process.env[argsEnv] = JSON.stringify(['app-server']);
     }
   }
 

@@ -253,6 +253,12 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
   const session = claudeSessionInfo(args);
   const probe = session.ephemeral;
   const requestedModel = flagValue(args, '--model');
+  const streamSession = flagValue(args, '--input-format') === 'stream-json' && session.sessionId !== null && !probe;
+  if (streamSession && threadId) {
+    // Сессия stream-json стартует на thread.start, до сообщения пользователя: ступень
+    // (и карточку подтверждения) выбираем на первом сообщении, когда ход уже идёт.
+    return runStreamSession(io, provider, args, threadId, session.sessionId!, requestedModel, null, true);
+  }
   let route: RoutedTurn;
   try {
     route = await routeWithConfirm(io, threadId, { provider, requestedModel, probe });
@@ -260,19 +266,11 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
     return refuseServerDown(io, threadId, error);
   }
   await sendFeed(io, threadId, route.notes);
-  let pendingRefusal: { kind: 'limit' | 'overload'; message: string } | null = null;
   if (route.action === 'refuse' && route.retryAs) {
+    // Штатный автоповтор BB: отказ в форме вывода CLI (лимит или перегрузка).
     logLine(io, `refuse (${route.retryAs}, автоповтор): ${route.message}`);
-    const sid = claudeSessionInfo(args).sessionId;
-    if (flagValue(args, '--input-format') === 'stream-json' && sid && !probe) {
-      // Сессия stream-json: CLI машины моста только отвечает на начало сессии; первое
-      // сообщение получает отказ в штатной форме, следующие идут по каскаду.
-      pendingRefusal = { kind: route.retryAs, message: route.message };
-      route = { action: 'run', stepId: '', hostId: '', providerId: provider, modelId: null, local: true, cwd: null, env: {}, stage: { machine: 'каскад' }, notes: [] };
-    } else {
-      for (const line of syntheticRefusal(route.retryAs, route.message, sid, io.now())) io.stdout.write(`${line}\n`);
-      return 0;
-    }
+    for (const line of syntheticRefusal(route.retryAs, route.message, claudeSessionInfo(args).sessionId, io.now())) io.stdout.write(`${line}\n`);
+    return 0;
   } else if (route.action === 'refuse') {
     logLine(io, `refuse: ${route.message}`);
     io.stderr.write(`${route.message}\n`);
@@ -285,32 +283,6 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
   const sessionArgs = probe ? args : resumeOrStart(args, id => localSessionFile(io, id, route.action === 'run' ? route.cwd : null) !== null);
   if (sessionArgs.join('\0') !== args.join('\0')) logLine(io, `сессии ${session.sessionId} ещё нет — старт с --session-id вместо --resume`);
 
-  // Сессия stream-json: один процесс CLI на всю сессию, ступень — на каждый ход.
-  if (flagValue(args, '--input-format') === 'stream-json' && session.sessionId && !probe) {
-    const sessionId = session.sessionId;
-    const finishInfo = (r: RunRoute) => ({ threadId, projectId: io.env.BB_PROJECT_ID ?? null, stepId: r.stepId, hostId: r.hostId, probe: false });
-    return runSessionRelay(route, sessionArgs, sessionId, {
-      start: (r, childArgs, onLine) => stopWith(io, startStageChild(io, provider, r, childArgs, onLine)),
-      sessionExists: r => localSessionFile(io, sessionId, r.cwd) !== null,
-      // Каждое новое сообщение пользователя — новый ход со своим turnKey.
-      routeTurn: () => routeWithConfirm(io, threadId, { provider, requestedModel, probe: false }),
-      // Лимит в ходе — отметка до ответа мосту: provider-retry сразу увидит свободную ступень.
-      markLimits: async (r, limits) => { await callServer(io, 'turnLimits', { threadId, stepId: r.stepId, limits: limits.slice(-20) }, 10_000); },
-      markModelUnavailable: async (r, reason) => { await callServer(io, 'turnModelUnavailable', { threadId, stepId: r.stepId, modelId: r.modelId, reason }, 10_000); },
-      finishTurn: async (r, info) => {
-        if (!r.stepId) return; // CLI начала сессии: хода не было
-        const finish = await callServer<{ notes: RouteNote[] }>(io, 'finishTurn', { ...finishInfo(r), ...info, limits: info.limits.slice(-20) }, 120_000);
-        await sendFeed(io, threadId, finish.notes);
-      },
-      feed: notes => sendFeed(io, threadId, notes),
-      limitFromLine: limitFromClaudeLine,
-      stdin: io.stdin,
-      stdout: io.stdout,
-      stderr: io.stderr,
-      now: io.now,
-      log: line => logLine(io, line),
-    }, { pendingRefusal });
-  }
 
   const startedAt = io.now();
   const limits: LimitObservation[] = [];
@@ -378,6 +350,41 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
     logLine(io, `finishTurn failed: ${error instanceof Error ? error.message : String(error)}`);
   }
   return exitCode ?? 1;
+}
+
+/**
+ * Сессия stream-json Claude: один процесс CLI на сессию, ступень — на каждый ход.
+ * Процесс стартует на thread.start (хода ещё нет): сначала — CLI машины моста только
+ * для начала сессии (без сообщения лимит не тратится), ступень и карточка
+ * подтверждения — на первом сообщении пользователя, как у следующих ходов.
+ */
+async function runStreamSession(io: LauncherIo, provider: NativeProvider, args: string[], threadId: string, sessionId: string, requestedModel: string | null,
+  pendingRefusal: { kind: 'limit' | 'overload'; message: string } | null, routeFirst: boolean): Promise<number> {
+  const idle: RunRoute = { action: 'run', stepId: '', hostId: '', providerId: provider, modelId: null, local: true, cwd: null, env: {}, stage: { machine: 'начало сессии' }, notes: [] };
+  const sessionArgs = resumeOrStart(args, id => localSessionFile(io, id, null) !== null);
+  if (sessionArgs.join('\0') !== args.join('\0')) logLine(io, `сессии ${sessionId} ещё нет — старт с --session-id вместо --resume`);
+  const finishInfo = (r: RunRoute) => ({ threadId, projectId: io.env.BB_PROJECT_ID ?? null, stepId: r.stepId, hostId: r.hostId, probe: false });
+  return runSessionRelay(idle, sessionArgs, sessionId, {
+    start: (r, childArgs, onLine) => stopWith(io, startStageChild(io, provider, r, childArgs, onLine)),
+    sessionExists: r => localSessionFile(io, sessionId, r.cwd) !== null,
+    // Каждое новое сообщение пользователя — новый ход со своим turnKey.
+    routeTurn: () => routeWithConfirm(io, threadId, { provider, requestedModel, probe: false }),
+    // Лимит в ходе — отметка до ответа мосту: provider-retry сразу увидит свободную ступень.
+    markLimits: async (r, limits) => { await callServer(io, 'turnLimits', { threadId, stepId: r.stepId, limits: limits.slice(-20) }, 10_000); },
+    markModelUnavailable: async (r, reason) => { await callServer(io, 'turnModelUnavailable', { threadId, stepId: r.stepId, modelId: r.modelId, reason }, 10_000); },
+    finishTurn: async (r, info) => {
+      if (!r.stepId) return; // CLI начала сессии: хода не было
+      const finish = await callServer<{ notes: RouteNote[] }>(io, 'finishTurn', { ...finishInfo(r), ...info, limits: info.limits.slice(-20) }, 120_000);
+      await sendFeed(io, threadId, finish.notes);
+    },
+    feed: notes => sendFeed(io, threadId, notes),
+    limitFromLine: limitFromClaudeLine,
+    stdin: io.stdin,
+    stdout: io.stdout,
+    stderr: io.stderr,
+    now: io.now,
+    log: line => logLine(io, line),
+  }, { pendingRefusal, routeFirst });
 }
 
 type RunRoute = Extract<RoutedTurn, { action: 'run' }>;
@@ -474,14 +481,26 @@ export function startStageChild(io: LauncherIo, provider: NativeProvider, route:
 }
 
 /** Codex: app-server на всё время runtime. Ступень — на старте процесса. */
-async function runCodex(io: LauncherIo, args: string[], threadId: string): Promise<number> {
-  // Согласие на ступень Codex спрашивается здесь, при входе на неё (старт app-server).
-  let route: RoutedTurn;
+/** Аргументы codex для режима моста: без подкоманды codex стартует TUI и требует терминал. */
+export function codexAppServerArgs(args: readonly string[]): string[] {
+  return args.includes('app-server') ? [...args] : ['app-server', ...args];
+}
+
+async function runCodex(io: LauncherIo, rawArgs: string[], threadId: string): Promise<number> {
+  const args = codexAppServerArgs(rawArgs);
+  // Старт app-server — это открытие сессии, а не ход: карточку BB здесь не покажет.
+  // Согласие на Codex даётся раньше, в ходе (мост открывает сессию Codex только после «Да»).
+  let decided: RouteTurnOutput;
   try {
-    route = await routeWithConfirm(io, threadId, { provider: 'codex', requestedModel: null, probe: false });
+    decided = await routeWithProgress(io, threadId, {
+      threadId, projectId: io.env.BB_PROJECT_ID ?? null, provider: 'codex', requestedModel: null, probe: false, cwd: io.cwd, turnKey: `session-${randomUUID()}`,
+    });
   } catch (error) {
     return refuseServerDown(io, threadId, error);
   }
+  const route: RoutedTurn = decided.action === 'confirm'
+    ? { action: 'refuse', retryable: true, message: `Ход не запущен: Каскад подписок → подтверждение: ступень ${decided.prompt.to.machine} · Codex ещё не подтверждена — ответьте в карточке хода.`, notes: [] }
+    : decided;
   await sendFeed(io, threadId, route.notes);
   if (route.action === 'refuse') { io.stderr.write(`${route.message}\n`); return route.retryable ? 75 : 1; }
   if (route.local) {
