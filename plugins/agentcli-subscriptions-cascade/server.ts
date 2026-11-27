@@ -64,7 +64,7 @@ export default function plugin(bb: BbPluginApi) {
     }),
     refreshLimits: async (config, steps) => { await Promise.all(steps.map(s => monitor.refresh(stageOf(s), config.policies.preTurnBudgetMs).catch(() => undefined))); },
     observeLimit: (_config, step, event) => monitor.observe(stageOf(step), event, Date.now()),
-    sync: { prepareTurn: (t, s) => fileSync.prepareTurn(t, s), finishTurn: (t, s) => fileSync.finishTurn(t, s), modeOf: (config, projectId) => syncModeOf(config, projectId) },
+    sync: { prepareTurn: (t, s, progress) => fileSync.prepareTurn(t, s, progress), finishTurn: (t, s) => fileSync.finishTurn(t, s), modeOf: (config, projectId) => syncModeOf(config, projectId) },
   });
   // Схема каскада в метке ступени — тот же движок и состояние треда, что у исполнителя.
   timeline.provideScheme(threadId => executor.scheme(threadId));

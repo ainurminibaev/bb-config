@@ -13,13 +13,13 @@ import { syncIgnores } from '../config.ts';
 import type { CascadeConfig, Machine } from '../contract.ts';
 import { syncHostContract } from './contract.ts';
 import { symlinkModeFor, type SyncModeExt } from './mutagen.ts';
-import { projectSlug, SyncOrchestrator, type ProjectSyncState, type SyncHostCall, type SyncMachine, type SyncProjectContext, type SyncResult, type SyncStepRef, type SyncThreadRef } from './orchestrator.ts';
+import { projectSlug, SyncOrchestrator, type ProjectSyncState, type SyncHostCall, type SyncMachine, type SyncProgress, type SyncProjectContext, type SyncResult, type SyncStepRef, type SyncThreadRef } from './orchestrator.ts';
 
 /** Тред для синхронизации: проект и рабочая папка треда на опоре (worktree), если известна. */
 export interface SyncThreadInput { threadId: string; projectId: string; workspace?: string | null }
 
 export interface SyncService {
-  prepareTurn(thread: SyncThreadInput, step: SyncStepRef): Promise<SyncResult>;
+  prepareTurn(thread: SyncThreadInput, step: SyncStepRef, progress?: SyncProgress): Promise<SyncResult>;
   finishTurn(thread: SyncThreadInput, step: SyncStepRef): Promise<SyncResult>;
   applyMode(projectId: string): Promise<SyncResult>;
   teardown(projectId: string, options?: { removeMount?: boolean }): Promise<SyncResult>;
@@ -178,7 +178,7 @@ export function createSyncService(bb: BbPluginApi, loadConfig: () => Promise<{ c
   });
 
   return {
-    prepareTurn: async (thread, step) => orchestrator.prepareTurn(await unitOf(thread), step),
+    prepareTurn: async (thread, step, progress) => orchestrator.prepareTurn(await unitOf(thread), step, progress),
     finishTurn: async (thread, step) => orchestrator.finishTurn(await unitOf(thread), step),
     applyMode: projectId => orchestrator.applyMode(projectId),
     teardown: (projectId, options) => orchestrator.teardown(projectId, options),

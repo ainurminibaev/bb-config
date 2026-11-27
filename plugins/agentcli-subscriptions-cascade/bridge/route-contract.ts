@@ -27,7 +27,21 @@ export const routeNoteSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('sync'), from: text(80), to: text(80), ms: z.number().nonnegative(), ok: z.boolean(), detail: text(300).optional() }),
   z.object({ kind: z.literal('run'), stage: stageLabelSchema, stepId: text(120) }),
   z.object({ kind: z.literal('wait'), cause: z.enum(['reset', 'offline', 'recheck']), until: z.number().nullable().optional(), note: text(300).optional(), stepId: text(120).optional() }),
-  z.object({ kind: z.literal('problem'), message: text(300), stage: stageLabelSchema.optional(), stepId: text(120).optional() }),
+  /** note — что сделать владельцу: «Повторите ход · пропустить ступень … · настройки …». */
+  z.object({ kind: z.literal('problem'), message: text(300), stage: stageLabelSchema.optional(), stepId: text(120).optional(), note: text(300).optional() }),
+  /**
+   * Подготовка хода идёт (синхронизация): строка перехода обновляется на месте.
+   * Шлёт запускатель, пока ждёт решения сервера (RPC turnProgress).
+   */
+  z.object({
+    kind: z.literal('prep'),
+    reason: z.enum(['limit', 'return', 'unavailable', 'auth', 'error', 'manual', 'start']),
+    from: stageLabelSchema.nullable(), to: stageLabelSchema, stepId: text(120),
+    phase: text(120), elapsedMs: z.number().nonnegative(),
+    steps: z.array(z.object({ label: text(80), ms: z.number().nonnegative(), state: z.enum(['running', 'done', 'failed']) })).max(20),
+    sync: z.object({ files: z.number().nonnegative().optional(), done: z.number().nonnegative().optional(), bytes: z.number().nonnegative().optional() }).optional(),
+    attempt: text(160).optional(),
+  }),
   z.object({ kind: z.literal('state'), phase: z.enum(['idle', 'preparing', 'running', 'waiting']), stage: stageLabelSchema.nullable(), stepId: text(120).optional(), profileId: text(120).optional() }),
 ]);
 export type RouteNote = z.infer<typeof routeNoteSchema>;
@@ -122,6 +136,8 @@ export const executorRpcContract = defineRpcContract({
   routeTurn: { input: routeTurnInputSchema, output: routeTurnOutputSchema },
   finishTurn: { input: finishTurnInputSchema, output: z.object({ notes: z.array(routeNoteSchema) }) },
   threadStatus: { input: z.object({ threadId: z.string().min(1) }), output: threadStatusSchema },
+  /** Идущая подготовка хода треда (для строки ленты); null — не готовится. */
+  turnProgress: { input: z.object({ threadId: z.string().min(1) }), output: z.object({ note: z.unknown().nullable() }) },
   /** Тестовая квота одного треда (S1–S13): `set` — «<ступень>=exhausted|ok|unknown|unavailable[,<сброс>];…». */
   testQuota: {
     input: z.object({ threadId: z.string().min(1), set: z.string().max(2000).optional(), clear: z.boolean().default(false) }),

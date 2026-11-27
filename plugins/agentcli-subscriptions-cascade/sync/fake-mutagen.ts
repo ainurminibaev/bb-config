@@ -32,6 +32,13 @@ export class FakeMutagen {
   scanningLists = 0;
   /** Абсолютные символические ссылки на опоре: в режиме portable Mutagen их отвергает. */
   absoluteLinks: string[] = [];
+  /** Долгий flush (мс) и прогресс передачи, который в это время видит `sync list`. */
+  flushDelayMs = 0;
+  staging: { receivedFiles: number; expectedFiles: number; totalReceivedSize: number } | null = null;
+  /** Ошибка `sync flush` для N следующих вызовов (обрыв SSH). */
+  failFlushes = 0;
+
+  private readonly flushing = new Set<string>();
 
   private host(hostId: string) {
     let map = this.sessions.get(hostId);
@@ -47,7 +54,7 @@ export class FakeMutagen {
       const line = `${hostId}: mutagen ${args[0] === 'sync' ? args.slice(1).filter(a => !a.startsWith('--') && !a.includes('=')).slice(0, 2).join(' ') : args.join(' ')}`;
       this.log.push(line.trim());
       if (this.failCommand && args.includes(this.failCommand)) return out({ exitCode: 1, stdout: '', stderr: `fake ${this.failCommand} failed`, seconds: 0, binary: 'mutagen' });
-      return out(this.mutagen(hostId, args));
+      return out(await this.mutagen(hostId, args));
     }
     this.log.push(`${hostId}: ${method}${method === 'syncRemoveGitFiles' || method === 'syncChmod' ? ` ${(i.paths as string[]).join(',')}` : ''}`);
     switch (method) {
@@ -68,7 +75,7 @@ export class FakeMutagen {
     }
   };
 
-  private mutagen(hostId: string, args: string[]) {
+  private async mutagen(hostId: string, args: string[]) {
     const ok = (stdout = '') => ({ exitCode: 0, stdout, stderr: '', seconds: 0.01, binary: 'mutagen' });
     const sessions = this.host(hostId);
     const [, verb] = args;
@@ -84,8 +91,8 @@ export class FakeMutagen {
       const wanted = Object.fromEntries(selector.split(',').map(p => p.split('=')));
       const list = [...sessions.values()].filter(s => Object.entries(wanted).every(([k, v]) => s.labels[k] === v)).map(s => ({
         identifier: `sync_${s.name}`, name: s.name, labels: s.labels, mode: s.mode, paused: s.paused,
-        status: s.paused ? 'disconnected' : s.labels['bbc-role'] === 'w' && this.scanningLists > 0 ? 'scanning' : 'watching',
-        alpha: { connected: !s.paused && s.connected, ...(s.symlinkMode === 'portable' && this.absoluteLinks.length ? { scanProblems: this.absoluteLinks.map(path => ({ path, error: 'invalid symbolic link: target is absolute' })) } : {}) }, beta: { connected: !s.paused && s.connected },
+        status: s.paused ? 'disconnected' : this.flushing.has(s.name) ? 'staging-beta' : s.labels['bbc-role'] === 'w' && this.scanningLists > 0 ? 'scanning' : 'watching',
+        alpha: { connected: !s.paused && s.connected, ...(s.symlinkMode === 'portable' && this.absoluteLinks.length ? { scanProblems: this.absoluteLinks.map(path => ({ path, error: 'invalid symbolic link: target is absolute' })) } : {}) }, beta: { connected: !s.paused && s.connected, ...(this.flushing.has(s.name) && this.staging ? { stagingProgress: this.staging, files: this.staging.expectedFiles } : {}) },
         ...(s.conflicts.length ? { conflicts: s.conflicts.map(root => ({ root, alphaChanges: [], betaChanges: [] })) } : {}),
         ...(s.lastError ? { lastError: s.lastError } : {}),
       }));
@@ -105,6 +112,12 @@ export class FakeMutagen {
     else if (verb === 'terminate') sessions.delete(session.name);
     else if (verb === 'flush') {
       if (session.paused) return { exitCode: 1, stdout: '', stderr: 'session is paused', seconds: 0, binary: 'mutagen' };
+      if (this.failFlushes > 0) { this.failFlushes -= 1; return { exitCode: 1, stdout: '', stderr: 'ssh: connect to host tru: Connection reset', seconds: 0, binary: 'mutagen' }; }
+      if (this.flushDelayMs > 0) {
+        this.flushing.add(session.name);
+        await new Promise(resolve => setTimeout(resolve, this.flushDelayMs));
+        this.flushing.delete(session.name);
+      }
       if (session.labels['bbc-role'] === 'w' && this.conflictsAfterFlush.length) { session.conflicts = [...this.conflictsAfterFlush]; this.conflictsAfterFlush = []; }
     }
     return ok();

@@ -211,7 +211,7 @@ test('запускатель: отказ каскада — понятный т�
     stdin: new PassThrough(), stdout: collect(), stderr: err, now: Date.now,
   });
   assert.equal(code, 75);
-  assert.match(err.text(), /Каскад подписок: Лимиты исчерпаны/u);
+  assert.match(err.text(), /Лимиты исчерпаны на всех ступенях/u);
 });
 
 // ---- Сессия stream-json: ступень между ходами ----

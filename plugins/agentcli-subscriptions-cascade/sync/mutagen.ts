@@ -102,6 +102,10 @@ export interface EndpointState {
   connected: boolean;
   scanProblems: string[];
   transitionProblems: string[];
+  /** Файлов на стороне после сканирования (Mutagen `files`), если известно. */
+  files?: number;
+  /** Передача на эту сторону (`stagingProgress`): файлы и байты. */
+  staging?: { receivedFiles: number; expectedFiles: number; receivedBytes: number };
 }
 
 export interface SessionState {
@@ -128,9 +132,44 @@ function problems(value: unknown): string[] {
   });
 }
 
+const num = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined);
+
 function endpoint(value: unknown): EndpointState {
   const r = record(value);
-  return { connected: r.connected === true, scanProblems: problems(r.scanProblems), transitionProblems: problems(r.transitionProblems) };
+  const out: EndpointState = { connected: r.connected === true, scanProblems: problems(r.scanProblems), transitionProblems: problems(r.transitionProblems) };
+  const files = num(r.files);
+  if (files !== undefined) out.files = files;
+  const staging = record(r.stagingProgress);
+  const expected = num(staging.expectedFiles);
+  if (expected !== undefined) out.staging = { receivedFiles: num(staging.receivedFiles) ?? 0, expectedFiles: expected, receivedBytes: num(staging.totalReceivedSize) ?? 0 };
+  return out;
+}
+
+/** Прогресс цикла синхронизации для строки подготовки (терпимо к версиям Mutagen). */
+export interface TransferProgress { status: string; files: number | null; done: number | null; bytes: number | null }
+
+export function transferProgress(session: SessionState | undefined): TransferProgress | null {
+  if (!session) return null;
+  const staging = session.beta.staging ?? session.alpha.staging;
+  const files = Math.max(session.alpha.files ?? 0, session.beta.files ?? 0) || null;
+  return {
+    status: session.status,
+    files: staging ? staging.expectedFiles : files,
+    done: staging ? staging.receivedFiles : null,
+    bytes: staging ? staging.receivedBytes : null,
+  };
+}
+
+/** Статус Mutagen → этап подготовки по-русски. */
+export function statusLabel(status: string): string {
+  if (status === 'scanning' || status === 'waiting-for-rescan') return 'сканирование';
+  if (status.startsWith('staging')) return 'передача';
+  if (status === 'transitioning') return 'применение';
+  if (status === 'saving') return 'сохранение';
+  if (status.startsWith('connecting')) return 'подключение';
+  if (status === 'reconciling') return 'сверка изменений';
+  if (status === 'watching') return 'готово';
+  return status;
 }
 
 /**

@@ -17,6 +17,8 @@
 import { posix } from 'node:path';
 import type { z } from 'zod';
 import type { SyncHostContract } from './contract.ts';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { transferProgress, type TransferProgress } from './mutagen.ts';
 import { createArgs, evaluateHealth, listArgs, onlyGitIndexConflict, parseSessionList, projectSelector, sessionArgs, sessionName, specFingerprint, type SymlinkMode, type SessionRole, type SessionSpec, type SessionState, type SyncModeExt } from './mutagen.ts';
 
 type Method = keyof SyncHostContract & string;
@@ -88,6 +90,13 @@ export interface SyncTiming {
   detail?: string;
 }
 
+/** Событие подготовки для строки ленты: шаг начался/закончился, счётчики передачи. */
+export type SyncProgressEvent =
+  | { kind: 'step'; step: SyncStepKind; hostId: string; from?: string; to?: string; state: 'running' | 'done' | 'failed'; ms: number; detail?: string }
+  | { kind: 'transfer'; step: SyncStepKind; hostId: string; from?: string; to?: string; progress: TransferProgress };
+
+export type SyncProgress = (event: SyncProgressEvent) => void;
+
 export type SyncRefusal = 'sync-off' | 'busy' | 'conflict' | 'git-busy' | 'unsupported' | 'not-configured' | 'error';
 
 export type SyncResult =
@@ -117,6 +126,8 @@ export interface SyncOrchestratorDeps {
   gitWaitMs?: number;
   /** Карантин на исполнителе: `<база>/<slug>/<время>/`. */
   quarantineBase?: string;
+  /** Как часто опрашивать прогресс передачи во время долгого шага. По умолчанию 2 с. */
+  progressPollMs?: number;
   /**
    * Жив ли тред (идёт ход): false — блокировка этого треда устарела (тред упал,
    * заархивирован, удалён, ход не идёт). null/undefined — неизвестно: только срок.
@@ -159,14 +170,49 @@ export class SyncOrchestrator {
     this.sleep = deps.sleep ?? (ms => new Promise(r => setTimeout(r, ms)));
   }
 
-  /** Подготовить файлы к ходу треда на машине ступени. Повтор безопасен. */
-  prepareTurn(thread: SyncThreadRef, step: SyncStepRef): Promise<SyncResult> {
-    return this.exclusive(thread.projectId, () => this.run((timings, notices) => this.doPrepare(thread, step, timings, notices)));
+  /** Подготовить файлы к ходу треда на машине ступени. Повтор безопасен. `progress` — шаги для строки ленты. */
+  prepareTurn(thread: SyncThreadRef, step: SyncStepRef, progress?: SyncProgress): Promise<SyncResult> {
+    return this.exclusive(thread.projectId, () => this.withProgress(progress, () => this.run((timings, notices) => this.doPrepare(thread, step, timings, notices))));
   }
 
   /** Закрыть ход: вернуть изменения на опору и снять писателя. Повтор безопасен. */
-  finishTurn(thread: SyncThreadRef, step: SyncStepRef): Promise<SyncResult> {
-    return this.exclusive(thread.projectId, () => this.run((timings, notices) => this.doFinish(thread, step, timings, notices)));
+  finishTurn(thread: SyncThreadRef, step: SyncStepRef, progress?: SyncProgress): Promise<SyncResult> {
+    return this.exclusive(thread.projectId, () => this.withProgress(progress, () => this.run((timings, notices) => this.doFinish(thread, step, timings, notices))));
+  }
+
+  private readonly progressStore = new AsyncLocalStorage<SyncProgress>();
+
+  private withProgress<T>(progress: SyncProgress | undefined, fn: () => Promise<T>): Promise<T> {
+    return progress ? this.progressStore.run(progress, fn) : fn();
+  }
+
+  private emit(event: SyncProgressEvent): void {
+    try { this.progressStore.getStore()?.(event); } catch { /* прогресс не обязателен */ }
+  }
+
+  /**
+   * Пока идёт долгий шаг Mutagen (выравнивание, flush) — опрос `sync list`
+   * раз в `progressPollMs` и событие с счётчиками передачи. Без слушателя не опрашивает.
+   */
+  private async watching<T>(step: SyncStepKind, host: string, unit: string, session: string, route: { from: string; to: string } | undefined, fn: () => Promise<T>): Promise<T> {
+    if (!this.progressStore.getStore()) return fn();
+    let stopped = false;
+    const poll = async () => {
+      while (!stopped) {
+        await this.sleepReal(this.deps.progressPollMs ?? 2_000);
+        if (stopped) break;
+        const state = await this.sessions(host, unit).then(m => m.get(session)).catch(() => undefined);
+        const progress = transferProgress(state);
+        if (progress && !stopped) this.emit({ kind: 'transfer', step, hostId: host, ...route, progress });
+      }
+    };
+    const poller = poll();
+    try { return await fn(); } finally { stopped = true; await poller.catch(() => undefined); }
+  }
+
+  /** Пауза опроса прогресса: настоящий таймер (тестовый sleep сдвигает часы). */
+  private sleepReal(ms: number): Promise<void> {
+    return new Promise(resolve => { const t = setTimeout(resolve, ms); (t as { unref?: () => void }).unref?.(); });
   }
 
   /** Привести сессии проекта к режиму (после смены настройки). Писателя не трогает. */
@@ -287,7 +333,7 @@ export class SyncOrchestrator {
     const w = sessionName(ctx.projectId, host, 'w');
     await this.timed(timings, 'align', host, async () => {
       await this.mutagenOk(host, sessionArgs('resume', r), 120_000);
-      await this.mutagenOk(host, sessionArgs('flush', r), created.fresh ? 600_000 : 180_000);
+      await this.watching('align', host, ctx.projectId, r, { from: anchor, to: host }, () => this.mutagenOk(host, sessionArgs('flush', r), created.fresh ? 600_000 : 180_000));
       const health = await this.health(host, ctx.projectId, r);
       await this.mutagenOk(host, sessionArgs('pause', r), 60_000);
       pushWarnings(notices, `Выравнивание ${machine.label}`, health.warnings);
@@ -295,7 +341,7 @@ export class SyncOrchestrator {
     }, undefined, { from: anchor, to: host });
 
     await this.timed(timings, 'resume', host, () => this.mutagenOk(host, sessionArgs('resume', w), 120_000));
-    await this.timed(timings, 'flush', host, () => this.mutagenOk(host, sessionArgs('flush', w), 180_000), undefined, { from: anchor, to: host });
+    await this.timed(timings, 'flush', host, () => this.watching('flush', host, ctx.projectId, w, { from: anchor, to: host }, () => this.mutagenOk(host, sessionArgs('flush', w), 180_000)), undefined, { from: anchor, to: host });
     const health = await this.timed(timings, 'health', host, () => this.health(host, ctx.projectId, w), h => (h.ok ? undefined : h.reasons.join('; ')));
     if (!health.ok) {
       await this.mutagenOk(host, sessionArgs('pause', w), 60_000).catch(() => undefined);
@@ -449,12 +495,18 @@ export class SyncOrchestrator {
 
   private async timed<T>(timings: SyncTiming[], step: SyncStepKind, hostId: string, fn: () => Promise<T>, detail?: (value: T) => string | undefined, route?: { from: string; to: string }): Promise<T> {
     const t0 = performance.now();
+    this.emit({ kind: 'step', step, hostId, ...route, state: 'running', ms: 0 });
     try {
       const value = await fn();
-      timings.push({ step, hostId, ...route, seconds: round((performance.now() - t0) / 1000), ok: true, ...(detail?.(value) ? { detail: detail(value) } : {}) });
+      const ms = performance.now() - t0;
+      timings.push({ step, hostId, ...route, seconds: round(ms / 1000), ok: true, ...(detail?.(value) ? { detail: detail(value) } : {}) });
+      this.emit({ kind: 'step', step, hostId, ...route, state: 'done', ms: Math.round(ms) });
       return value;
     } catch (error) {
-      timings.push({ step, hostId, ...route, seconds: round((performance.now() - t0) / 1000), ok: false, detail: error instanceof Error ? error.message.slice(0, 200) : String(error) });
+      const ms = performance.now() - t0;
+      const message = error instanceof Error ? error.message.slice(0, 200) : String(error);
+      timings.push({ step, hostId, ...route, seconds: round(ms / 1000), ok: false, detail: message });
+      this.emit({ kind: 'step', step, hostId, ...route, state: 'failed', ms: Math.round(ms), detail: message });
       throw error;
     }
   }

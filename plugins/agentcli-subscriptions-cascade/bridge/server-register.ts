@@ -158,6 +158,7 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     routeTurn: input => routes.routeTurn(input),
     finishTurn: input => routes.finishTurn(input),
     threadStatus: ({ threadId }) => routes.threadStatus(threadId),
+    turnProgress: async ({ threadId }) => ({ note: routes.turnProgress(threadId) }),
   }, { experimental_discoverable: true, experimental_description: 'Каскад подписок: паспорт треда (threadStatus), тестовая квота треда (testQuota), ход исполнителя (routeTurn/finishTurn).' });
 
   // Штатный provider-retry спрашивает доступность после ошибки лимита у всех

@@ -614,3 +614,22 @@ test('жив ли тред: архив, удаление, статус хода,
   assert.equal(threadActiveFrom(undefined), null);
   assert.equal(threadActiveFrom({ thread: {} }), null);
 });
+
+test('прогресс подготовки: шаги начались/закончились, счётчики передачи во время долгого flush', async () => {
+  const fake = new FakeMutagen();
+  const states = new Map<string, ProjectSyncState>();
+  const sync = new SyncOrchestrator({
+    call: fake.call, context: async () => context(),
+    store: { get: async id => structuredClone(states.get(id)), set: async (id, s) => { states.set(id, structuredClone(s)); } },
+    now: () => 1_000_000, sleep: async () => {}, gitWaitMs: 0, progressPollMs: 10,
+  });
+  fake.flushDelayMs = 80;
+  fake.staging = { receivedFiles: 2341, expectedFiles: 10520, totalReceivedSize: 5_000_000 };
+  const events: { kind: string; step: string; state?: string; done?: number | null; files?: number | null }[] = [];
+  const result = await sync.prepareTurn(T, { hostId: MAC }, e => events.push(e.kind === 'step' ? { kind: e.kind, step: e.step, state: e.state } : { kind: e.kind, step: e.step, done: e.progress.done, files: e.progress.files }));
+  assert.equal(result.ok, true);
+  assert.ok(events.some(e => e.kind === 'step' && e.step === 'align' && e.state === 'running'));
+  assert.ok(events.some(e => e.kind === 'step' && e.step === 'flush' && e.state === 'done'));
+  const transfer = events.find(e => e.kind === 'transfer');
+  assert.deepEqual(transfer && { done: transfer.done, files: transfer.files }, { done: 2341, files: 10520 }, 'счётчики Mutagen во время передачи');
+});

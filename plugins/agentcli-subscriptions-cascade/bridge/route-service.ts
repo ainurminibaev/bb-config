@@ -8,6 +8,8 @@ import type {
   FinishTurnInput, LimitObservation, RetryAvailability, RouteNote, RouteTurnInput, RouteTurnOutput, StageLabel, ThreadStatus,
 } from './route-contract.ts';
 import { finishTurnInputSchema, routeTurnInputSchema } from './route-contract.ts';
+import { PrepTracker, type PrepNote } from './prep-progress.ts';
+import type { SyncProgressEvent } from '../sync/orchestrator.ts';
 
 /** Ответ sync/ (SyncService.prepareTurn/finishTurn) в нужном здесь объёме. */
 export type SyncOutcome =
@@ -16,7 +18,7 @@ export type SyncOutcome =
 
 export interface SyncPort {
   /** workspace — рабочая папка треда на опоре (worktree): своя единица синхронизации и блокировка. */
-  prepareTurn(thread: { threadId: string; projectId: string; workspace?: string | null }, step: { hostId: string }): Promise<SyncOutcome>;
+  prepareTurn(thread: { threadId: string; projectId: string; workspace?: string | null }, step: { hostId: string }, progress?: (event: SyncProgressEvent) => void): Promise<SyncOutcome>;
   finishTurn(thread: { threadId: string; projectId: string; workspace?: string | null }, step: { hostId: string }): Promise<SyncOutcome>;
   /** Режим синхронизации проекта для паспорта. */
   modeOf?(config: CascadeConfig, projectId: string): string;
@@ -60,7 +62,21 @@ export interface RouteDeps {
   sleep?(ms: number): Promise<void>;
   /** Сколько ждать, пока другой живой тред пишет рабочую папку. По умолчанию 10 мин. */
   busyWaitMs?: number;
+  /** Повторы шага подготовки при сбое (обрыв SSH, ошибка Mutagen). По умолчанию 2, пауза 5 с. */
+  prepRetries?: number;
+  prepRetryPauseMs?: number;
 }
+
+/** Что сделать владельцу, если ход не начался (рядом со строкой отказа). */
+export const REFUSAL_ACTIONS = 'Что сделать: повторите ход · пропустить ступень — выключите её в настройках «Каскада» · настройки: Настройки → Плагины → «Каскад подписок»';
+
+/** «Ход не запущен: Каскад подписок → <источник>: <причина>». */
+export function refusalText(source: string, reason: string): string {
+  return `Ход не запущен: Каскад подписок → ${source}: ${reason}`;
+}
+
+/** Сбои подготовки, после которых ступень пропускается и берётся следующая (конфликт файлов — нет). */
+const FALLBACK_REASONS = new Set(['error', 'not-configured', 'unsupported', 'sync-off']);
 
 export const PROVIDER_ID_LOCAL = 'subscriptions-cascade';
 
@@ -126,6 +142,8 @@ export interface RouteService {
   routeTurn(input: RouteTurnInput): Promise<RouteTurnOutput>;
   finishTurn(input: FinishTurnInput): Promise<{ notes: RouteNote[] }>;
   threadStatus(threadId: string): Promise<ThreadStatus>;
+  /** Идущая подготовка хода треда для строки ленты; null — не готовится. */
+  turnProgress(threadId: string): PrepNote | null;
   /** Ответ provider-retry после ошибки лимита: можно ли повторить ход сейчас (S2, S14). */
   retryAvailability(threadId: string): Promise<RetryAvailability>;
   /** Схема профиля треда для метки ступени (timeline.provideScheme): тот же движок и то же состояние. */
@@ -145,10 +163,21 @@ export function createRouteService(deps: RouteDeps): RouteService {
     return next;
   }
 
+  let lastConfig: CascadeConfig | null = null;
+  const prep = new PrepTracker(deps.now, hostId => (lastConfig ? machineLabel(lastConfig, hostId) : hostId));
+
   async function routeTurn(raw: RouteTurnInput): Promise<RouteTurnOutput> {
     const input = routeTurnInputSchema.parse(raw);
     return serial(input.threadId, async () => {
+      try { return await routeOnce(input, []); } finally { prep.end(input.threadId); }
+    });
+  }
+
+  /** Решение и подготовка хода; skipped — ступени, пропущенные в этом ходе после сбоя подготовки. */
+  async function routeOnce(input: ReturnType<typeof routeTurnInputSchema.parse>, skipped: string[]): Promise<RouteTurnOutput> {
+    {
       const config = await deps.loadConfig();
+      lastConfig = config;
       const info = await deps.threadInfo(input.threadId).catch(() => null);
       const stored = (await deps.load(input.threadId).catch(() => undefined)) ?? freshState(input.threadId, info);
       const now = deps.now();
@@ -166,38 +195,42 @@ export function createRouteService(deps: RouteDeps): RouteService {
       }
 
       if (config.policies.executionMode !== 'provider') {
-        return { action: 'refuse', retryable: false, message: 'Каскад подписок выключен (режим исполнения «off»). Включите режим «Свой провайдер» в настройках каскада или выберите штатный провайдер.', notes: [] };
+        const message = refusalText('настройки', 'каскад выключен (режим исполнения «Выключено»). Включите «Свой провайдер» в «Дополнительно» или выберите штатный провайдер.');
+        return { action: 'refuse', retryable: false, message, notes: [{ kind: 'problem', message: message.slice(0, 300), note: REFUSAL_ACTIONS }] };
       }
 
       const plannedSteps = config.steps.filter(s => s.enabled);
       await deps.refreshLimits(config, plannedSteps).catch(error => warn(`лимиты перед ходом: ${String(error)}`));
       const engine: ThreadCascadeState = { ...stored.engine, projectId, homeHostId: stored.engine.homeHostId ?? bridgeHost, turnId: `turn-${now}` };
+      // Ступени, на которых подготовка этого хода уже не удалась, в выбор не идут (сохраняется прежнее состояние).
       const decision: Decision = selectStep({
-        config, requestedModel: profileId, accounts: deps.accounts(), thread: engine, health: deps.health(config, input.threadId), now,
+        config, requestedModel: profileId, accounts: deps.accounts(), thread: { ...engine, skippedStepIds: [...engine.skippedStepIds, ...skipped] }, health: deps.health(config, input.threadId), now,
       });
 
       const save = (next: StoredThreadState) => deps.save(input.threadId, next).catch(error => warn(`состояние треда: ${String(error)}`));
 
       if (decision.kind === 'unavailable') {
-        return { action: 'refuse', retryable: false, message: REFUSE_TEXT[decision.reason] ?? 'Каскад не нашёл ступень для хода.', notes: [{ kind: 'problem', message: REFUSE_TEXT[decision.reason] ?? decision.reason }] };
+        const message = refusalText('настройки', REFUSE_TEXT[decision.reason] ?? 'не найдена ступень для хода.');
+        return { action: 'refuse', retryable: false, message, notes: [{ kind: 'problem', message: message.slice(0, 300), note: REFUSAL_ACTIONS }] };
       }
       if (decision.kind === 'wait') {
         await save({ ...stored, profileId, engine: nextThreadState(engine, decision, now) });
         const note = decision.reason === 'exhausted' ? 'Лимиты исчерпаны на всех ступенях — жду сброса.' : 'Квота ступеней неизвестна — перепроверю позже.';
-        return { action: 'refuse', retryable: true, message: `${note} До ${new Date(decision.until).toISOString()}.`, notes: [{ kind: 'wait', cause: decision.reason === 'exhausted' ? 'reset' : 'recheck', until: decision.until, note, ...(decision.stepId ? { stepId: decision.stepId } : {}) }] };
+        return { action: 'refuse', retryable: true, message: refusalText('лимиты', `${note} До ${new Date(decision.until).toISOString()}.`), notes: [{ kind: 'wait', cause: decision.reason === 'exhausted' ? 'reset' : 'recheck', until: decision.until, note, ...(decision.stepId ? { stepId: decision.stepId } : {}) }] };
       }
       if (decision.kind === 'ask-owner') {
         const message = decision.reason === 'wait-too-long'
           ? 'Все ступени исчерпаны, а ближайший сброс позже порога ожидания — нужен ваш выбор.'
           : 'Все ступени недоступны, срок сброса неизвестен — нужен ваш выбор.';
-        return { action: 'refuse', retryable: false, message, notes: [{ kind: 'problem', message }] };
+        const text = refusalText('лимиты', message);
+        return { action: 'refuse', retryable: false, message: text, notes: [{ kind: 'problem', message: text.slice(0, 300), note: REFUSAL_ACTIONS }] };
       }
       if (decision.kind === 'confirm') {
         // Карточка подтверждения (timeline/) показывается мостом; пока она не
         // подключена — ход останавливается с понятной причиной, без перехода.
         const to = stageLabel(config, decision);
-        const message = `Переход на ${to.machine} · ${to.provider ?? ''} требует подтверждения владельца.`;
-        return { action: 'refuse', retryable: false, message, notes: [{ kind: 'problem', message, stage: to, stepId: decision.stepId }] };
+        const message = refusalText('подтверждение', `переход на ${to.machine} · ${to.provider ?? ''} требует подтверждения владельца.`);
+        return { action: 'refuse', retryable: false, message, notes: [{ kind: 'problem', message: message.slice(0, 300), stage: to, stepId: decision.stepId, note: REFUSAL_ACTIONS }] };
       }
 
       // decision.kind === 'run'
@@ -212,11 +245,11 @@ export function createRouteService(deps: RouteDeps): RouteService {
       }
       const prev = stored.lastRun;
       const local = bridgeHost !== null && decision.hostId === bridgeHost;
-      if (decision.switched || prev === null && !local) {
-        const fromStage = prev ? stageLabel(config, prev) : null;
-        const fromHealth = prev ? deps.health(config, input.threadId)(prev.stepId, prev.modelId) : null;
-        const reason = prev === null ? 'start' : decision.returning ? 'return' : fromHealth?.exhausted ? 'limit' : fromHealth && !fromHealth.available ? 'unavailable' : 'error';
-        notes.push({ kind: 'switch', reason, from: fromStage, to, resetAt: fromHealth?.resetsAt ?? null, stepId: decision.stepId });
+      const fromStage = prev ? stageLabel(config, prev) : null;
+      const fromHealth = prev ? deps.health(config, input.threadId)(prev.stepId, prev.modelId) : null;
+      const switchReason = skipped.length > 0 ? 'unavailable' : prev === null ? 'start' : decision.returning ? 'return' : fromHealth?.exhausted ? 'limit' : fromHealth && !fromHealth.available ? 'unavailable' : 'error';
+      if (decision.switched || prev === null && !local || skipped.length > 0) {
+        notes.push({ kind: 'switch', reason: switchReason, from: fromStage, to, resetAt: fromHealth?.resetsAt ?? null, stepId: decision.stepId });
       }
 
       let cwd: string | null = null;
@@ -228,31 +261,54 @@ export function createRouteService(deps: RouteDeps): RouteService {
       // Рабочая папка треда: мост на опоре — его cwd и есть папка на опоре (worktree треда).
       const workspace = bridgeHost !== null && bridgeHost === anchor ? input.cwd : stored.workspace ?? null;
       if (needsSync) {
-        const prepare = () => deps.sync!.prepareTurn({ threadId: input.threadId, projectId, workspace }, { hostId: decision.hostId }).catch(error => ({
+        // Строка подготовки в ленте: запускатель опрашивает turnProgress, пока ждёт решения.
+        prep.begin(input.threadId, { reason: switchReason, from: fromStage, to, stepId: decision.stepId });
+        const prepareOnce = () => deps.sync!.prepareTurn({ threadId: input.threadId, projectId, workspace }, { hostId: decision.hostId }, event => prep.event(input.threadId, event)).catch(error => ({
           ok: false as const, reason: 'error', message: error instanceof Error ? error.message : String(error), conflicts: [], timings: [], notices: [],
         }));
+        const sleep = deps.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
+        // Сбой шага (обрыв SSH, ошибка Mutagen, машина уснула) — повтор с паузой, без молчаливого ожидания.
+        const retries = deps.prepRetries ?? 2;
+        const prepare = async (): Promise<SyncOutcome> => {
+          let result: SyncOutcome = await prepareOnce();
+          for (let attempt = 1; attempt <= retries && !result.ok && result.reason === 'error'; attempt += 1) {
+            prep.attempt(input.threadId, `повтор ${attempt + 1}/${retries + 1}: ${result.message.slice(0, 100)}`);
+            await sleep(deps.prepRetryPauseMs ?? 5_000);
+            result = await prepareOnce();
+          }
+          prep.attempt(input.threadId, null);
+          return result;
+        };
         let outcome: SyncOutcome = await prepare();
         // Папку пишет другой живой тред: ждём его конца с таймаутом, а не роняем ход.
         const waitStarted = deps.now();
         const busyWaitMs = deps.busyWaitMs ?? 10 * 60_000;
-        const sleep = deps.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
         while (!outcome.ok && outcome.reason === 'busy' && deps.now() - waitStarted < busyWaitMs) {
+          prep.attempt(input.threadId, `жду освобождения рабочей папки · ${Math.round((deps.now() - waitStarted) / 1000)} с`);
           await sleep(10_000);
           outcome = await prepare();
         }
         const waited = deps.now() - waitStarted;
         if (!outcome.ok && outcome.reason === 'busy') {
-          const message = `Ход не запущен: Каскад подписок → синхронизация ${to.machine}: ${outcome.message} — не освободилась за ${Math.round(waited / 60_000)} мин. Повторите ход, когда тот тред закончит.`;
-          notes.push(...syncNotes(config, outcome), { kind: 'problem', message: message.slice(0, 300), stage: to, stepId: decision.stepId });
+          const message = `${refusalText(`синхронизация ${to.machine}`, outcome.message)} — не освободилась за ${Math.round(waited / 60_000)} мин. Повторите ход, когда тот тред закончит.`;
+          notes.push(...syncNotes(config, outcome), { kind: 'problem', message: message.slice(0, 300), stage: to, stepId: decision.stepId, note: REFUSAL_ACTIONS });
           return { action: 'refuse', retryable: true, message, notes };
         }
         if (waited >= 10_000) notes.push({ kind: 'wait', cause: 'recheck', until: null, note: `Ждал освобождения рабочей папки ${Math.round(waited / 1000)} с`, stepId: decision.stepId });
         notes.push(...syncNotes(config, outcome));
         if (!outcome.ok) {
-          const message = `Файлы не готовы к ходу на ${to.machine}: ${outcome.message}`;
-          notes.push({ kind: 'problem', message: message.slice(0, 300), stage: to, stepId: decision.stepId });
+          // Подготовка на этой ступени не удалась и не из-за конфликта файлов:
+          // ступень пропускается в этом ходе, берётся следующая разрешённая (сколько ни есть).
+          if (FALLBACK_REASONS.has(outcome.reason) && skipped.length < config.steps.length) {
+            const skipNote: RouteNote = { kind: 'problem', message: `${to.machine}: подготовка не удалась (${outcome.message.slice(0, 200)}) — ступень пропущена, беру следующую`.slice(0, 300), stage: to, stepId: decision.stepId };
+            prep.attempt(input.threadId, `${to.machine} пропущена → следующая ступень`);
+            const next = await routeOnce(input, [...skipped, decision.stepId]);
+            if (next.action === 'run') return { ...next, notes: [...notes, skipNote, ...next.notes] };
+          }
+          const message = refusalText(`синхронизация ${to.machine}`, outcome.message);
+          notes.push({ kind: 'problem', message: message.slice(0, 300), stage: to, stepId: decision.stepId, note: REFUSAL_ACTIONS });
           // Ход не передан (S9): ступень и состояние треда не меняются.
-          return { action: 'refuse', retryable: outcome.reason === 'busy', message, notes };
+          return { action: 'refuse', retryable: false, message, notes };
         }
         if (!local) cwd = outcome.cwd;
         env = outcome.env;
@@ -261,8 +317,8 @@ export function createRouteService(deps: RouteDeps): RouteService {
       if (!local && cwd === null) {
         // Чужая машина без общего пути: папки моста там нет (ENOENT при запуске).
         const why = projectId === '' ? 'проект треда не определён' : deps.sync === null ? 'синхронизация файлов недоступна' : 'общий путь проекта не подготовлен';
-        const message = `Ход на ${to.machine} не запущен: ${why}. Проверьте «Файлы» и «Машины» в настройках каскада.`;
-        notes.push({ kind: 'problem', message: message.slice(0, 300), stage: to, stepId: decision.stepId });
+        const message = refusalText('маршрут', `ход на ${to.machine}: ${why}. Проверьте «Файлы» и «Машины» в настройках каскада.`);
+        notes.push({ kind: 'problem', message: message.slice(0, 300), stage: to, stepId: decision.stepId, note: REFUSAL_ACTIONS });
         return { action: 'refuse', retryable: false, message, notes };
       }
       notes.push({ kind: 'run', stage: to, stepId: decision.stepId });
@@ -275,7 +331,7 @@ export function createRouteService(deps: RouteDeps): RouteService {
         workspace,
       });
       return { action: 'run', stepId: decision.stepId, hostId: decision.hostId, providerId: decision.providerId, modelId: decision.modelId, local, cwd, env, stage: to, notes };
-    });
+    }
   }
 
   async function finishTurn(raw: FinishTurnInput): Promise<{ notes: RouteNote[] }> {
@@ -370,5 +426,5 @@ export function createRouteService(deps: RouteDeps): RouteService {
     }
   }
 
-  return { routeTurn, finishTurn, threadStatus, threadScheme, retryAvailability };
+  return { routeTurn, finishTurn, threadStatus, threadScheme, retryAvailability, turnProgress: threadId => prep.note(threadId) };
 }

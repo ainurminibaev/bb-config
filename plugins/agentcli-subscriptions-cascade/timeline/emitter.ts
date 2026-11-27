@@ -90,6 +90,11 @@ export interface RowHandle { readonly id: string | null }
 export interface SwitchHandle extends RowHandle {
   /** Шаг перехода с длительностью: «пауза Tru 110 мс». */
   step(label: string, ms: number, state?: StepTiming['state']): void;
+  /**
+   * Подготовка идёт: шаги и счётчики заменяются целиком, текст обновляет ту же
+   * строку (item.progress) — «Подготовка Mac: синхронизация Tru → Mac · 23 % · 0:47».
+   */
+  report(input: { steps: StepTiming[]; sync?: { files: number; done?: number; bytes?: number }; message: string }): void;
   done(patch?: { handoff?: string }): void;
   fail(error: string, mismatches?: string[]): void;
 }
@@ -190,13 +195,19 @@ export function createRouteTimeline(ports: TimelinePorts): RouteTimeline {
     if (openSwitch && !openSwitch.closed) openSwitch.close(p => ({ ...asSwitch(p), state: 'failed', error: 'переход заменён новым' }));
     const row = open({ type: 'switch', state: 'running', steps: [], ...input, at: input.at ?? now() });
     openSwitch = row;
-    if (!row) return { id: null, step() {}, done() {}, fail() {} };
+    if (!row) return { id: null, step() {}, report() {}, done() {}, fail() {} };
     setState({ phase: 'preparing', stage: input.to, stepId: input.stepId });
     return {
       id: row.id,
       step: (label, ms, s) => { if (openSwitch === row) addStep(label, ms, s); },
+      report({ steps, sync, message }) {
+        if (openSwitch !== row) return;
+        row.patch(p => ({ ...asSwitch(p), steps: steps.slice(-20), ...(sync ? { sync: { files: sync.files, ...(sync.done !== undefined ? { done: Math.min(sync.done, sync.files) } : {}), ...(sync.bytes !== undefined ? { bytes: sync.bytes } : {}) } } : {}) }));
+        row.progress(message.slice(0, 300));
+      },
       done(patch = {}) {
-        row.close(p => ({ ...asSwitch(p), ...patch, state: 'done', sync: asSwitch(p).sync ? { ...asSwitch(p).sync!, done: undefined, etaMs: undefined } : undefined }));
+        // Незакрытые шаги подготовки к моменту хода закончились.
+        row.close(p => ({ ...asSwitch(p), ...patch, state: 'done', steps: asSwitch(p).steps.map(x => (x.state === 'running' ? { ...x, state: 'done' as const } : x)), sync: asSwitch(p).sync ? { ...asSwitch(p).sync!, done: undefined, etaMs: undefined } : undefined }));
         if (openSwitch === row) openSwitch = null;
       },
       fail(error, mismatches) {

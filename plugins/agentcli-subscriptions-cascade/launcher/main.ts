@@ -12,7 +12,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { dirname } from 'node:path';
-import { routeTurnOutputSchema, type LimitObservation, type NativeProvider, type RouteNote, type RouteTurnOutput } from '../bridge/route-contract.ts';
+import { routeNoteSchema, routeTurnOutputSchema, type LimitObservation, type NativeProvider, type RouteNote, type RouteTurnOutput } from '../bridge/route-contract.ts';
 import { claudeSessionInfo, claudeSessionPath, flagValue, remoteArgs, remoteEnv, replaceModel, resumeOrStart } from './cli-args.ts';
 import { spawn } from 'node:child_process';
 import { resolveRealExecutable, runLocal } from './local.ts';
@@ -38,7 +38,7 @@ export const ROUTE_TIMEOUT_MS = 20 * 60_000;
 /** Текст отказа, когда сервер каскада не ответил: ход не запущен. */
 export function serverDownMessage(error: unknown): string {
   const reason = error instanceof Error ? error.message : String(error);
-  return `сервер каскада не ответил (${reason.slice(0, 200)}) — ход не запущен, чтобы не уйти на ступень без проверки лимита. Повторите ход; если повторяется — проверьте, что плагин «Каскад подписок» включён (bb plugin list).`;
+  return `Ход не запущен: Каскад подписок → маршрут: сервер каскада не ответил (${reason.slice(0, 200)}) — ход не запущен, чтобы не уйти на ступень без проверки лимита. Повторите ход; если повторяется — проверьте, что плагин «Каскад подписок» включён (bb plugin list).`;
 }
 
 export interface LauncherIo {
@@ -70,6 +70,33 @@ async function callServer<T>(io: LauncherIo, method: string, input: unknown, tim
   const json = await response.json().catch(() => null) as { ok?: boolean; result?: T; error?: { message?: string } } | null;
   if (!response.ok || !json?.ok) throw new Error(json?.error?.message ?? `HTTP ${response.status}`);
   return json.result as T;
+}
+
+/**
+ * Решение сервера перед ходом с прогрессом подготовки: пока ждём routeTurn,
+ * раз в `pollMs` спрашиваем turnProgress и шлём заметку `prep` в ленту —
+ * строка перехода обновляется на месте (синхронизация идёт минутами).
+ */
+export async function routeWithProgress(io: LauncherIo, threadId: string, input: unknown, pollMs = 1_500): Promise<RouteTurnOutput> {
+  const route = callServer<unknown>(io, 'routeTurn', input, ROUTE_TIMEOUT_MS).then(r => routeTurnOutputSchema.parse(r));
+  let settled = false;
+  void route.finally(() => { settled = true; }).catch(() => undefined);
+  let last = '';
+  const poll = async () => {
+    while (!settled) {
+      await Promise.race([new Promise(resolve => { const t = setTimeout(resolve, pollMs); (t as { unref?: () => void }).unref?.(); }), route.catch(() => undefined)]);
+      if (settled) break;
+      const progress = await callServer<{ note: unknown }>(io, 'turnProgress', { threadId }, 5_000).catch(() => null);
+      const parsed = progress?.note ? routeNoteSchema.safeParse(progress.note) : null;
+      if (!parsed?.success || settled) continue;
+      const key = JSON.stringify(parsed.data);
+      if (key === last) continue;
+      last = key;
+      await sendFeed(io, threadId, [parsed.data]);
+    }
+  };
+  const poller = poll();
+  try { return await route; } finally { settled = true; await poller.catch(() => undefined); }
 }
 
 /** События для ленты: в сокет моста; моста нет — молча пропускаем. */
@@ -126,8 +153,8 @@ function realCommand(io: LauncherIo, provider: NativeProvider): string | null {
 async function refuseServerDown(io: LauncherIo, threadId: string, error: unknown): Promise<number> {
   const message = serverDownMessage(error);
   logLine(io, `refuse: ${message}`);
-  await sendFeed(io, threadId, [{ kind: 'problem', message: message.slice(0, 300) }]);
-  io.stderr.write(`Каскад подписок: ${message}\n`);
+  await sendFeed(io, threadId, [{ kind: 'problem', message: message.slice(0, 300), note: 'Что сделать: повторите ход · проверьте плагин: bb plugin list' }]);
+  io.stderr.write(`${message}\n`);
   return 75;
 }
 
@@ -161,16 +188,16 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
   const requestedModel = flagValue(args, '--model');
   let route: RouteTurnOutput;
   try {
-    route = routeTurnOutputSchema.parse(await callServer(io, 'routeTurn', {
+    route = await routeWithProgress(io, threadId, {
       threadId, projectId: io.env.BB_PROJECT_ID ?? null, provider, requestedModel, probe, cwd: io.cwd,
-    }, ROUTE_TIMEOUT_MS));
+    });
   } catch (error) {
     return refuseServerDown(io, threadId, error);
   }
   await sendFeed(io, threadId, route.notes);
   if (route.action === 'refuse') {
     logLine(io, `refuse: ${route.message}`);
-    io.stderr.write(`Каскад подписок: ${route.message}\n`);
+    io.stderr.write(`${route.message}\n`);
     return route.retryable ? 75 : 1;
   }
 
@@ -187,9 +214,9 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
     return runSessionRelay(route, sessionArgs, sessionId, {
       start: (r, childArgs, onLine) => stopWith(io, startStageChild(io, provider, r, childArgs, onLine)),
       sessionExists: r => localSessionFile(io, sessionId, r.cwd) !== null,
-      routeTurn: async () => routeTurnOutputSchema.parse(await callServer(io, 'routeTurn', {
+      routeTurn: () => routeWithProgress(io, threadId, {
         threadId, projectId: io.env.BB_PROJECT_ID ?? null, provider, requestedModel, probe: false, cwd: io.cwd,
-      }, ROUTE_TIMEOUT_MS)),
+      }),
       finishTurn: async (r, info) => {
         const finish = await callServer<{ notes: RouteNote[] }>(io, 'finishTurn', { ...finishInfo(r), ...info, limits: info.limits.slice(-20) }, 120_000);
         await sendFeed(io, threadId, finish.notes);
@@ -369,14 +396,14 @@ export function startStageChild(io: LauncherIo, provider: NativeProvider, route:
 async function runCodex(io: LauncherIo, args: string[], threadId: string): Promise<number> {
   let route: RouteTurnOutput;
   try {
-    route = routeTurnOutputSchema.parse(await callServer(io, 'routeTurn', {
+    route = await routeWithProgress(io, threadId, {
       threadId, projectId: io.env.BB_PROJECT_ID ?? null, provider: 'codex', requestedModel: null, probe: false, cwd: io.cwd,
-    }, ROUTE_TIMEOUT_MS));
+    });
   } catch (error) {
     return refuseServerDown(io, threadId, error);
   }
   await sendFeed(io, threadId, route.notes);
-  if (route.action === 'refuse') { io.stderr.write(`Каскад подписок: ${route.message}\n`); return route.retryable ? 75 : 1; }
+  if (route.action === 'refuse') { io.stderr.write(`${route.message}\n`); return route.retryable ? 75 : 1; }
   if (route.local) {
     const command = realCommand(io, 'codex');
     if (!command) return 127;

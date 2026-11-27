@@ -141,12 +141,12 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
         try { next = await ports.routeTurn(); } catch (error) {
           // Без решения сервера ход не идёт: прежняя ступень могла исчерпаться.
           ports.log(`routeTurn failed, refuse: ${String(error)}`);
-          const message = `сервер каскада не ответил перед ходом (${error instanceof Error ? error.message : String(error)}) — ход не запущен. Повторите ход.`;
+          const message = `Ход не запущен: Каскад подписок → маршрут: сервер каскада не ответил перед ходом (${error instanceof Error ? error.message : String(error)}). Повторите ход.`;
           next = { action: 'refuse', retryable: true, message, notes: [{ kind: 'problem', message: message.slice(0, 300) }] };
         }
         await ports.feed(next.notes);
         if (next.action === 'refuse') {
-          ports.stderr.write(`Каскад подписок: ${next.message}\n`);
+          ports.stderr.write(`${next.message}\n`);
           child.end();
           await child.done;
           return next.retryable ? 75 : 1;
