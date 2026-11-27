@@ -3477,6 +3477,16 @@ RPC agent-roster 0.5.0 `roster_list`, поля `kind` и `active.threadId` дл�
 ограничено одним запросом за пять секунд. Закрытый компьютер пользователя
 на доступ к кабинету с сервера не влияет.
 
+Под подписью VClaude (0.2.3) видна машина, где Claude Code настроен на этот
+пакет, а не машина, откуда читается квота. Метод машины `claudeRoute`
+(`host.ts`) читает из `settings.json` Claude Code только хост
+`ANTHROPIC_BASE_URL` — токены не покидают машину. Сервер (`server.ts`,
+`routedHosts` в `logic.ts`) берёт машины с хостом `vclaude.ru` и их текущие
+имена из `bb.sdk.hosts.list()`, без привязки к названию. Машина со старой
+сборкой (нет метода) — последний известный маршрут остаётся, иначе её нет в
+строке. Опора: поле `env.ANTHROPIC_BASE_URL` в settings.json Claude Code,
+`hostNames` аккаунта. Тесты — `logic.test.ts` (`claudeBaseHost`, `routedHosts`).
+
 Сессия хранится с правами 0600 в `$XDG_STATE_HOME/bb-vclaude/session.json`
 (по умолчанию `~/.local/state/bb-vclaude/session.json`). Для автоматического
 повторного входа серверу нужен файл `login.json` с полями `email` и `password`

@@ -24,6 +24,15 @@ Agent logos (Claude, Codex) are BB's monochrome `currentColor` SVGs painted
 as a CSS mask in the theme text colour (`.tau-agent-logo`); if a logo is
 invisible on a dark theme, check that class rather than the image URL.
 
+The machine under VClaude in «Все аккаунты» is not where its quota is read
+(the BB server reads it) but where Claude Code is routed to VClaude: each
+machine's host entry `claudeRoute` returns only the host of `ANTHROPIC_BASE_URL`
+from `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`, then the
+process env), and the server lists machines where it is `vclaude.ru` under
+BB's current host name. No machine shown: that machine runs an older bundle or
+has no such route. There is no separate VClaude provider — pick Claude Code on
+that machine.
+
 Inspect live installation with `bb plugin list --json`. Source, refresh behavior,
 identity limitations, DOM anchors and restoration are described in the plugin
 README.md. After changing source, run TypeScript, `node --test logic.test.ts`,

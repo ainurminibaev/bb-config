@@ -3,9 +3,9 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
 import { rpcContract, type Account, type QuotaWindow, type Snapshot } from './contract';
-import { appliesToModel, carryModelWindows, claudeProfilePlan, classifyWindow, dedupeAccounts, riskyOverride, vclaudeNote } from './logic';
+import { appliesToModel, carryModelWindows, claudeProfilePlan, classifyWindow, dedupeAccounts, riskyOverride, routedHosts, vclaudeNote } from './logic';
 import { hostContract } from './host-contract';
-import { createVClaudeReader } from './vclaude';
+import { createVClaudeReader, origin as vclaudeOrigin } from './vclaude';
 import { createComparisonReader } from './vclaude-comparison';
 import { googleComparison, short, volumeFor, type VolumeInputs } from './volumes';
 import { accumulate, type MeterReading, type MeterSums } from './token-meter';
@@ -49,11 +49,17 @@ export default function plugin(bb: BbPluginApi) {
     },
     async () => (await readVClaude(false)).usage?.conversionRates ?? {},
   );
-  async function vclaudeAccount(refresh: boolean): Promise<Account | null> {
+  // Claude Code route per machine (host of ANTHROPIC_BASE_URL), kept from the last answer of each machine.
+  const claudeRoutes = new Map<string, { name: string; baseHost: string | null }>();
+  const vclaudeHost = new URL(vclaudeOrigin).hostname;
+  // `hosts` — BB's current host list: current names, removed machines dropped.
+  async function vclaudeAccount(refresh: boolean, hosts?: readonly { id: string; name: string }[]): Promise<Account | null> {
     const { usage, error } = await readVClaude(refresh);
     if (!usage && !error) return null;
+    // Machines whose Claude Code spends this package (the quota itself is read on the BB server).
+    const routed = routedHosts(claudeRoutes, vclaudeHost, hosts);
     return {
-      key: 'vclaude', providerId: 'vclaude', providerName: 'VClaude', hostIds: [], hostNames: [],
+      key: 'vclaude', providerId: 'vclaude', providerName: 'VClaude', hostIds: routed.ids, hostNames: routed.names,
       email: null, plan: null, status: error ? (usage ? 'stale' : 'unavailable') : 'ok',
       message: error ?? (usage?.limitUnits === 0 ? 'Действующий тариф отсутствует.' : null),
       fetchedAt: usage?.fetchedAt ?? null, resetCount: null,
@@ -87,13 +93,16 @@ export default function plugin(bb: BbPluginApi) {
     const job = (async () => {
       await modelWindowsLoaded;
       try {
-        const [raw, resets, profile, antigravity] = await Promise.all([
+        const [raw, resets, profile, antigravity, route] = await Promise.all([
           bb.sdk.system.usageLimits({ hostId, refresh: true, signal: AbortSignal.timeout(20_000) }),
           hostClient.call('codexResets', null, { hostId, signal: AbortSignal.timeout(15_000) }).catch(() => ({ email: null, count: null })),
           hostClient.call('claudeProfile', null, { hostId, signal: AbortSignal.timeout(5_000) }).catch(() => null),
           // Older host bundles lack this method; such a host simply has no Antigravity rows.
           hostClient.call('antigravity', { refresh }, { hostId, signal: AbortSignal.timeout(40_000) }).catch(() => null),
+          // Older host bundles lack this method: the last known route stays.
+          hostClient.call('claudeRoute', null, { hostId, signal: AbortSignal.timeout(5_000) }).catch(() => null),
         ]);
+        if (route) claudeRoutes.set(hostId, { name: hostName, baseHost: route.baseHost });
         const at = new Date().toISOString();
         const accounts = providers.map(provider => {
           const usage = record(raw[provider.id]);
@@ -208,12 +217,13 @@ export default function plugin(bb: BbPluginApi) {
   }
   async function allAccounts(refresh: boolean): Promise<Account[]> {
     const hosts = await bb.sdk.hosts.list();
-    const extra = vclaudeAccount(refresh);
+    const extra = readVClaude(refresh).catch(() => null);  // warm the quota while machines answer
     const accounts = (await Promise.all(hosts.map(async host => {
       if (host.status !== 'connected') return (cache.get(host.id)?.accounts ?? []).map(a => ({ ...a, status: 'stale' as const, message: 'Машина не подключена' }));
       return readHost(host.id, host.name, refresh);
     }))).flat();
-    const vclaude = await extra;
+    await extra;
+    const vclaude = await vclaudeAccount(false, hosts);
     return [...dedupeAccounts(accounts.filter(a => a.email !== null || a.windows.length > 0)), ...(vclaude ? [vclaude] : [])];
   }
   const codexVolumes = new Map<string, Awaited<ReturnType<typeof hostClient.call<'codexVolume'>>>>();

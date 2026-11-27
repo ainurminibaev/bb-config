@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { vclaudeUsageSchema, type ConversionRate, type VClaudeUsage } from './vclaude-contract.ts';
 
-const origin = 'https://vclaude.ru';
+export const origin = 'https://vclaude.ru';
 const quotaPath = '/api/cabinet/tariff/usage';
 const readInterval = 2 * 60_000;
 const loginInterval = 15 * 60_000;

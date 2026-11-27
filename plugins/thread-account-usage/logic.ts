@@ -187,3 +187,22 @@ export function windowRows(account: Pick<Account, 'providerId' | 'windows'>): Wi
 /** The window that sets a row's percent and timer: the busier of the two. */
 export const rowLead = (r: WindowRow): QuotaWindow =>
   r.single ?? (r.five && r.week ? (r.week.usedPercent > r.five.usedPercent ? r.week : r.five) : (r.five ?? r.week)!);
+/**
+ * Host of the endpoint Claude Code on a machine sends requests to: env.ANTHROPIC_BASE_URL
+ * from its settings.json, else the process environment. Only the host name leaves the
+ * machine, never tokens. null — the default Anthropic route or an unreadable value.
+ */
+export function claudeBaseHost(settings: unknown, envUrl?: string | null): string | null {
+  const env = settings && typeof settings === 'object' ? (settings as { env?: unknown }).env : undefined;
+  const fromSettings = env && typeof env === 'object' ? (env as Record<string, unknown>).ANTHROPIC_BASE_URL : undefined;
+  const raw = typeof fromSettings === 'string' && fromSettings.trim() ? fromSettings.trim() : envUrl?.trim();
+  if (!raw) return null;
+  try { return new URL(raw).hostname.toLowerCase() || null; } catch { return null; }
+}
+/** Machines whose Claude Code is routed to `targetHost`, in the order of the current host list. */
+export function routedHosts(routes: ReadonlyMap<string, { name: string; baseHost: string | null }>,
+  targetHost: string, hosts?: readonly { id: string; name: string }[]): { ids: string[]; names: string[] } {
+  const list = hosts ?? [...routes].map(([id, r]) => ({ id, name: r.name }));
+  const hit = list.filter(h => routes.get(h.id)?.baseHost === targetHost.toLowerCase());
+  return { ids: hit.map(h => h.id), names: hit.map(h => h.name) };
+}

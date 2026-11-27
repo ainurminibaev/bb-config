@@ -109,3 +109,20 @@ test('accounts list: one row per model group, 5 h and week together, Fable apart
   const pack = windowRows({ providerId: 'acp-gemini-antig', windows: [w('Часы', 'other', 100)] });
   assert.equal(pack[0]!.single?.label, 'Часы');
 });
+test('Claude route host comes from settings env, without secrets, falling back to process env', async () => {
+  const { claudeBaseHost } = await import('./logic.ts');
+  assert.equal(claudeBaseHost({ env: { ANTHROPIC_BASE_URL: 'https://VClaude.ru', ANTHROPIC_AUTH_TOKEN: 'x' } }), 'vclaude.ru');
+  assert.equal(claudeBaseHost({ env: { ANTHROPIC_BASE_URL: 'https://vclaude.ru/v1/' } }, 'https://other.example'), 'vclaude.ru');
+  assert.equal(claudeBaseHost({}, 'https://vclaude.ru'), 'vclaude.ru');
+  assert.equal(claudeBaseHost({ env: {} }), null);
+  assert.equal(claudeBaseHost({ env: { ANTHROPIC_BASE_URL: 'not a url' } }), null);
+  assert.equal(claudeBaseHost(null), null);
+});
+test('VClaude machines are the hosts routed to it, named as BB currently names them', async () => {
+  const { routedHosts } = await import('./logic.ts');
+  const routes = new Map([['mac', { name: 'Old Mac name', baseHost: 'vclaude.ru' }], ['tru', { name: 'Tru', baseHost: null }]]);
+  assert.deepEqual(routedHosts(routes, 'vclaude.ru', [{ id: 'tru', name: 'Tru' }, { id: 'mac', name: 'MacBook Pro — Айнур (3)' }]),
+    { ids: ['mac'], names: ['MacBook Pro — Айнур (3)'] });
+  assert.deepEqual(routedHosts(routes, 'vclaude.ru'), { ids: ['mac'], names: ['Old Mac name'] });
+  assert.deepEqual(routedHosts(routes, 'vclaude.ru', [{ id: 'gone', name: 'X' }]), { ids: [], names: [] });
+});

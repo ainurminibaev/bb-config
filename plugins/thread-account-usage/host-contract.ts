@@ -19,5 +19,7 @@ export const hostContract = defineRpcContract({
   codexResets: { input: z.null(), output: z.object({ email: z.string().nullable(), count: z.number().int().nonnegative().nullable() }) },
   antigravity: { input: z.object({ refresh: z.boolean().default(false) }), output: z.object({ google: agAccount.nullable(), antig: agAccount.nullable() }) },
   codexVolume: { input: z.null(), output: z.array(codexWindowVolume) },
+  // Host name of Claude Code's ANTHROPIC_BASE_URL on this machine (no tokens): which package it spends.
+  claudeRoute: { input: z.null(), output: z.object({ baseHost: z.string().nullable() }) },
   claudeProfile: { input: z.null(), output: z.object({ email: z.string().nullable(), organizationType: z.string().nullable(), rateLimitTier: z.string().nullable() }) },
 });
