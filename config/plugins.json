@@ -510,6 +510,13 @@
     "source": "path:plugins/subthread-autocollapse"
   },
   {
+    "id": "thread-description",
+    "version": "0.1.0",
+    "enabled": true,
+    "name": "Thread Description",
+    "source": "path:plugins/thread-description"
+  },
+  {
     "id": "thread-account-usage",
     "version": "0.1.3",
     "enabled": true,
