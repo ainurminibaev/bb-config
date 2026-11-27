@@ -9,7 +9,8 @@
 //   `bb subscriptions-cascade adopt --stuck|--thread <id>|--project <id> [--dry-run]`;
 // - фоновая проверка штатных мостов (digest, версия) — для providerOptions и настроек.
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
-import type { CascadeConfig, DiscoveredAccount, Step } from '../contract.ts';
+import { formatThreadTestQuota, parseTestQuotaSpec, withThreadTestQuota } from '../test-quota.ts';
+import type { CascadeConfig, DiscoveredAccount, Step, TestQuotaEntry } from '../contract.ts';
 import type { HealthLookup } from '../engine.ts';
 import { formatAdopt, parseAdoptArgs, runAdopt, type AdoptPorts, type AdoptThread } from './adopt.ts';
 import { digestMap, nativeBridgeStatus, type NativeBridgeStatus } from './digests.ts';
@@ -19,6 +20,8 @@ import { createRouteService, type RouteService, type StoredThreadState, type Syn
 export interface ExecutorDeps {
   providerId: string;
   loadConfig(): Promise<CascadeConfig>;
+  /** Записать конфигурацию (тестовая квота треда из CLI/RPC). */
+  saveConfig?(config: CascadeConfig): Promise<void>;
   accounts(): readonly DiscoveredAccount[];
   /** Обнаружение аккаунтов, если ещё не было (движку нужны модели машин). */
   ensureDiscovered(): Promise<void>;
@@ -125,11 +128,33 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     warn: message => bb.log.warn(message),
   });
 
+  /** Подмена квоты треда: `spec` пустой — только показать; clear — снять перед записью. */
+  async function applyTestQuota(threadId: string, spec: string, clear: boolean): Promise<{ config: CascadeConfig } | { error: string }> {
+    let config = await deps.loadConfig();
+    if (!spec.trim() && !clear) return { config };
+    if (!deps.saveConfig) return { error: 'запись конфигурации недоступна' };
+    let entries: Record<string, TestQuotaEntry> | undefined;
+    if (spec.trim()) {
+      const parsed = parseTestQuotaSpec(config, spec, Date.now());
+      if ('error' in parsed) return parsed;
+      entries = parsed.entries;
+    }
+    config = withThreadTestQuota(config, threadId, { entries, clear });
+    await deps.saveConfig(config);
+    bb.log.info(`тестовая квота треда ${threadId}: ${clear ? 'снята' : ''}${entries ? ` ${Object.entries(entries).map(([k, v]) => `${k}=${v.state}`).join(', ')}` : ''}`);
+    return { config };
+  }
+
   bb.rpc.register(executorRpcContract, {
+    testQuota: async ({ threadId, set, clear }) => {
+      const result = await applyTestQuota(threadId, set ?? '', clear);
+      if ('error' in result) throw new Error(result.error);
+      return { threadId, steps: result.config.testQuota.threads[threadId] ?? null };
+    },
     routeTurn: input => routes.routeTurn(input),
     finishTurn: input => routes.finishTurn(input),
     threadStatus: ({ threadId }) => routes.threadStatus(threadId),
-  });
+  }, { experimental_discoverable: true, experimental_description: 'Каскад подписок: паспорт треда (threadStatus), тестовая квота треда (testQuota), ход исполнителя (routeTurn/finishTurn).' });
 
   // ---- CLI ----
   const adoptPorts: AdoptPorts = {
@@ -160,6 +185,7 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     summary: 'Каскад подписок: паспорт треда и перевод тредов в каскад',
     commands: [
       { name: 'status', summary: 'Ступень, машина и копия файлов треда', usage: 'bb subscriptions-cascade status --thread <id> [--json]' },
+      { name: 'test-quota', summary: 'Тестовая квота ступеней для одного треда (сценарии S1–S13)', usage: "bb subscriptions-cascade test-quota --thread <id> [--set '<ступень>=exhausted|ok|unknown|unavailable[,<сброс ISO|+30m>];…'] [--clear] [--json]" },
       { name: 'adopt', summary: 'Перевести треды в каскад (Handoff) и снять автоповтор у исходных', usage: 'bb subscriptions-cascade adopt --stuck|--thread <id>|--project <id> [--dry-run] [--model <профиль>] [--json]' },
     ],
     async run(argv, ctx) {
@@ -173,6 +199,16 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
         if (!status.cascade) return { exitCode: 0, stdout: 'Тред не в каскаде.\n' };
         return { exitCode: 0, stdout: `Профиль: ${status.profileId ?? '—'}\nСтупень: ${status.step ? `${status.step.hostId} · ${status.step.providerId} · ${status.step.model ?? 'по умолчанию'}` : 'ход ещё не выбран'}\nОпора: ${status.anchorHostId ?? '—'}, синхронизация: ${status.syncMode}\nСвежая копия: ${status.freshCopyHostId ?? '—'}\n` };
       }
+      if (command === 'test-quota') {
+        const i = rest.indexOf('--thread');
+        const threadId = i !== -1 ? rest[i + 1] : ctx.threadId;
+        if (!threadId) return { exitCode: 2, stderr: 'укажите --thread <id>\n' };
+        const sets = rest.flatMap((arg, n) => arg === '--set' && rest[n + 1] ? [rest[n + 1]!] : arg.startsWith('--set=') ? [arg.slice(6)] : []);
+        const result = await applyTestQuota(threadId, sets.join(';'), rest.includes('--clear'));
+        if ('error' in result) return { exitCode: 2, stderr: `${result.error}\n` };
+        if (rest.includes('--json')) return { exitCode: 0, stdout: `${JSON.stringify({ threadId, steps: result.config.testQuota.threads[threadId] ?? null })}\n` };
+        return { exitCode: 0, stdout: formatThreadTestQuota(result.config, threadId) };
+      }
       if (command === 'adopt') {
         const parsed = parseAdoptArgs(rest);
         if ('error' in parsed) return { exitCode: 2, stderr: `${parsed.error}\n` };
@@ -181,7 +217,7 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
         if (rest.includes('--json')) return { exitCode: items.some(i => i.error) ? 1 : 0, stdout: `${JSON.stringify({ dryRun: options.dryRun, items })}\n` };
         return { exitCode: items.some(i => i.error) ? 1 : 0, stdout: formatAdopt(items, options.dryRun) };
       }
-      return { exitCode: 2, stderr: 'команды: status, adopt\n' };
+      return { exitCode: 2, stderr: 'команды: status, test-quota, adopt\n' };
     },
   });
 

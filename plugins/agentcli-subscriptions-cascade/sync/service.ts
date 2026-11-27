@@ -163,6 +163,6 @@ export function registerSyncServer(bb: BbPluginApi, loadConfig: () => Promise<{ 
     syncSetAnchorSsh: async ({ hostId, target }) => { await service.setAnchorSsh(hostId, target); return { target: await service.anchorSsh(hostId) }; },
     syncApplyMode: async ({ projectId }) => toWire(await service.applyMode(projectId)),
     syncTeardown: async ({ projectId, removeMount }) => toWire(await service.teardown(projectId, { removeMount })),
-  });
+  }, { experimental_discoverable: true, experimental_description: 'Каскад подписок: синхронизация проекта — статус, SSH к опоре (лучше задавать в настройках «Машины»), режим, уборка.' });
   return service;
 }

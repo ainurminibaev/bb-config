@@ -55,6 +55,7 @@ export default function plugin(bb: BbPluginApi) {
   const executor = registerExecutor(bb, {
     providerId: PROVIDER_ID,
     loadConfig: async () => (await loadConfig()).config,
+    saveConfig: async config => { await settings.experimental_set({ config: JSON.stringify(normalizeConfig(config), null, 2) }); },
     accounts: () => accounts,
     ensureDiscovered: () => discover(false),
     health: (config, threadId) => quotaLookupFor(config, threadId, (id, modelId) => {

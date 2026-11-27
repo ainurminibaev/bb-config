@@ -122,4 +122,9 @@ export const executorRpcContract = defineRpcContract({
   routeTurn: { input: routeTurnInputSchema, output: routeTurnOutputSchema },
   finishTurn: { input: finishTurnInputSchema, output: z.object({ notes: z.array(routeNoteSchema) }) },
   threadStatus: { input: z.object({ threadId: z.string().min(1) }), output: threadStatusSchema },
+  /** Тестовая квота одного треда (S1–S13): `set` — «<ступень>=exhausted|ok|unknown|unavailable[,<сброс>];…». */
+  testQuota: {
+    input: z.object({ threadId: z.string().min(1), set: z.string().max(2000).optional(), clear: z.boolean().default(false) }),
+    output: z.object({ threadId: z.string(), steps: z.record(z.string(), z.object({ state: z.string(), resetsAt: z.string().nullable() })).nullable() }),
+  },
 });
