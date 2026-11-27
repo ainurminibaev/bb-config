@@ -1,0 +1,203 @@
+// Регистрация исполнителя хода на сервере плагина. В server.ts — одна строка:
+//   const executor = registerExecutor(bb, { … });
+// и executor.provider(…) поверх объявления провайдера.
+//
+// Что регистрируется:
+// - RPC executorRpcContract: routeTurn / finishTurn (их вызывает запускатель
+//   по REST сервера BB) и threadStatus (паспорт треда для других плагинов);
+// - CLI `bb subscriptions-cascade status --thread <id> --json` и
+//   `bb subscriptions-cascade adopt --stuck|--thread <id>|--project <id> [--dry-run]`;
+// - фоновая проверка штатных мостов (digest, версия) — для providerOptions и настроек.
+import type { BbPluginApi } from '@get-bb/plugin-sdk';
+import type { CascadeConfig, DiscoveredAccount, Step } from '../contract.ts';
+import type { HealthLookup } from '../engine.ts';
+import { formatAdopt, parseAdoptArgs, runAdopt, type AdoptPorts, type AdoptThread } from './adopt.ts';
+import { digestMap, nativeBridgeStatus, type NativeBridgeStatus } from './digests.ts';
+import { executorRpcContract, type LimitObservation } from './route-contract.ts';
+import { createRouteService, type RouteService, type StoredThreadState, type SyncPort, type ThreadInfo } from './route-service.ts';
+
+export interface ExecutorDeps {
+  providerId: string;
+  loadConfig(): Promise<CascadeConfig>;
+  accounts(): readonly DiscoveredAccount[];
+  /** Обнаружение аккаунтов, если ещё не было (движку нужны модели машин). */
+  ensureDiscovered(): Promise<void>;
+  /** Лимиты ступени для движка (реальные; тестовый источник подставляется здесь). */
+  health(config: CascadeConfig, threadId: string): HealthLookup;
+  refreshLimits(config: CascadeConfig, steps: readonly Step[]): Promise<void>;
+  observeLimit(config: CascadeConfig, step: Step, event: unknown): void;
+  sync: SyncPort | null;
+}
+
+const STATE_KEY = (threadId: string) => `exec:thread:${threadId}`;
+
+/** Ручки штатного моста Claude (ключи providerOptions — внутренний контракт моста BB 0.50). */
+export function claudeBridgeKnobs(promptMode: string | undefined): Record<string, string | boolean> {
+  return {
+    memoryEnabled: false, providerSubagentsEnabled: true, workflowsEnabled: false, chromeEnabled: false,
+    disable1MContext: false, artifactsEnabled: false, sandboxEnabled: true, fullAccessApprovalsEnabled: false,
+    commandDescriptionsEnabled: false,
+    ...(promptMode === 'plan' ? { claudeCodePermissionMode: 'plan' } : {}),
+  };
+}
+
+function rec(v: unknown): Record<string, unknown> {
+  return v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
+}
+
+function toAdoptThread(raw: unknown): AdoptThread | null {
+  const r = rec(raw);
+  const t = rec(r.thread ?? r);
+  if (typeof t.id !== 'string') return null;
+  const runtime = rec(t.runtime);
+  return {
+    id: t.id, title: typeof t.title === 'string' ? t.title : '', providerId: typeof t.providerId === 'string' ? t.providerId : '',
+    projectId: typeof t.projectId === 'string' ? t.projectId : '', archived: t.archivedAt !== null && t.archivedAt !== undefined,
+    status: typeof runtime.displayStatus === 'string' ? runtime.displayStatus : typeof t.status === 'string' ? t.status : null,
+  };
+}
+
+export interface ExecutorRegistration {
+  routes: RouteService;
+  /** providerOptions для штатного моста и для нашей обёртки (синхронно, из кэша). */
+  deriveProviderOptions(ctx: { threadId: string; model: string; promptMode?: string }): Record<string, unknown>;
+  /** Состояние штатных мостов для экрана настроек. */
+  nativeBridges(): readonly NativeBridgeStatus[];
+  refreshNativeBridges(): Promise<readonly NativeBridgeStatus[]>;
+  /** Схема профиля треда для метки ступени. */
+  scheme(threadId: string): ReturnType<RouteService['threadScheme']>;
+  /** Предупреждения для настроек: мост не найден, версия не читается. */
+  issues(): string[];
+}
+
+export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorRegistration {
+  const threadProvider = new Map<string, string>();
+  let bridges: readonly NativeBridgeStatus[] = [];
+  let bridgesAt = 0;
+
+  async function refreshNativeBridges(): Promise<readonly NativeBridgeStatus[]> {
+    bridges = await nativeBridgeStatus(async () => {
+      const result = rec(await bb.sdk.plugins.list());
+      const plugins = Array.isArray(result.plugins) ? result.plugins as unknown[] : [];
+      return plugins.map(p => {
+        const e = rec(p);
+        return { id: String(e.id), rootDir: String(e.rootDir ?? ''), enabled: e.enabled === true, version: typeof e.version === 'string' ? e.version : null };
+      });
+    });
+    bridgesAt = Date.now();
+    for (const b of bridges) if (b.problem) bb.log.warn(`штатный мост ${b.providerId}: ${b.problem}`);
+    return bridges;
+  }
+  void refreshNativeBridges().catch(error => bb.log.warn(`проверка штатных мостов: ${String(error)}`));
+  // Обновление BB меняет мост: перепроверка раз в 10 минут, по таймеру без нагрузки на CLI.
+  const timer = setInterval(() => { void refreshNativeBridges().catch(() => {}); }, 10 * 60_000);
+  timer.unref?.();
+
+  const threadInfo = async (threadId: string): Promise<ThreadInfo | null> => {
+    const raw = rec(await bb.sdk.threads.get({ threadId }));
+    const thread = rec(raw.thread ?? raw);
+    const environment = rec(raw.environment);
+    if (typeof thread.id !== 'string') return null;
+    return {
+      projectId: String(thread.projectId ?? ''),
+      hostId: typeof environment.hostId === 'string' ? environment.hostId : null,
+      parentThreadId: typeof thread.parentThreadId === 'string' ? thread.parentThreadId : null,
+      providerId: String(thread.providerId ?? ''),
+    };
+  };
+
+  const routes = createRouteService({
+    loadConfig: deps.loadConfig,
+    accounts: deps.accounts,
+    health: deps.health,
+    refreshLimits: async (config, steps) => { await deps.ensureDiscovered(); await deps.refreshLimits(config, steps); },
+    observeLimit: (config, step, observation: LimitObservation) => {
+      deps.observeLimit(config, step, { type: 'rate_limit_event', rate_limit_info: observation.raw ?? { status: observation.status, resetsAt: observation.resetsAt ? observation.resetsAt / 1000 : undefined, rateLimitType: observation.windowType ?? undefined } });
+    },
+    threadInfo,
+    load: async threadId => bb.storage.kv.get<StoredThreadState>(STATE_KEY(threadId)),
+    save: async (threadId, state) => {
+      if (state.lastRun) threadProvider.set(threadId, state.lastRun.providerId);
+      await bb.storage.kv.set(STATE_KEY(threadId), state);
+    },
+    sync: deps.sync,
+    now: Date.now,
+    warn: message => bb.log.warn(message),
+  });
+
+  bb.rpc.register(executorRpcContract, {
+    routeTurn: input => routes.routeTurn(input),
+    finishTurn: input => routes.finishTurn(input),
+    threadStatus: ({ threadId }) => routes.threadStatus(threadId),
+  });
+
+  // ---- CLI ----
+  const adoptPorts: AdoptPorts = {
+    async listThreads(filter) {
+      const raw = rec(await bb.sdk.threads.list({ ...(filter.projectId ? { projectId: filter.projectId } : {}) } as never));
+      const items = Array.isArray(raw.threads) ? raw.threads : Array.isArray(raw.items) ? raw.items : Array.isArray(raw) ? raw as unknown[] : [];
+      return (items as unknown[]).map(toAdoptThread).filter((t): t is AdoptThread => t !== null);
+    },
+    async getThread(threadId) { return toAdoptThread(await bb.sdk.threads.get({ threadId }).catch(() => null)); },
+    async pendingRetries() {
+      const out = await adoptPorts.runPluginCli('provider-retry', ['status', '--json']);
+      try {
+        const json = JSON.parse(out.stdout) as { retries?: { threadId?: string }[] };
+        return (json.retries ?? []).map(r => r.threadId).filter((id): id is string => typeof id === 'string');
+      } catch { return []; }
+    },
+    async runPluginCli(pluginId, argv) {
+      const response = await fetch(`${bb.server.loopbackBaseUrl.replace(/\/+$/u, '')}/api/v1/plugins/${encodeURIComponent(pluginId)}/cli`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ argv, cwd: '/' }), signal: AbortSignal.timeout(300_000),
+      });
+      const json = rec(await response.json().catch(() => null));
+      return { exitCode: typeof json.exitCode === 'number' ? json.exitCode : 1, stdout: String(json.stdout ?? ''), stderr: String(json.stderr ?? json.error ?? '') };
+    },
+  };
+
+  bb.cli.register({
+    name: 'subscriptions-cascade',
+    summary: 'Каскад подписок: паспорт треда и перевод тредов в каскад',
+    commands: [
+      { name: 'status', summary: 'Ступень, машина и копия файлов треда', usage: 'bb subscriptions-cascade status --thread <id> [--json]' },
+      { name: 'adopt', summary: 'Перевести треды в каскад (Handoff) и снять автоповтор у исходных', usage: 'bb subscriptions-cascade adopt --stuck|--thread <id>|--project <id> [--dry-run] [--model <профиль>] [--json]' },
+    ],
+    async run(argv, ctx) {
+      const [command, ...rest] = argv;
+      if (command === 'status') {
+        const i = rest.indexOf('--thread');
+        const threadId = i !== -1 ? rest[i + 1] : ctx.threadId;
+        if (!threadId) return { exitCode: 2, stderr: 'укажите --thread <id>\n' };
+        const status = await routes.threadStatus(threadId);
+        if (rest.includes('--json')) return { exitCode: 0, stdout: `${JSON.stringify(status)}\n` };
+        if (!status.cascade) return { exitCode: 0, stdout: 'Тред не в каскаде.\n' };
+        return { exitCode: 0, stdout: `Профиль: ${status.profileId ?? '—'}\nСтупень: ${status.step ? `${status.step.hostId} · ${status.step.providerId} · ${status.step.model ?? 'по умолчанию'}` : 'ход ещё не выбран'}\nОпора: ${status.anchorHostId ?? '—'}, синхронизация: ${status.syncMode}\nСвежая копия: ${status.freshCopyHostId ?? '—'}\n` };
+      }
+      if (command === 'adopt') {
+        const parsed = parseAdoptArgs(rest);
+        if ('error' in parsed) return { exitCode: 2, stderr: `${parsed.error}\n` };
+        const options = { ...parsed, providerId: deps.providerId };
+        const items = await runAdopt(adoptPorts, options);
+        if (rest.includes('--json')) return { exitCode: items.some(i => i.error) ? 1 : 0, stdout: `${JSON.stringify({ dryRun: options.dryRun, items })}\n` };
+        return { exitCode: items.some(i => i.error) ? 1 : 0, stdout: formatAdopt(items, options.dryRun) };
+      }
+      return { exitCode: 2, stderr: 'команды: status, adopt\n' };
+    },
+  });
+
+  return {
+    routes,
+    deriveProviderOptions(ctx) {
+      if (Date.now() - bridgesAt > 10 * 60_000) void refreshNativeBridges().catch(() => {});
+      return {
+        ...claudeBridgeKnobs(ctx.promptMode),
+        requestedModel: ctx.model,
+        cascade: { provider: threadProvider.get(ctx.threadId) ?? 'claude-code', digests: digestMap(bridges) },
+      };
+    },
+    nativeBridges: () => bridges,
+    scheme: threadId => routes.threadScheme(threadId),
+    refreshNativeBridges,
+    issues: () => bridges.filter(b => b.problem && b.providerId === 'claude-code').map(b => `Штатный мост Claude Code: ${b.problem}. Каскад не сможет запускать ходы.`),
+  };
+}

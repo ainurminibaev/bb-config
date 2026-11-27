@@ -1,0 +1,10 @@
+{
+  "id": "subscriptions-cascade-scaffold",
+  "title": "Каскад подписок 0.1.0 — каркас: настройки, движок выбора ступени, мастер (ходы не исполняет)",
+  "component": "agentcli-subscriptions-cascade",
+  "where": "server",
+  "kind": "manual",
+  "introduces": true,
+  "rerun": "Шаг ничего не меняет сам: плагин не ставится автоматически. Повтор безопасен.",
+  "rollback": "Если плагин ставили вручную: bb plugin disable agentcli-subscriptions-cascade, затем bb plugin remove agentcli-subscriptions-cascade."
+}

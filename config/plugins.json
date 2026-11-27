@@ -588,5 +588,12 @@
     "enabled": true,
     "name": "Workflows",
     "source": "builtin:workflows"
+  },
+  {
+    "id": "agentcli-subscriptions-cascade",
+    "version": "0.1.0",
+    "enabled": false,
+    "name": "Каскад подписок [Experimental]",
+    "source": "path:plugins/agentcli-subscriptions-cascade"
   }
 ]

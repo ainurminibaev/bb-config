@@ -1,0 +1,16 @@
+/* Имитация панели настроек BB для стенда: переменные темы (значения светлой и
+   тёмной темы BB) и рамка раздела. Не входит в плагин. */
+:root { color-scheme: light; --background: oklch(100% 0 0); --foreground: oklch(21% 0 0); --muted: oklch(96.5% 0 0); --muted-foreground: oklch(44% 0 0);
+  --border: oklch(91% 0 0); --accent: oklch(96% 0 0); --state-hover: oklch(96% 0 0); --primary: oklch(27% 0 0); --primary-foreground: oklch(100% 0 0);
+  --ring: oklch(27% 0 0); --popover: oklch(100% 0 0); --popover-foreground: oklch(21% 0 0);
+  --destructive: oklch(45% .19 25.86); --destructive-text: oklch(45% .19 25.86); --warning: oklch(70% .16 50); --warning-text: oklch(55% .14 50); --success: oklch(70% .15 155);
+  --font-sans: "Inter Variable", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --font-mono: ui-monospace, "SF Mono", monospace; }
+:root[data-theme="dark"] { color-scheme: dark; --background: oklch(20% 0 0); --foreground: oklch(93% 0 0); --muted: oklch(25% 0 0); --muted-foreground: oklch(78% 0 0);
+  --border: oklch(30% 0 0); --accent: oklch(26% 0 0); --state-hover: oklch(26% 0 0); --primary: oklch(82% 0 0); --primary-foreground: oklch(21.78% 0 0);
+  --ring: oklch(82% 0 0); --popover: oklch(22% 0 0); --popover-foreground: oklch(93% 0 0);
+  --destructive: oklch(56% .19 22.17); --destructive-text: oklch(65% .16 22); --warning: oklch(75% .16 50); --warning-text: oklch(75% .16 50); --success: oklch(74% .15 155); }
+body { margin: 0; background: var(--background); color: var(--foreground); font-family: var(--font-sans); }
+.pv-panel { width: var(--pv-width, 700px); padding: 24px 28px 32px; }
+.pv-head { margin-bottom: 18px; }
+.pv-head h2 { margin: 0 0 2px; font-size: 16px; font-weight: 600; }
+.pv-head p { margin: 0; color: var(--muted-foreground); font-size: 13px; }

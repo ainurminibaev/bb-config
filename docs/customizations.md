@@ -3695,3 +3695,100 @@ proxy-manager 0.3.6: свой значок «Прокси».
 До релиза у автора сборки поставлены поверх `dist/` установленных версий; откат
 одной командой — `rollback.sh` в хранилище треда-автора (восстанавливает сохранённые
 `dist/` и `server.ts` Usage, перезагружает плагины), возврат — `apply.sh` рядом.
+
+## Каскад подписок 0.1.0 — каркас (27 ноября 2026)
+
+Собственный плагин `agentcli-subscriptions-cascade` (`plugins/agentcli-subscriptions-cascade/`,
+пакет `bb-plugin-agentcli-subscriptions-cascade`). Идея: один тред ведётся
+по ступеням «машина × провайдер (CLI) × аккаунт», ход идёт на первой ступени
+с лимитом. Порядок ступеней владелец задаёт свободно, файлы проекта лежат по
+общему пути `/opt/bbfs` под Mutagen.
+
+**Состояние.** Каркас **не установлен и не включён** в работающем BB:
+установку решает владелец. В `config/plugins.json` плагин записан с
+`enabled: false`. В набор `config/bundle.json` он не входит.
+
+Что готово:
+
+- экран настроек (`settingsSection`): машины, каскад, профили, тестовый
+  источник квоты, таблица моделей с подсветкой несопоставленных ячеек, файлы,
+  мастер «Настроить»;
+- регистрация провайдера «Каскад подписок» с логотипом; список моделей —
+  профили каскада (ниже);
+- движок выбора ступени по профилю, схема «i» из того же движка, модуль
+  лимитов и согласия;
+- единый контракт адаптера провайдера; адаптеры `claude-code` и `codex`
+  (разбор событий и лимиты).
+
+Чего нет: исполнителя хода (`executionMode: off`), передачи контекста и
+сессий Mutagen. Архитектура, этапы A (relay через `contributeEnv` под штатными
+провайдерами) и B (свой провайдер и мост) и места под их реализацию — в
+`plugins/agentcli-subscriptions-cascade/ARCHITECTURE.md`.
+
+**Настройки.** Вся конфигурация — одна строковая настройка плагина `config`
+(JSON по `configSchema`). Пустое значение означает каскад по умолчанию:
+
+1. Claude Max на машине с именем Tru (опора);
+2. Claude на Mac через шлюз vclaude;
+3. Claude Pro на машине с именем UA (вторая подписка claude.ai);
+4. Codex на Mac и на UA — с подтверждением.
+
+Машины находятся по имени и платформе, ID в код не вшиты; новые машины
+обнаружение добавляет выключенными («Добавить найденное»).
+
+**Профили каскада.** Профиль — именованная настройка, которая видна пунктом в
+списке моделей провайдера (`model/list` = включённые профили, первый — по
+умолчанию). Поля: политика `only` / `prefer-then-any` / `any`, модель из
+таблицы, свой порядок ступеней или общий, исключённые ступени и провайдеры,
+переопределение «спрашивать при входе». Приоритет моделей для `any` —
+общий (`policies.modelPriority`). Из коробки: «Авто», «Авто · без Codex»,
+«Opus → Авто», «Fable → Авто», «Только Opus 5.5», «Только Fable 5.2».
+Подпись пункта — «Старт: <модель · машина>» и правило. Старое поле
+`policies.autoEnabled` и поля ступени `inAuto`/`autoModel` убраны (каркас
+нигде не установлен, миграции нет); конфигурация без поля `profiles` получает
+профили из коробки, устаревший ID модели `m:<ключ>` читается как «только X».
+Кнопка «i» есть только на карточке: у пункта модели в SDK нет поля под
+кнопку или ссылку (`availableModelSchema`: только `description`).
+
+**Тестовый источник квоты** (`testQuota`): флаг, список тестовых тредов и
+лимит каждой ступени вручную для приёмки S1–S13
+(`.local/docs/research/seamless-execution/tasks.md`). Движок подменяет
+лимиты только в тестовых тредах; превью и схемы экрана считаются по нему,
+пока флаг включён. Состояние мастера
+хранится в `bb.storage.kv` (`wizard:<hostId>`). Снимок настроек
+(`snapshot.py --settings-only`) подхватит `config` после установки.
+
+**Опирается на** (SDK 0.6.157, BB 0.50.1):
+
+- `bb.providers.register` (models.fallback, experimental_bridgeOptions,
+  deriveProviderOptions);
+- `bb.sdk.system.usageLimits` (поля `status`, `windows[].kind/label/usedPercent/resetsAt`,
+  `accountKey`/`accountEmail`);
+- `bb.sdk.providers.models`, `bb.sdk.hosts.providerCliStatus`;
+- `bb.sdk.terminals.create/output/close` (argv, `host_path`), `bb.sdk.files.write/remove`;
+- RPC `thread-account-usage.vclaude` (`usage.limitUnits/remainingUnits/endsAt/fetchedAt`)
+  — остаток пакета в единицах; ключи и адрес кабинета остаются в
+  thread-account-usage.
+
+Неизвестные поля, ошибки и отсутствие плагина-источника дают «квота
+неизвестна», а не сбой.
+
+Тесты: `npm test --prefix plugins/agentcli-subscriptions-cascade` (58: движок
+и три политики профилей, сценарии S1, S3, S4, S6, S8, S10, S11, профили и
+подписи, тестовая квота, совпадение схемы «i» с `selectStep`, модели, лимиты,
+согласия, мастер, мост, события, сервер на фейковом хосте SDK с тремя машинами),
+`npm run typecheck --prefix plugins/agentcli-subscriptions-cascade`.
+
+**Установка вручную (на сервере BB).**
+
+```sh
+npm ci --prefix plugins/agentcli-subscriptions-cascade
+bb plugin build plugins/agentcli-subscriptions-cascade
+bb plugin install ./plugins/agentcli-subscriptions-cascade --yes
+```
+
+Проверка: Настройки → Плагины → «Каскад подписок»; в выборе провайдера
+появляется «Каскад подписок». Ожидающий шаг релиза
+`docs/releases/next/subscriptions-cascade-scaffold` ручной: плагин ничего не
+ставит сам. Откат: `bb plugin disable agentcli-subscriptions-cascade`, затем
+`bb plugin remove agentcli-subscriptions-cascade`.
