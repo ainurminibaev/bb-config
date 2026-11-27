@@ -16,6 +16,8 @@ export const viewSchema = z.object({
 export type DescriptionView = z.infer<typeof viewSchema>;
 export const rpcContract = defineRpcContract({
   get: { input: threadInput, output: viewSchema },
+  /** A card was opened: refresh when the text is stale (refreshOnOpen mode). */
+  opened: { input: threadInput, output: viewSchema },
   refresh: { input: threadInput, output: viewSchema },
   /** An empty text returns the description to automatic updates. */
   setDescription: { input: threadInput.extend({ text: z.string().max(2000) }), output: viewSchema },

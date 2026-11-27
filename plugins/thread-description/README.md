@@ -9,7 +9,8 @@ A short description and a recap for every BB thread and subthread.
 
 The description is written from the first task; when that has fewer than 15
 words it is rewritten after the first agent reply; afterwards it is refreshed at
-most once an hour, when the thread goes idle with new messages. A description
+most once an hour, when you open a card and the thread has new messages
+(`refreshOnOpen`; turn it off to refresh on idle instead, which costs more). A description
 edited by hand is never overwritten.
 
 A hidden BB worker thread writes the text on the source thread's machine, in an

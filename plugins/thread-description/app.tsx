@@ -31,6 +31,7 @@ function useDescription(threadId: string) {
     view, failure,
     refresh: () => run(rpc.call('refresh', { threadId })),
     save: (text: string) => run(rpc.call('setDescription', { threadId, text })),
+    opened: useCallback(() => run(rpc.call('opened', { threadId })), [run, rpc, threadId]),
     markSeen: useCallback(() => run(rpc.call('markSeen', { threadId })), [run, rpc, threadId]),
   };
 }
@@ -63,7 +64,7 @@ const tokens = (count: number) => (count >= 1000 ? `${Math.round(count / 1000)} 
  * `kind` picks the content: the description (header) or the recap (composer).
  */
 function InfoButton({ threadId, kind }: { threadId: string; kind: 'description' | 'recap' }) {
-  const { view, failure, refresh, save, markSeen } = useDescription(threadId);
+  const { view, failure, refresh, save, markSeen, opened } = useDescription(threadId);
   const button = useRef<HTMLButtonElement | null>(null);
   const popup = useRef<HTMLDivElement | null>(null);
   const hideTimer = useRef(0);
@@ -81,6 +82,7 @@ function InfoButton({ threadId, kind }: { threadId: string; kind: 'description' 
   useEffect(() => () => window.clearTimeout(hideTimer.current), []);
   const unseen = Boolean(view?.recapUnseen);
   useEffect(() => { if (open && unseen) void markSeen(); }, [open, unseen, markSeen]);
+  useEffect(() => { if (open) void opened(); }, [open, opened]);
   useEffect(() => {
     if (!open) return;
     const measure = () => {

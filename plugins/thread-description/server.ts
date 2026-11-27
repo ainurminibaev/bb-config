@@ -23,6 +23,7 @@ export default async function threadDescription(bb: BbPluginApi) {
     model: { type: 'string', label: 'Модель; нет на машине — берётся небольшая модель провайдера', default: 'claude-haiku-5-5' },
     fallbackHostId: { type: 'string', label: 'ID запасной машины, если на машине треда нет провайдеров (необязательно)', default: '' },
     refreshMinutes: { type: 'number', label: 'Обновлять не чаще, минут', default: 60 },
+    refreshOnOpen: { type: 'boolean', label: 'Обновлять устаревшее только при открытии карточки (дешевле); выключено — само после затишья', default: true },
     shortWords: { type: 'number', label: 'Первая задача короче стольких слов дописывается после ответа агента', default: 15 },
     concurrency: { type: 'number', label: 'Одновременных генераций', default: 2 },
     language: { type: 'string', label: 'Язык описаний; пусто — язык треда', default: '' },
@@ -237,18 +238,20 @@ export default async function threadDescription(bb: BbPluginApi) {
     return job;
   }
 
-  async function consider(event: 'active' | 'idle', thread: { id: string; visibility: string; originPluginId: string | null; parentThreadId: string | null; archivedAt: number | null }) {
+  async function consider(event: 'active' | 'idle' | 'open', thread: { id: string; visibility: string; originPluginId: string | null; parentThreadId: string | null; archivedAt: number | null }) {
     if (thread.visibility !== 'visible' || isOwn(thread) || thread.archivedAt !== null || running.has(thread.id)) return;
     const values = await settings.get();
     if (!values.enabled || (thread.parentThreadId && !values.subthreads)) return;
     const entry = await load(thread.id);
     const refreshMs = bounded(values.refreshMinutes, 60, 5, 24 * 60) * 60_000;
     // Cheap exit before reading the timeline: most events come well inside the interval.
-    if (entry?.generatedAt && !entry.needsImprove && (event === 'active' || Date.now() - entry.generatedAt < refreshMs)) return;
-    const mode: Mode | null = decide({ event, entry, messages: await readMessages(thread.id), now: Date.now(), refreshMs });
-    if (mode) void start(thread.id);
+    // With refreshOnOpen only the first description and its improvement happen by themselves.
+    const refreshes = event === 'open' || (event === 'idle' && !values.refreshOnOpen);
+    if (entry?.generatedAt && !entry.needsImprove && (!refreshes || Date.now() - entry.generatedAt < refreshMs)) return;
+    const mode: Mode | null = decide({ event: event === 'active' ? 'active' : 'idle', entry, messages: await readMessages(thread.id), now: Date.now(), refreshMs });
+    if (mode && (mode !== 'refresh' || refreshes)) void start(thread.id);
   }
-  const guarded = (event: 'active' | 'idle', thread: Parameters<typeof consider>[1]) =>
+  const guarded = (event: 'active' | 'idle' | 'open', thread: Parameters<typeof consider>[1]) =>
     void consider(event, thread).catch((error) => bb.log.warn(`Thread Description: ${event} ${thread.id}: ${message(error)}`));
 
   bb.events.on('thread.active', ({ thread }) => { if (!isOwn(thread)) guarded('active', thread); });
@@ -281,6 +284,11 @@ export default async function threadDescription(bb: BbPluginApi) {
 
   bb.rpc.register(rpcContract, {
     get: ({ threadId }) => view(threadId),
+    opened: async ({ threadId }) => {
+      const thread = await bb.sdk.threads.get({ threadId });
+      if (thread.status !== 'active') await consider('open', thread);
+      return view(threadId);
+    },
     // Returns at once: progress and the result arrive through the realtime signal.
     refresh: async ({ threadId }) => { await bb.sdk.threads.get({ threadId }); void start(threadId); return view(threadId); },
     setDescription: async ({ threadId, text }) => { await setDescription(threadId, text); return view(threadId); },
