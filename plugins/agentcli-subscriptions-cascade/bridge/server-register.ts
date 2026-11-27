@@ -15,7 +15,9 @@ import type { HealthLookup } from '../engine.ts';
 import { formatAdopt, parseAdoptArgs, runAdopt, type AdoptPorts, type AdoptThread } from './adopt.ts';
 import { digestMap, nativeBridgeStatus, type NativeBridgeStatus } from './digests.ts';
 import { executorRpcContract, type LimitObservation } from './route-contract.ts';
-import { createRouteService, type RouteService, type StoredThreadState, type SyncPort, type ThreadInfo } from './route-service.ts';
+import type { Consent } from '../consent.ts';
+import type { ThreadEventRow } from './handoff.ts';
+import { createRouteService, type RouteDeps, type RouteService, type StoredThreadState, type SyncPort, type ThreadInfo } from './route-service.ts';
 
 export interface ExecutorDeps {
   providerId: string;
@@ -33,6 +35,35 @@ export interface ExecutorDeps {
 }
 
 const STATE_KEY = (threadId: string) => `exec:thread:${threadId}`;
+const CONSENTS_KEY = (projectId: string) => `exec:consents:${projectId}`;
+
+/**
+ * Порты карточки подтверждения и перехода между провайдерами: правила
+ * «навсегда» проекта в kv плагина, события треда для сводки/дельты.
+ */
+function consentAndHandoffPorts(bb: BbPluginApi): Pick<RouteDeps, 'projectConsents' | 'saveProjectConsents' | 'threadEvents'> {
+  return {
+    projectConsents: async projectId => (await bb.storage.kv.get<Consent[]>(CONSENTS_KEY(projectId))) ?? [],
+    saveProjectConsents: async (projectId, consents) => { await bb.storage.kv.set(CONSENTS_KEY(projectId), consents); },
+    threadEvents: async (threadId, afterSeq) => {
+      // Постранично, не больше 4000 событий: сводка всё равно режет ранние.
+      const rows: ThreadEventRow[] = [];
+      let after = afterSeq;
+      for (let page = 0; page < 8; page += 1) {
+        const batch = await bb.sdk.threads.events.list({ threadId, afterSeq: String(after), limit: '500', order: 'asc' }) as unknown;
+        const items = Array.isArray(batch) ? batch as unknown[] : [];
+        for (const item of items) {
+          const row = rec(item);
+          const seq = Number(row.seq);
+          if (Number.isFinite(seq) && typeof row.type === 'string') rows.push({ seq, type: row.type, data: row.data });
+        }
+        if (items.length < 500 || rows.length === 0) break;
+        after = rows[rows.length - 1]!.seq;
+      }
+      return rows;
+    },
+  };
+}
 
 /** Ручки штатного моста Claude (ключи providerOptions — внутренний контракт моста BB 0.50). */
 export function claudeBridgeKnobs(promptMode: string | undefined): Record<string, string | boolean> {
@@ -126,6 +157,7 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     sync: deps.sync,
     now: Date.now,
     warn: message => bb.log.warn(message),
+    ...consentAndHandoffPorts(bb),
   });
 
   /** Подмена квоты треда: `spec` пустой — только показать; clear — снять перед записью. */
@@ -154,7 +186,15 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     routeTurn: input => routes.routeTurn(input),
     finishTurn: input => routes.finishTurn(input),
     threadStatus: ({ threadId }) => routes.threadStatus(threadId),
-  }, { experimental_discoverable: true, experimental_description: 'Каскад подписок: паспорт треда (threadStatus), тестовая квота треда (testQuota), ход исполнителя (routeTurn/finishTurn).' });
+    answerConfirmation: input => routes.answerConfirmation(input),
+    peekProvider: input => routes.peekProvider(input),
+    handoffBrief: input => routes.handoffBrief(input),
+    nativeSessions: async ({ threadId, sessions }) => {
+      const result = await routes.nativeSessions(threadId, sessions);
+      if (result.sessions) threadProvider.set(threadId, result.sessions.active);
+      return result;
+    },
+  }, { experimental_discoverable: true, experimental_description: 'Каскад подписок: паспорт треда (threadStatus), тестовая квота треда (testQuota), ход исполнителя (routeTurn/finishTurn, answerConfirmation, peekProvider, handoffBrief, nativeSessions).' });
 
   // ---- CLI ----
   const adoptPorts: AdoptPorts = {

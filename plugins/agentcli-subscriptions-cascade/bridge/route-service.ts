@@ -1,13 +1,17 @@
 // Маршрутизатор хода на сервере плагина: решение движка до запуска CLI,
 // синхронизация файлов до и после хода, состояние треда, паспорт треда.
 // Все обращения к BB и sync/ — через зависимости: тестируется без SDK.
+import { bindingEpoch } from '../config.ts';
+import { grant, pruneConsents, type Consent } from '../consent.ts';
 import type { CascadeConfig, DiscoveredAccount, Step } from '../contract.ts';
 import { explainProfile, nextThreadState, selectStep, type Decision, type HealthLookup, type ThreadCascadeState } from '../engine.ts';
 import { previewText, usesTestQuota } from '../profiles.ts';
+import { buildHandoff, type ThreadEventRow } from './handoff.ts';
 import type {
-  FinishTurnInput, LimitObservation, RouteNote, RouteTurnInput, RouteTurnOutput, StageLabel, ThreadStatus,
+  AnswerConfirmationInput, AnswerConfirmationOutput, ConfirmPrompt, FinishTurnInput, LimitObservation, NativeProvider, NativeSessions,
+  RouteNote, RouteTurnInput, RouteTurnOutput, StageLabel, ThreadStatus,
 } from './route-contract.ts';
-import { finishTurnInputSchema, routeTurnInputSchema } from './route-contract.ts';
+import { answerConfirmationInputSchema, finishTurnInputSchema, handoffBriefInputSchema, nativeSessionsSchema, routeTurnInputSchema } from './route-contract.ts';
 
 /** Ответ sync/ (SyncService.prepareTurn/finishTurn) в нужном здесь объёме. */
 export type SyncOutcome =
@@ -36,6 +40,10 @@ export interface StoredThreadState {
   lastRun: { stepId: string; hostId: string; providerId: string; modelId: string | null; at: number } | null;
   /** Ход на машине не-опоре ещё не вернул файлы (finishTurn не прошёл). */
   pendingFlushHostId: string | null;
+  /** Ход, к которому относятся «Пропустить ступень» (skippedStepIds); у нового хода пропуски сброшены. */
+  skipTurnKey?: string | null;
+  /** Нативные сессии треда по провайдерам (переход Claude ↔ Codex). */
+  native?: NativeSessions | null;
 }
 
 export interface RouteDeps {
@@ -53,6 +61,11 @@ export interface RouteDeps {
   sync: SyncPort | null;
   now(): number;
   warn?(message: string): void;
+  /** Постоянные правила «навсегда» проекта (карточка подтверждения). Нет порта — правил нет. */
+  projectConsents?(projectId: string): Promise<Consent[]>;
+  saveProjectConsents?(projectId: string, consents: Consent[]): Promise<void>;
+  /** События треда после seq (по возрастанию) — для сводки и дельты другой нативной сессии. */
+  threadEvents?(threadId: string, afterSeq: number): Promise<ThreadEventRow[]>;
 }
 
 export const PROVIDER_ID_LOCAL = 'subscriptions-cascade';
@@ -115,9 +128,27 @@ const REFUSE_TEXT: Record<string, string> = {
   'unknown-model': 'Модель не найдена в таблице ассоциаций каскада.',
 };
 
+const utcTime = (at: number) => `${new Date(at).toISOString().slice(11, 16)} UTC`;
+
+/** Причина в карточке подтверждения: коротко, без точки. */
+function confirmReason(decision: Extract<Decision, { kind: 'confirm' }>, from: StageLabel | null): string {
+  if (decision.continuing) return 'разовое согласие на прошлый ход закончилось';
+  if (from && decision.triggerResetAt !== null) return `лимит ${from.machine} исчерпан до ${utcTime(decision.triggerResetAt)}`;
+  if (from) return `${from.machine} сейчас недоступна`;
+  return 'ступень спрашивает подтверждение при входе';
+}
+
 export interface RouteService {
   routeTurn(input: RouteTurnInput): Promise<RouteTurnOutput>;
   finishTurn(input: FinishTurnInput): Promise<{ notes: RouteNote[] }>;
+  /** Ответ карточки подтверждения: согласие со сроком, пропуск ступени, ожидание, отмена. */
+  answerConfirmation(input: AnswerConfirmationInput): Promise<AnswerConfirmationOutput>;
+  /** Провайдер следующего хода без побочных эффектов (мост выбирает штатный мост). */
+  peekProvider(input: { threadId: string; projectId?: string | null; requestedModel?: string | null }): Promise<{ providerId: NativeProvider | null; modelId: string | null; stage: StageLabel | null }>;
+  /** Сводка или дельта для другой нативной сессии треда. */
+  handoffBrief(input: { threadId: string; afterSeq: number; mode: 'snapshot' | 'delta'; from: string; to: string; currentRequestId?: string | null }): Promise<{ text: string; throughSeq: number }>;
+  /** Нативные сессии треда: чтение (sessions = null) и запись. */
+  nativeSessions(threadId: string, sessions: NativeSessions | null): Promise<{ sessions: NativeSessions | null }>;
   threadStatus(threadId: string): Promise<ThreadStatus>;
   /** Схема профиля треда для метки ступени (timeline.provideScheme): тот же движок и то же состояние. */
   threadScheme(threadId: string): Promise<{ name: string; text: string; test: boolean; attempts: unknown[]; config: unknown } | null>;
@@ -134,6 +165,11 @@ export function createRouteService(deps: RouteDeps): RouteService {
     locks.set(threadId, next);
     void next.finally(() => { if (locks.get(threadId) === next) locks.delete(threadId); }).catch(() => {});
     return next;
+  }
+
+  async function projectConsentsOf(projectId: string): Promise<Consent[]> {
+    if (!projectId || !deps.projectConsents) return [];
+    return deps.projectConsents(projectId).catch(error => { warn(`правила «навсегда»: ${String(error)}`); return []; });
   }
 
   async function routeTurn(raw: RouteTurnInput): Promise<RouteTurnOutput> {
@@ -162,9 +198,15 @@ export function createRouteService(deps: RouteDeps): RouteService {
 
       const plannedSteps = config.steps.filter(s => s.enabled);
       await deps.refreshLimits(config, plannedSteps).catch(error => warn(`лимиты перед ходом: ${String(error)}`));
-      const engine: ThreadCascadeState = { ...stored.engine, projectId, homeHostId: stored.engine.homeHostId ?? bridgeHost, turnId: `turn-${now}` };
+      // «Пропустить ступень» действует только на свой ход (тот же turnKey).
+      const skipped = input.turnKey !== null && stored.skipTurnKey === input.turnKey ? stored.engine.skippedStepIds : [];
+      const engine: ThreadCascadeState = {
+        ...stored.engine, projectId, homeHostId: stored.engine.homeHostId ?? bridgeHost,
+        turnId: input.turnKey ?? `turn-${now}`, skippedStepIds: skipped,
+      };
+      const forever = await projectConsentsOf(projectId);
       const decision: Decision = selectStep({
-        config, requestedModel: profileId, accounts: deps.accounts(), thread: engine, health: deps.health(config, input.threadId), now,
+        config, requestedModel: profileId, accounts: deps.accounts(), thread: { ...engine, consents: [...engine.consents, ...forever] }, health: deps.health(config, input.threadId), now,
       });
 
       const save = (next: StoredThreadState) => deps.save(input.threadId, next).catch(error => warn(`состояние треда: ${String(error)}`));
@@ -184,22 +226,41 @@ export function createRouteService(deps: RouteDeps): RouteService {
         return { action: 'refuse', retryable: false, message, notes: [{ kind: 'problem', message }] };
       }
       if (decision.kind === 'confirm') {
-        // Карточка подтверждения (timeline/) показывается мостом; пока она не
-        // подключена — ход останавливается с понятной причиной, без перехода.
+        // Карточка подтверждения: её показывает исполнитель (мост, timeline/
+        // requestConfirmation) в этом же ходе; ответ — answerConfirmation, затем routeTurn снова.
         const to = stageLabel(config, decision);
-        const message = `Переход на ${to.machine} · ${to.provider ?? ''} требует подтверждения владельца.`;
-        return { action: 'refuse', retryable: false, message, notes: [{ kind: 'problem', message, stage: to, stepId: decision.stepId }] };
+        const prev = stored.lastRun;
+        const from = prev ? stageLabel(config, prev) : null;
+        const order = (stepId: string) => config.steps.findIndex(s => s.id === stepId);
+        const crossProvider = prev !== null && prev.providerId !== decision.providerId;
+        const nativeSession = stored.native?.sessions[decision.providerId];
+        const prompt: ConfirmPrompt = {
+          stepId: decision.stepId,
+          continuing: decision.continuing,
+          returning: prev !== null && !decision.continuing && order(decision.stepId) < order(prev.stepId),
+          from: decision.continuing ? null : from,
+          to,
+          reason: confirmReason(decision, from).slice(0, 300),
+          handoff: crossProvider
+            ? (nativeSession ? `${providerLabel(decision.providerId)}: прежняя сессия + события треда после неё` : `${providerLabel(decision.providerId)}: новая сессия со сводкой треда`)
+            : null,
+          threadUntil: decision.triggerResetAt,
+          allowForever: true,
+        };
+        return { action: 'confirm', prompt, providerId: decision.providerId, notes: [{ kind: 'state', phase: 'waiting', stage: to, stepId: decision.stepId, profileId }] };
       }
 
       // decision.kind === 'run'
       const notes: RouteNote[] = [];
       const to = stageLabel(config, decision);
       if (!input.probe && decision.providerId !== input.provider) {
-        // Другой провайдер (Claude ↔ Codex): нужна новая нативная сессия со сводкой
-        // (bridge/context-brief.ts). Запуск чужого CLI внутри сессии штатного моста
-        // этой версией не поддержан — ход останавливается с понятной причиной.
-        const message = `Следующая ступень — ${to.provider ?? decision.providerId} на ${to.machine}: переход между провайдерами в этой версии каскада ещё не исполняется. Выберите профиль только с ${input.provider === 'codex' ? 'Codex' : 'Claude'} или дождитесь сброса лимита.`;
-        return { action: 'refuse', retryable: false, message, notes: [{ kind: 'problem', message: message.slice(0, 300), stage: to, stepId: decision.stepId }] };
+        // Другой провайдер (Claude ↔ Codex): его ход ведёт штатный мост другого
+        // провайдера со своей нативной сессией — мост каскада переключает его на
+        // turn/start (peekProvider). Сюда попадает только гонка (например,
+        // «Пропустить ступень» в карточке привёл к ступени другого провайдера):
+        // ход не идёт, следующее сообщение мост отдаст нужному провайдеру.
+        const message = `Следующая ступень — ${to.provider ?? decision.providerId} на ${to.machine}: этот ход ведёт ${providerLabel(input.provider)}, переход между провайдерами выполняется со следующего сообщения. Отправьте сообщение ещё раз.`;
+        return { action: 'refuse', retryable: true, message, notes: [{ kind: 'problem', message: message.slice(0, 300), stage: to, stepId: decision.stepId }] };
       }
       const prev = stored.lastRun;
       const local = bridgeHost !== null && decision.hostId === bridgeHost;
@@ -309,5 +370,102 @@ export function createRouteService(deps: RouteDeps): RouteService {
     };
   }
 
-  return { routeTurn, finishTurn, threadStatus, threadScheme };
+  async function answerConfirmation(raw: AnswerConfirmationInput): Promise<AnswerConfirmationOutput> {
+    const input = answerConfirmationInputSchema.parse(raw);
+    return serial(input.threadId, async () => {
+      const config = await deps.loadConfig();
+      const info = await deps.threadInfo(input.threadId).catch(() => null);
+      const stored = (await deps.load(input.threadId).catch(() => undefined)) ?? freshState(input.threadId, info);
+      const step = config.steps.find(s => s.id === input.stepId);
+      const now = deps.now();
+      const projectId = input.projectId ?? info?.projectId ?? stored.engine.projectId;
+      const save = (next: StoredThreadState) => deps.save(input.threadId, next).catch(error => warn(`состояние треда: ${String(error)}`));
+      const label = step ? stageLabel(config, { stepId: step.id, hostId: step.hostId, providerId: step.providerId, modelId: null }) : null;
+
+      switch (input.action) {
+        case 'go': {
+          if (!step) return { next: 'refuse', message: 'Ступень из карточки больше не настроена — отправьте сообщение снова.', retryable: false, notes: [] };
+          const scope = input.scope ?? 'turn';
+          const consent = grant(scope, {
+            stepId: step.id, bindingEpoch: bindingEpoch(step), threadId: input.threadId, turnId: input.turnKey ?? '', projectId, now,
+          }, scope === 'thread' ? input.threadUntil : null);
+          const epochs = new Map(config.steps.map(s => [s.id, bindingEpoch(s)] as const));
+          if (scope === 'forever' && deps.saveProjectConsents && projectId) {
+            const current = pruneConsents(await projectConsentsOf(projectId), epochs, now).filter(c => c.stepId !== step.id);
+            await deps.saveProjectConsents(projectId, [...current, consent]);
+          } else {
+            // Разовые согласия прошлых ходов больше не нужны; тредовые живут до сброса.
+            const kept = pruneConsents(stored.engine.consents, epochs, now)
+              .filter(c => !(c.stepId === step.id && c.scope === consent.scope))
+              .filter(c => c.scope !== 'turn' || c.turnId === input.turnKey);
+            await save({ ...stored, engine: { ...stored.engine, projectId, consents: [...kept, consent] } });
+          }
+          return { next: 'continue', message: '', retryable: false, notes: [] };
+        }
+        case 'skip': {
+          const same = input.turnKey !== null && stored.skipTurnKey === input.turnKey;
+          const skippedStepIds = [...new Set([...(same ? stored.engine.skippedStepIds : []), input.stepId])];
+          await save({ ...stored, skipTurnKey: input.turnKey, engine: { ...stored.engine, projectId, skippedStepIds } });
+          return { next: 'continue', message: '', retryable: false, notes: [] };
+        }
+        case 'wait': {
+          const until = input.threadUntil;
+          const note = `Жду сброса лимита прежней ступени${until ? ` (до ${utcTime(until)})` : ''} — ход повторится после него.`;
+          return {
+            next: 'refuse', message: note, retryable: true,
+            notes: [{ kind: 'wait', cause: 'reset', until, note, stepId: input.stepId }, { kind: 'state', phase: 'waiting', stage: label, stepId: input.stepId }],
+          };
+        }
+        case 'cancel': {
+          const message = 'Ход отменён в карточке подтверждения.';
+          return { next: 'refuse', message, retryable: false, notes: [{ kind: 'state', phase: 'idle', stage: null }] };
+        }
+        default: {
+          const message = 'Карточка подтверждения закрыта без ответа — ход не начат. Отправьте сообщение снова, когда будете готовы.';
+          return { next: 'refuse', message, retryable: false, notes: [{ kind: 'state', phase: 'idle', stage: null }] };
+        }
+      }
+    });
+  }
+
+  async function peekProvider(input: { threadId: string; projectId?: string | null; requestedModel?: string | null }): Promise<{ providerId: NativeProvider | null; modelId: string | null; stage: StageLabel | null }> {
+    const none = { providerId: null, modelId: null, stage: null };
+    const config = await deps.loadConfig();
+    if (config.policies.executionMode !== 'provider') return none;
+    const [info, stored] = await Promise.all([deps.threadInfo(input.threadId).catch(() => null), deps.load(input.threadId).catch(() => undefined)]);
+    const state = stored ?? freshState(input.threadId, info);
+    const projectId = input.projectId ?? info?.projectId ?? state.engine.projectId;
+    const profileId = input.requestedModel ?? state.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto';
+    const now = deps.now();
+    const forever = await projectConsentsOf(projectId);
+    const decision = selectStep({
+      config, requestedModel: profileId, accounts: deps.accounts(), health: deps.health(config, input.threadId), now,
+      thread: { ...state.engine, projectId, homeHostId: state.engine.homeHostId ?? info?.hostId ?? null, turnId: `peek-${now}`, skippedStepIds: [], consents: [...state.engine.consents, ...forever] },
+    });
+    if (decision.kind !== 'run' && decision.kind !== 'confirm') return none;
+    const providerId: NativeProvider | null = decision.providerId === 'codex' || decision.providerId === 'claude-code' ? decision.providerId : null;
+    return { providerId, modelId: decision.modelId, stage: stageLabel(config, decision) };
+  }
+
+  async function handoffBrief(raw: { threadId: string; afterSeq: number; mode: 'snapshot' | 'delta'; from: string; to: string; currentRequestId?: string | null }) {
+    const input = handoffBriefInputSchema.parse(raw);
+    const events = deps.threadEvents ? await deps.threadEvents(input.threadId, input.afterSeq) : [];
+    return buildHandoff(events, input);
+  }
+
+  async function nativeSessions(threadId: string, sessions: NativeSessions | null) {
+    if (sessions === null) {
+      const stored = await deps.load(threadId).catch(() => undefined);
+      return { sessions: stored?.native ?? null };
+    }
+    const value = nativeSessionsSchema.parse(sessions);
+    return serial(threadId, async () => {
+      const info = await deps.threadInfo(threadId).catch(() => null);
+      const stored = (await deps.load(threadId).catch(() => undefined)) ?? freshState(threadId, info);
+      await deps.save(threadId, { ...stored, native: value });
+      return { sessions: value };
+    });
+  }
+
+  return { routeTurn, finishTurn, answerConfirmation, peekProvider, handoffBrief, nativeSessions, threadStatus, threadScheme };
 }

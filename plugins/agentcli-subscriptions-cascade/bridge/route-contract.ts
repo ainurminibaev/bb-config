@@ -46,8 +46,27 @@ export const routeTurnInputSchema = z.object({
   probe: z.boolean().default(false),
   /** Папка, в которой мост запустил CLI. */
   cwd: z.string().min(1),
+  /**
+   * Логический ход (одно сообщение пользователя): разовое согласие карточки
+   * действует на все повторные routeTurn этого хода. null — новый ход на каждый вызов.
+   */
+  turnKey: z.string().min(1).max(160).nullable().default(null),
 });
 export type RouteTurnInput = z.input<typeof routeTurnInputSchema>;
+
+/** Что показать в карточке подтверждения (поля ConfirmRequest из timeline/ без proposalId и ревизии). */
+export const confirmPromptSchema = z.object({
+  stepId: text(120).min(1),
+  continuing: z.boolean(),
+  returning: z.boolean().default(false),
+  from: stageLabelSchema.nullable(),
+  to: stageLabelSchema,
+  reason: text(300),
+  handoff: text(200).nullable().default(null),
+  threadUntil: z.number().nullable(),
+  allowForever: z.boolean().default(true),
+});
+export type ConfirmPrompt = z.infer<typeof confirmPromptSchema>;
 
 export const routeTurnOutputSchema = z.discriminatedUnion('action', [
   z.object({
@@ -73,8 +92,70 @@ export const routeTurnOutputSchema = z.discriminatedUnion('action', [
     retryable: z.boolean().default(false),
     notes: z.array(routeNoteSchema).default([]),
   }),
+  z.object({
+    /** Ступень требует подтверждения: исполнитель показывает карточку, ответ — answerConfirmation, затем routeTurn снова. */
+    action: z.literal('confirm'),
+    prompt: confirmPromptSchema,
+    /** Провайдер ступени карточки. */
+    providerId: z.string(),
+    notes: z.array(routeNoteSchema).default([]),
+  }),
 ]);
 export type RouteTurnOutput = z.infer<typeof routeTurnOutputSchema>;
+/** Итог хода после карточек подтверждения: запуск или отказ. */
+export type RoutedTurn = Exclude<RouteTurnOutput, { action: 'confirm' }>;
+
+export const answerConfirmationInputSchema = z.object({
+  threadId: z.string().min(1),
+  projectId: z.string().nullable().default(null),
+  stepId: z.string().min(1),
+  turnKey: z.string().min(1).max(160).nullable().default(null),
+  /** Ответ карточки; dismissed — закрыта без выбора (ход ждёт, ничего не запоминаем). */
+  action: z.enum(['go', 'skip', 'wait', 'cancel', 'dismissed']),
+  scope: z.enum(['turn', 'thread', 'forever']).nullable().default(null),
+  /** Граница тредового согласия (из карточки). */
+  threadUntil: z.number().nullable().default(null),
+});
+export type AnswerConfirmationInput = z.input<typeof answerConfirmationInputSchema>;
+
+export const answerConfirmationOutputSchema = z.object({
+  /** continue — снова routeTurn; refuse — ход не идёт (message, retryable). */
+  next: z.enum(['continue', 'refuse']),
+  message: z.string().default(''),
+  retryable: z.boolean().default(false),
+  notes: z.array(routeNoteSchema).default([]),
+});
+export type AnswerConfirmationOutput = z.infer<typeof answerConfirmationOutputSchema>;
+
+/** Нативные сессии треда: у каждого провайдера своя, курсор — номер события треда (seq). */
+export const nativeSessionSchema = z.object({
+  nativeId: z.string().min(1),
+  coveredSeq: z.number().int().nonnegative(),
+});
+export const nativeSessionsSchema = z.object({
+  /** providerThreadId, который знает BB (первая нативная сессия треда). */
+  outerId: z.string().min(1),
+  active: nativeProviderSchema,
+  sessions: z.record(z.string(), nativeSessionSchema),
+});
+export type NativeSessions = z.infer<typeof nativeSessionsSchema>;
+
+export const handoffBriefInputSchema = z.object({
+  threadId: z.string().min(1),
+  /** Курсор сессии получателя; 0 — первый переход (сводка). */
+  afterSeq: z.number().int().nonnegative(),
+  mode: z.enum(['snapshot', 'delta']),
+  from: text(80),
+  to: text(80),
+  /** Текущий запрос пользователя (clientRequestId): он передаётся ходом отдельно и в сводку не входит. */
+  currentRequestId: z.string().nullable().default(null),
+});
+export const handoffBriefOutputSchema = z.object({
+  /** Блок для начала хода; пусто — добавлять нечего. */
+  text: z.string(),
+  /** До какого события треда покрыт контекст. */
+  throughSeq: z.number().int().nonnegative(),
+});
 
 /** Событие лимита из потока CLI (rate_limit_event Claude, account/rateLimits Codex). */
 export const limitObservationSchema = z.object({
@@ -122,6 +203,20 @@ export const executorRpcContract = defineRpcContract({
   routeTurn: { input: routeTurnInputSchema, output: routeTurnOutputSchema },
   finishTurn: { input: finishTurnInputSchema, output: z.object({ notes: z.array(routeNoteSchema) }) },
   threadStatus: { input: z.object({ threadId: z.string().min(1) }), output: threadStatusSchema },
+  /** Ответ карточки подтверждения: согласие со сроком, пропуск ступени, ожидание, отмена. */
+  answerConfirmation: { input: answerConfirmationInputSchema, output: answerConfirmationOutputSchema },
+  /** Какой провайдер возьмёт следующий ход (без побочных эффектов) — мост выбирает штатный мост ступени. */
+  peekProvider: {
+    input: z.object({ threadId: z.string().min(1), projectId: z.string().nullable().default(null), requestedModel: z.string().nullable().default(null) }),
+    output: z.object({ providerId: nativeProviderSchema.nullable(), modelId: z.string().nullable(), stage: stageLabelSchema.nullable() }),
+  },
+  /** Сводка (первый переход) или дельта событий после курсора (возврат) для другой нативной сессии. */
+  handoffBrief: { input: handoffBriefInputSchema, output: handoffBriefOutputSchema },
+  /** Нативные сессии треда: чтение (sessions не задан) и запись. */
+  nativeSessions: {
+    input: z.object({ threadId: z.string().min(1), sessions: nativeSessionsSchema.nullable().default(null) }),
+    output: z.object({ sessions: nativeSessionsSchema.nullable() }),
+  },
   /** Тестовая квота одного треда (S1–S13): `set` — «<ступень>=exhausted|ok|unknown|unavailable[,<сброс>];…». */
   testQuota: {
     input: z.object({ threadId: z.string().min(1), set: z.string().max(2000).optional(), clear: z.boolean().default(false) }),

@@ -8,10 +8,15 @@
 //   5. сообщает итог (finishTurn): события лимита, сбой канала, синхронизация после хода.
 // Если сервер каскада не ответил — работает как штатный CLI этой машины, с
 // моделью по умолчанию: тред не ломается (S12).
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { dirname } from 'node:path';
-import { routeTurnOutputSchema, type LimitObservation, type NativeProvider, type RouteNote, type RouteTurnOutput } from '../bridge/route-contract.ts';
+import {
+  answerConfirmationOutputSchema, routeTurnOutputSchema,
+  type ConfirmPrompt, type LimitObservation, type NativeProvider, type RouteNote, type RoutedTurn,
+} from '../bridge/route-contract.ts';
+import { parseBridgeAnswer, resolveRoute, type BridgeAnswer } from './confirm.ts';
 import { claudeSessionInfo, claudeSessionPath, flagValue, remoteArgs, remoteEnv, replaceModel, resumeOrStart } from './cli-args.ts';
 import { spawn } from 'node:child_process';
 import { resolveRealExecutable, runLocal } from './local.ts';
@@ -68,6 +73,49 @@ function sendFeed(io: LauncherIo, threadId: string, notes: readonly RouteNote[])
     socket.on('error', done);
     socket.on('connect', () => socket.end(`${JSON.stringify({ threadId, notes })}\n`, done));
   });
+}
+
+/**
+ * Карточка подтверждения: запрос мосту через тот же сокет, ответ — строкой
+ * обратно. Таймаута нет: ход ждёт владельца. Нет сокета или он закрылся без
+ * ответа — unavailable (ход не идёт, тред цел).
+ */
+export function askBridge(io: Pick<LauncherIo, 'env'>, threadId: string, prompt: ConfirmPrompt, turnKey: string): Promise<BridgeAnswer> {
+  const path = io.env[LAUNCHER_ENV.feed];
+  if (!path) return Promise.resolve({ action: 'unavailable', reason: 'мост каскада не дал сокет для карточки' });
+  return new Promise(resolve => {
+    let settled = false;
+    let buffer = '';
+    const finish = (answer: BridgeAnswer) => { if (settled) return; settled = true; socket.destroy(); resolve(answer); };
+    const socket = connect(path);
+    socket.setEncoding('utf8');
+    socket.on('error', error => finish({ action: 'unavailable', reason: `сокет моста: ${error.message}` }));
+    socket.on('close', () => finish({ action: 'unavailable', reason: 'мост закрыл карточку без ответа' }));
+    socket.on('data', chunk => {
+      buffer += chunk;
+      const newline = buffer.indexOf('\n');
+      if (newline === -1) return;
+      let value: unknown = null;
+      try { value = JSON.parse(buffer.slice(0, newline)); } catch { /* ниже — unavailable */ }
+      finish(parseBridgeAnswer(value));
+    });
+    socket.on('connect', () => socket.write(`${JSON.stringify({ threadId, turnKey, confirm: prompt })}\n`));
+  });
+}
+
+/** Решение хода с карточками подтверждения (launcher/confirm.ts). */
+function routeWithConfirm(io: LauncherIo, threadId: string, input: { provider: NativeProvider; requestedModel: string | null; probe: boolean }): Promise<RoutedTurn> {
+  const projectId = io.env.BB_PROJECT_ID ?? null;
+  const turnKey = `turn-${randomUUID()}`;
+  return resolveRoute({
+    routeTurn: async key => routeTurnOutputSchema.parse(await callServer(io, 'routeTurn', {
+      threadId, projectId, provider: input.provider, requestedModel: input.requestedModel, probe: input.probe, cwd: io.cwd, turnKey: key,
+    }, 60_000)),
+    ask: (prompt, key) => askBridge(io, threadId, prompt, key),
+    answer: async a => answerConfirmationOutputSchema.parse(await callServer(io, 'answerConfirmation', { threadId, projectId, ...a }, 60_000)),
+    feed: notes => sendFeed(io, threadId, notes),
+    log: line => logLine(io, line),
+  }, turnKey);
 }
 
 /** Лимит из строки stream-json Claude (`rate_limit_event`). */
@@ -135,11 +183,9 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
   const session = claudeSessionInfo(args);
   const probe = session.ephemeral;
   const requestedModel = flagValue(args, '--model');
-  let route: RouteTurnOutput;
+  let route: RoutedTurn;
   try {
-    route = routeTurnOutputSchema.parse(await callServer(io, 'routeTurn', {
-      threadId, projectId: io.env.BB_PROJECT_ID ?? null, provider, requestedModel, probe, cwd: io.cwd,
-    }, 60_000));
+    route = await routeWithConfirm(io, threadId, { provider, requestedModel, probe });
   } catch (error) {
     return runFallback(io, provider, args, `сервер каскада не ответил: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -163,9 +209,8 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
     return runSessionRelay(route, sessionArgs, sessionId, {
       start: (r, childArgs, onLine) => startStageChild(io, provider, r, childArgs, onLine),
       sessionExists: r => localSessionFile(io, sessionId, r.cwd) !== null,
-      routeTurn: async () => routeTurnOutputSchema.parse(await callServer(io, 'routeTurn', {
-        threadId, projectId: io.env.BB_PROJECT_ID ?? null, provider, requestedModel, probe: false, cwd: io.cwd,
-      }, 60_000)),
+      // Каждое новое сообщение пользователя — новый ход со своим turnKey.
+      routeTurn: () => routeWithConfirm(io, threadId, { provider, requestedModel, probe: false }),
       finishTurn: async (r, info) => {
         const finish = await callServer<{ notes: RouteNote[] }>(io, 'finishTurn', { ...finishInfo(r), ...info, limits: info.limits.slice(-20) }, 120_000);
         await sendFeed(io, threadId, finish.notes);
@@ -247,7 +292,7 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
   return exitCode ?? 1;
 }
 
-type RunRoute = Extract<RouteTurnOutput, { action: 'run' }>;
+type RunRoute = Extract<RoutedTurn, { action: 'run' }>;
 
 /**
  * Процесс CLI ступени с построчным stdin/stdout: здесь же (pipe) или на машине
@@ -331,11 +376,10 @@ export function startStageChild(io: LauncherIo, provider: NativeProvider, route:
 
 /** Codex: app-server на всё время runtime. Ступень — на старте процесса. */
 async function runCodex(io: LauncherIo, args: string[], threadId: string): Promise<number> {
-  let route: RouteTurnOutput;
+  // Согласие на ступень Codex спрашивается здесь, при входе на неё (старт app-server).
+  let route: RoutedTurn;
   try {
-    route = routeTurnOutputSchema.parse(await callServer(io, 'routeTurn', {
-      threadId, projectId: io.env.BB_PROJECT_ID ?? null, provider: 'codex', requestedModel: null, probe: false, cwd: io.cwd,
-    }, 60_000));
+    route = await routeWithConfirm(io, threadId, { provider: 'codex', requestedModel: null, probe: false });
   } catch (error) {
     return runFallback(io, 'codex', args, `сервер каскада не ответил: ${error instanceof Error ? error.message : String(error)}`);
   }

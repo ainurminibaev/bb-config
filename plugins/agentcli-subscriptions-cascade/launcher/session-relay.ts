@@ -11,7 +11,7 @@
 // Во время хода (после user до result) ступень не меняется никогда.
 import { createInterface } from 'node:readline';
 import { PassThrough } from 'node:stream';
-import type { LimitObservation, RouteNote, RouteTurnOutput } from '../bridge/route-contract.ts';
+import type { LimitObservation, RouteNote, RoutedTurn } from '../bridge/route-contract.ts';
 import { replaceModel, resumeOrStart } from './cli-args.ts';
 
 export interface StageChild {
@@ -24,11 +24,11 @@ export interface StageChild {
 
 export interface RelayPorts {
   /** Запустить CLI ступени: строки stdout — в onLine. */
-  start(route: Extract<RouteTurnOutput, { action: 'run' }>, args: string[], onLine: (line: string) => void): StageChild;
-  routeTurn(): Promise<RouteTurnOutput>;
+  start(route: Extract<RoutedTurn, { action: 'run' }>, args: string[], onLine: (line: string) => void): StageChild;
+  routeTurn(): Promise<RoutedTurn>;
   /** Записал ли CLI файл сессии (для `--resume` на новой ступени). Нет порта — считается записанным. */
-  sessionExists?(route: Extract<RouteTurnOutput, { action: 'run' }>): boolean;
-  finishTurn(route: Extract<RouteTurnOutput, { action: 'run' }>, info: { exitCode: number | null; limits: LimitObservation[]; transportError: string | null; durationMs: number }): Promise<void>;
+  sessionExists?(route: Extract<RoutedTurn, { action: 'run' }>): boolean;
+  finishTurn(route: Extract<RoutedTurn, { action: 'run' }>, info: { exitCode: number | null; limits: LimitObservation[]; transportError: string | null; durationMs: number }): Promise<void>;
   feed(notes: readonly RouteNote[]): Promise<void>;
   limitFromLine(line: string): LimitObservation | null;
   stdin: NodeJS.ReadableStream;
@@ -38,7 +38,7 @@ export interface RelayPorts {
   log(line: string): void;
 }
 
-type RunRoute = Extract<RouteTurnOutput, { action: 'run' }>;
+type RunRoute = Extract<RoutedTurn, { action: 'run' }>;
 
 /** Аргументы для продолжения той же сессии новым процессом: --session-id → --resume. */
 export function resumeArgs(args: readonly string[], sessionId: string): string[] {
@@ -137,7 +137,7 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
       if (sawUser) {
         // Новый ход: решение каскада. Пока решаем — следующие строки ждут.
         await switching;
-        let next: RouteTurnOutput;
+        let next: RoutedTurn;
         try { next = await ports.routeTurn(); } catch (error) {
           ports.log(`routeTurn failed, staying: ${String(error)}`);
           next = route;
