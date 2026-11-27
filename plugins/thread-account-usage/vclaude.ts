@@ -15,6 +15,38 @@ const tokenCounts = z.object({
   input_tokens: count, output_tokens: count, cache_read_tokens: count, cache_write_tokens: count,
 });
 const priceSchema = z.object({ state: z.string(), limit_units: count, used_units: count, price_minor: count });
+const queueSchema = priceSchema.extend({
+  name: z.string().default('Пакет'), valid_until: z.string().nullish(), started_at: z.string().nullish(),
+  queue_position: z.number().nullish(), period_days: z.number().positive().nullish(),
+});
+const DAY = 86_400_000;
+const time = (v: string | null | undefined) => v && Number.isFinite(Date.parse(v)) ? Date.parse(v) : null;
+/**
+ * VClaude runs packages one after another: a waiting one starts when the running one
+ * runs out of limit or term, and its term (period_days) counts from that start. The
+ * cabinet's limit_units/remaining_units already include the queue, nearest_expiry is
+ * only the running package's end. Waiting ends are the latest possible.
+ */
+export function vclaudeQueue(packages: unknown[]) {
+  const parsed = packages.flatMap(value => { const p = queueSchema.safeParse(value); return p.success ? [p.data] : []; });
+  const running = parsed.filter(p => p.state === 'active' && p.limit_units > 0);
+  const waiting = parsed.filter(p => p.state === 'waiting' && p.limit_units > 0)
+    .sort((a, b) => (a.queue_position ?? Infinity) - (b.queue_position ?? Infinity));
+  let previousEnd = Math.max(0, ...running.map(p => time(p.valid_until) ?? 0)) || null;
+  const queue = [...running, ...waiting].map(p => {
+    const own = time(p.valid_until);
+    const start = time(p.started_at) ?? (p.state === 'waiting' ? previousEnd : null);
+    const end = own ?? (start !== null && p.period_days ? start + p.period_days * DAY : null);
+    if (p.state === 'waiting') previousEnd = end;
+    return { name: p.name, state: p.state, limitUnits: p.limit_units, usedUnits: p.used_units, priceRub: p.price_minor / 100,
+      startsAt: start !== null ? new Date(start).toISOString() : null, endsAt: end !== null ? new Date(end).toISOString() : null,
+      estimated: own === null };
+  });
+  const ends = queue.map(p => time(p.endsAt));
+  const startedAt = running.map(p => time(p.started_at)).filter((t): t is number => t !== null);
+  return { queue, endsAt: ends.length && ends.every(t => t !== null) ? new Date(Math.max(...ends as number[])).toISOString() : null,
+    startedAt: startedAt.length ? new Date(Math.min(...startedAt)).toISOString() : null };
+}
 const coefficientSchema = z.object({
   input: count, output: count, cache_read: count, cache_write_5m: count, cache_write_1h: count,
 });
@@ -30,10 +62,13 @@ export function parseVClaudeUsage(input: unknown, fetchedAt: string): VClaudeUsa
     packages: z.array(z.unknown()).default([]),
     coefficients: z.array(z.unknown()).default([]),
   }).parse(input);
+  // Paid and queued packages: the price of a waiting one is already paid.
   const active = raw.packages.flatMap(value => {
     const parsed = priceSchema.safeParse(value);
-    return parsed.success && parsed.data.state === 'active' && parsed.data.limit_units > 0 ? [parsed.data] : [];
+    return parsed.success && (parsed.data.state === 'active' || parsed.data.state === 'waiting') && parsed.data.limit_units > 0 ? [parsed.data] : [];
   });
+  const chain = vclaudeQueue(raw.packages);
+  const nearest = raw.nearest_expiry && Number.isFinite(Date.parse(raw.nearest_expiry)) ? raw.nearest_expiry : null;
   const rates = new Map<string, ConversionRate>();
   for (const value of raw.coefficients) {
     const parsed = z.object({ model: z.string(), values: coefficientSchema }).safeParse(value);
@@ -46,7 +81,8 @@ export function parseVClaudeUsage(input: unknown, fetchedAt: string): VClaudeUsa
   }
   return vclaudeUsageSchema.parse({
     fetchedAt, limitUnits: raw.limit_units, remainingUnits: raw.remaining_units,
-    endsAt: raw.nearest_expiry && Number.isFinite(Date.parse(raw.nearest_expiry)) ? raw.nearest_expiry : null,
+    // Without a readable queue: the running package's end, as before.
+    endsAt: chain.endsAt ?? nearest, nearestExpiry: nearest, startedAt: chain.startedAt, queue: chain.queue,
     paidRub: active.length ? active.reduce((sum, pack) => sum + pack.price_minor, 0) / 100 : null,
     usedRub: active.length ? active.reduce((sum, pack) =>
       sum + pack.price_minor * Math.min(pack.used_units / pack.limit_units, 1), 0) / 100 : null,

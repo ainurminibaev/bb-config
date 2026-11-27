@@ -1,6 +1,6 @@
 {
   "id": "account-usage-vclaude-machine",
-  "title": "Thread Account Usage 0.2.3 — у строки VClaude видна машина, где Claude Code настроен на VClaude",
+  "title": "Thread Account Usage 0.2.3 — строка VClaude: машина Claude Code и срок очереди пакетов",
   "component": "thread-account-usage",
   "where": "server",
   "kind": "command",

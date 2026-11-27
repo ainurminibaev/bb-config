@@ -126,3 +126,22 @@ test('VClaude machines are the hosts routed to it, named as BB currently names t
   assert.deepEqual(routedHosts(routes, 'vclaude.ru'), { ids: ['mac'], names: ['Old Mac name'] });
   assert.deepEqual(routedHosts(routes, 'vclaude.ru', [{ id: 'gone', name: 'X' }]), { ids: [], names: [] });
 });
+test('VClaude note names the running and the queued package', async () => {
+  const { vclaudeNote } = await import('./logic.ts');
+  const note = vclaudeNote(403_124_658, 405_000_000, {}, [
+    { name: 'Промокод', state: 'active', limitUnits: 5_000_000, usedUnits: 1_875_342, endsAt: '2026-11-28T17:15:27Z', estimated: false },
+    { name: 'Max 100', state: 'waiting', limitUnits: 400_000_000, usedUnits: 0, endsAt: '2026-12-28T17:15:27Z', estimated: true },
+  ]);
+  assert.match(note, /^осталось 403,12 млн из 405 млн ед\.\nПо очереди: сейчас Промокод — 3,12 млн до 28 нояб\.; затем Max 100 — 400 млн, не позже до 28 дек\.$/);
+  assert.equal(vclaudeNote(4e6, 5e6, {}), 'осталось 4 млн из 5 млн ед.');
+});
+test('a queue term replaces the default 30 days: the tick does not run ahead', async () => {
+  const { pace, wasteRisk } = await import('./logic.ts');
+  const w: QuotaWindow = { label: 'Тариф', kind: 'other', usedPercent: 0.5, resetsAt: null,
+    startsAt: '2026-11-25T17:15:00Z', endsAt: '2026-12-28T17:15:00Z' };
+  const now = Date.parse('2026-11-27T07:15:00Z');
+  assert.ok(Math.abs(pace(w, now)! - 100 * 38 / (33 * 24)) < 0.01);
+  assert.equal(wasteRisk(w, now), false);
+  // Old shape (no start): 30 days before the end, as before.
+  assert.ok(Math.abs(pace({ ...w, startsAt: undefined, endsAt: '2026-11-28T17:15:00Z' }, now)! - 100 * (1 - 34 / 720)) < 0.01);
+});

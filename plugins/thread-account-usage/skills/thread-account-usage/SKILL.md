@@ -33,6 +33,12 @@ BB's current host name. No machine shown: that machine runs an older bundle or
 has no such route. There is no separate VClaude provider — pick Claude Code on
 that machine.
 
+VClaude packages run as a queue: a bought package waits until the running one
+runs out of limit or term, then its own term starts. The row's date is the end
+of the whole queue (latest possible), its tick measures from the running
+package's start; the tooltip and the VClaude tab list the queue. Do not read
+`nearest_expiry` as the end of the paid term.
+
 Inspect live installation with `bb plugin list --json`. Source, refresh behavior,
 identity limitations, DOM anchors and restoration are described in the plugin
 README.md. After changing source, run TypeScript, `node --test logic.test.ts`,

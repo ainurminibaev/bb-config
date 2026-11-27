@@ -122,6 +122,9 @@ export function planLabel(providerId: string, plan: string | null | undefined): 
  */
 const HOUR = 3_600_000;
 export function periodMs(window: QuotaWindow): number | null {
+  // A package queue (VClaude) knows its own term: running package start → end of the last one.
+  const start = Date.parse(window.startsAt ?? ''), end = Date.parse(window.endsAt ?? '');
+  if (Number.isFinite(start) && Number.isFinite(end) && end > start) return end - start;
   if (window.endsAt) return 30 * 24 * HOUR;
   if (window.kind === 'five-hour') return 5 * HOUR;
   if (window.kind === 'weekly' || window.kind === 'model') return 7 * 24 * HOUR;
@@ -152,13 +155,19 @@ const millions = (v: number) => v >= 1e6 ? `${(v / 1e6).toLocaleString('ru-RU', 
  * VClaude package in its own units and in Opus tokens: model rates are units per
  * million tokens, so tokens ≈ remaining units ÷ (rate ÷ 1e6).
  */
-export function vclaudeNote(remaining: number, limit: number, rates: Record<string, { input: number; output: number }>): string {
+export function vclaudeNote(remaining: number, limit: number, rates: Record<string, { input: number; output: number }>,
+  queue: readonly { name: string; state: string; limitUnits: number; usedUnits: number; endsAt: string | null; estimated: boolean }[] = []): string {
   const opus = Object.keys(rates).filter(id => /opus/i.test(id)).sort((a, b) => a.localeCompare(b, 'en', { numeric: true })).at(-1);
   const rate = opus ? rates[opus] : undefined;
   const name = opus?.replace(/^anthropic-claude-/, '').replace(/^opus-(\d+)-(\d+)$/, 'Opus $1.$2') ?? '';
   const tokens = rate && rate.input > 0 && rate.output > 0
     ? ` ≈ ${millions(remaining / (rate.input / 1e6))} вх. или ${millions(remaining / (rate.output / 1e6))} вых. токенов ${name}` : '';
-  return `осталось ${millions(remaining)} из ${millions(limit)} ед.${tokens}`;
+  const day = (at: string | null) => at ? new Date(at).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', timeZone: 'Europe/Moscow' }) : '?';
+  // Several packages run one after another: say what runs now and what comes next.
+  const order = queue.length > 1 ? '\nПо очереди: ' + queue.map(p => p.state === 'active'
+    ? `сейчас ${p.name} — ${millions(Math.max(0, p.limitUnits - p.usedUnits))} до ${day(p.endsAt)}`
+    : `затем ${p.name} — ${millions(p.limitUnits)}, ${p.estimated ? 'не позже ' : ''}до ${day(p.endsAt)}`).join('; ') : '';
+  return `осталось ${millions(remaining)} из ${millions(limit)} ед.${tokens}${order}`;
 }
 
 /**

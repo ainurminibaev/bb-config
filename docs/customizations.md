@@ -3487,6 +3487,17 @@ RPC agent-roster 0.5.0 `roster_list`, поля `kind` и `active.threadId` дл�
 строке. Опора: поле `env.ANTHROPIC_BASE_URL` в settings.json Claude Code,
 `hostNames` аккаунта. Тесты — `logic.test.ts` (`claudeBaseHost`, `routedHosts`).
 
+Пакеты VClaude идут очередью (0.2.3): ждущий пакет (`state: waiting`,
+`valid_until: null`) начинается, когда у текущего кончится лимит или срок, и
+его `period_days` считаются оттуда. `limit_units`/`remaining_units` кабинета уже
+включают очередь, `nearest_expiry` — только конец текущего. `vclaudeQueue`
+(`vclaude.ts`) строит очередь; `usage.endsAt` — конец всей очереди (не позже),
+`nearestExpiry` — текущего пакета, `startedAt` — начало текущего. Окно «Тариф»
+несёт `startsAt`, и `periodMs` меряет засечку по этому сроку вместо 30 дней.
+Опора: поля `packages[].state|valid_until|started_at|queue_position|period_days`
+ответа `/api/cabinet/tariff/usage`; без них — прежнее поведение по
+`nearest_expiry`. Тесты — `vclaude.test.ts`, `logic.test.ts`.
+
 Сессия хранится с правами 0600 в `$XDG_STATE_HOME/bb-vclaude/session.json`
 (по умолчанию `~/.local/state/bb-vclaude/session.json`). Для автоматического
 повторного входа серверу нужен файл `login.json` с полями `email` и `password`

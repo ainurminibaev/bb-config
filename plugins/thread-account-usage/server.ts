@@ -64,9 +64,10 @@ export default function plugin(bb: BbPluginApi) {
       message: error ?? (usage?.limitUnits === 0 ? 'Действующий тариф отсутствует.' : null),
       fetchedAt: usage?.fetchedAt ?? null, resetCount: null,
       meter: usage && usage.limitUnits > 0 ? { total: usage.limitUnits, left: usage.remainingUnits, tokensPerUnit: 1 / 0.8 } : null,
-      note: usage && usage.limitUnits > 0 ? vclaudeNote(usage.remainingUnits, usage.limitUnits, usage.conversionRates) : null,
+      note: usage && usage.limitUnits > 0 ? vclaudeNote(usage.remainingUnits, usage.limitUnits, usage.conversionRates, usage.queue) : null,
       windows: usage && usage.limitUnits > 0 ? [{
-        kind: 'other', label: 'Тариф', endsAt: usage.endsAt, resetsAt: null,
+        // endsAt — end of the whole queue; the tick measures from the running package's start.
+        kind: 'other', label: 'Тариф', endsAt: usage.endsAt, startsAt: usage.startedAt, resetsAt: null,
         usedPercent: Math.max(0, Math.min(100, 100 * (1 - usage.remainingUnits / usage.limitUnits))),
       }] : [],
     };

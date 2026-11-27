@@ -4,6 +4,8 @@ import { comparisonSchema, vclaudeUsageSchema } from './vclaude-contract';
 export const windowSchema = z.object({
   label: z.string(), kind: z.enum(['five-hour', 'weekly', 'model', 'other']),
   usedPercent: z.number().finite(), resetsAt: z.string().nullable(), endsAt: z.string().nullable().optional(),
+  // Packages with a known start of their term (VClaude queue); absent = 30 days before endsAt.
+  startsAt: z.string().nullable().optional(),
   // Model families the window limits (Antigravity groups); absent = all models.
   scope: z.array(z.string()).optional(),
 });

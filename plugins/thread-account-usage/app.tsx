@@ -140,7 +140,7 @@ function AccountRow({ a, filter, now, logos, onDetails }: { a: Account; filter: 
     <div className="tau-row-windows">{windows.length ? (filter === 'all' && pairRows.has(a.providerId) ? windowRows(a).map((r,i)=><PairRow key={`${r.name}:${i}`} r={r} a={a} now={now}/>)
       : windows.map((w,i)=><InlineWindow key={`${w.label}:${i}`} w={w} a={a} now={now}/>))
       :<small className="tau-row-empty">{a.message ?? 'Окно не сообщено'}</small>}
-      {windows.length > 0 && isPackageAccount(a) && a.note && <small className="tau-row-note" title={a.note}>{a.note}</small>}
+      {windows.length > 0 && isPackageAccount(a) && a.note && <small className="tau-row-note" title={a.note}>{a.note.split('\n')[0]}</small>}
       {windows.length > 0 && a.message && <small className="tau-row-note" title={a.message}>{a.message}</small>}</div>
     <button className="tau-more" aria-label={`Подробнее: ${a.email??a.providerName}`} title="Подробнее" onClick={()=>onDetails(a.key)}>›</button>
   </section>;

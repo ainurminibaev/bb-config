@@ -55,3 +55,30 @@ test('a rejected session is replaced atomically and concurrent reads share renew
     assert.equal(JSON.parse(await readFile(state, 'utf8')).cookie, 'session=new');
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+test('a waiting package extends the term: its 30 days start at the running one\'s end', () => {
+  const promoEnd = '2026-11-28T17:15:27.776Z';
+  const usage = parseVClaudeUsage({
+    limit_units: 405_000_000, remaining_units: 403_124_658, nearest_expiry: promoEnd, models: [], coefficients: [],
+    packages: [
+      { name: 'Max 100', limit_units: 400_000_000, used_units: 0, price_minor: 899_100, valid_until: null,
+        state: 'waiting', started_at: null, queue_position: 1, period_days: 30 },
+      { name: 'Промокод', limit_units: 5_000_000, used_units: 1_875_342, price_minor: 0, valid_until: promoEnd,
+        state: 'active', started_at: '2026-11-25T17:15:27.776Z', queue_position: null, period_days: 3 },
+    ],
+  }, promoEnd);
+  assert.equal(usage.nearestExpiry, promoEnd);
+  assert.equal(usage.startedAt, '2026-11-25T17:15:27.776Z');
+  assert.equal(usage.endsAt, '2026-12-28T17:15:27.776Z');
+  assert.deepEqual(usage.queue.map(p => [p.name, p.state, p.startsAt, p.endsAt, p.estimated]), [
+    ['Промокод', 'active', '2026-11-25T17:15:27.776Z', promoEnd, false],
+    ['Max 100', 'waiting', promoEnd, '2026-12-28T17:15:27.776Z', true],
+  ]);
+  assert.equal(usage.paidRub, 8991);
+  assert.equal(usage.usedRub, 0);
+});
+test('without package details the term is the cabinet\'s nearest expiry, as before', () => {
+  const usage = parseVClaudeUsage({ ...fixture, packages: [] }, date);
+  assert.equal(usage.endsAt, date);
+  assert.equal(usage.startedAt, null);
+});

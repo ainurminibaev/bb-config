@@ -66,12 +66,17 @@ export function VClaudePanel() {
         {usage.limitUnits > 0 ? <>
           <div className="tau-vcl-metrics">
             <div><small>Осталось</small><strong>{label(usage.remainingUnits)} юн.</strong><span>из {label(usage.limitUnits)} юн.</span></div>
-            <div><small>Оплачено за активные пакеты</small><strong>{usage.paidRub == null ? '—' : rub.format(usage.paidRub)}</strong></div>
+            <div><small>Оплачено за пакеты, вкл. очередь</small><strong>{usage.paidRub == null ? '—' : rub.format(usage.paidRub)}</strong></div>
             <div title="Цена пакета × доля потраченных в нём юнитов"><small>Использовано по цене пакетов</small><strong>{usage.usedRub == null ? '—' : rub.format(usage.usedRub)}</strong></div>
           </div>
           <progress value={usedPercent} max={100} aria-label="Использованная доля тарифа" />
           <div className="tau-vcl-term"><span>Использовано {percent.format(usedPercent)}%</span>
-            {usage.endsAt && <span>Ближайшее окончание <time dateTime={usage.endsAt}>{dateTime(usage.endsAt)}</time></span>}</div>
+            {usage.nearestExpiry && usage.nearestExpiry !== usage.endsAt && <span>Текущий пакет до <time dateTime={usage.nearestExpiry}>{dateTime(usage.nearestExpiry)}</time></span>}
+            {usage.endsAt && <span>{usage.queue.length > 1 ? 'Вся очередь — не позже' : 'Действует до'} <time dateTime={usage.endsAt}>{dateTime(usage.endsAt)}</time></span>}</div>
+          {usage.queue.length > 1 && <ol className="tau-vcl-queue" aria-label="Пакеты по очереди">{usage.queue.map((p, i) =>
+            <li key={`${p.name}:${i}`}><strong>{p.name}</strong> — {p.state === 'active' ? `идёт, осталось ${label(Math.max(0, p.limitUnits - p.usedUnits))} из ${label(p.limitUnits)} юн.` : `ждёт, ${label(p.limitUnits)} юн.`}
+              {p.endsAt && <> · {p.estimated ? 'не позже ' : 'до '}<time dateTime={p.endsAt}>{dateTime(p.endsAt)}</time></>}</li>)}</ol>}
+          {usage.queue.length > 1 && <small>Следующий пакет начинается, когда у текущего кончится лимит или срок; его срок считается с этого момента.</small>}
         </> : <p>Действующий тариф отсутствует.</p>}
       </section>
       <section className="tau-vcl-card" aria-labelledby="tau-vcl-models">
