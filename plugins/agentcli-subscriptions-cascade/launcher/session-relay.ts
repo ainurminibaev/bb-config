@@ -11,7 +11,7 @@
 // Во время хода (после user до result) ступень не меняется никогда.
 import { createInterface } from 'node:readline';
 import { PassThrough } from 'node:stream';
-import type { LimitObservation, RouteNote, RouteTurnOutput } from '../bridge/route-contract.ts';
+import type { LimitObservation, RouteNote, RoutedTurn } from '../bridge/route-contract.ts';
 import { replaceModel, resumeOrStart } from './cli-args.ts';
 
 export interface StageChild {
@@ -24,11 +24,13 @@ export interface StageChild {
 
 export interface RelayPorts {
   /** Запустить CLI ступени: строки stdout — в onLine. */
-  start(route: Extract<RouteTurnOutput, { action: 'run' }>, args: string[], onLine: (line: string) => void): StageChild;
-  routeTurn(): Promise<RouteTurnOutput>;
+  start(route: Extract<RoutedTurn, { action: 'run' }>, args: string[], onLine: (line: string) => void): StageChild;
+  routeTurn(): Promise<RoutedTurn>;
   /** Записал ли CLI файл сессии (для `--resume` на новой ступени). Нет порта — считается записанным. */
-  sessionExists?(route: Extract<RouteTurnOutput, { action: 'run' }>): boolean;
-  finishTurn(route: Extract<RouteTurnOutput, { action: 'run' }>, info: { exitCode: number | null; limits: LimitObservation[]; transportError: string | null; durationMs: number }): Promise<void>;
+  sessionExists?(route: Extract<RoutedTurn, { action: 'run' }>): boolean;
+  /** Лимит исчерпан в ходе: отметить ступень до того, как мост увидит конец хода. */
+  markLimits?(route: Extract<RoutedTurn, { action: 'run' }>, limits: LimitObservation[]): Promise<void>;
+  finishTurn(route: Extract<RoutedTurn, { action: 'run' }>, info: { exitCode: number | null; limits: LimitObservation[]; transportError: string | null; durationMs: number }): Promise<void>;
   feed(notes: readonly RouteNote[]): Promise<void>;
   limitFromLine(line: string): LimitObservation | null;
   stdin: NodeJS.ReadableStream;
@@ -38,7 +40,7 @@ export interface RelayPorts {
   log(line: string): void;
 }
 
-type RunRoute = Extract<RouteTurnOutput, { action: 'run' }>;
+type RunRoute = Extract<RoutedTurn, { action: 'run' }>;
 
 /** Аргументы для продолжения той же сессии новым процессом: --session-id → --resume. */
 export function resumeArgs(args: readonly string[], sessionId: string): string[] {
@@ -76,15 +78,24 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
   let finishing: Promise<void> = Promise.resolve();
   let switching: Promise<void> = Promise.resolve();
 
+  // Вывод мосту идёт по цепочке: конец хода с исчерпанным лимитом задерживается,
+  // пока сервер не отметит ступень (иначе provider-retry повторит ход на ней же).
+  let out: Promise<void> = Promise.resolve();
   const onLine = (line: string) => {
     const message = parse(line);
     if (message?.type === 'control_response') {
       const id = requestIdOf(message);
       if (id && swallow.has(id)) { swallow.delete(id); return; }
     }
-    ports.stdout.write(`${line}\n`);
     const limit = ports.limitFromLine(line);
     if (limit) limits.push(limit);
+    if (message?.type === 'result' && turnActive && ports.markLimits && limits.some(l => l.status === 'rejected')) {
+      const mark = ports.markLimits(route, [...limits]);
+      const timeout = new Promise<void>(resolve => { const t = setTimeout(resolve, 10_000); (t as { unref?: () => void }).unref?.(); });
+      out = out.then(() => Promise.race([mark.catch(error => ports.log(`markLimits: ${String(error)}`)), timeout])).then(() => { ports.stdout.write(`${line}\n`); });
+    } else {
+      out = out.then(() => { ports.stdout.write(`${line}\n`); });
+    }
     if (message?.type === 'result' && turnActive) {
       turnActive = false;
       const done = { exitCode: 0, limits, transportError: null, durationMs: ports.now() - turnStartedAt };
@@ -137,7 +148,7 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
       if (sawUser) {
         // Новый ход: решение каскада. Пока решаем — следующие строки ждут.
         await switching;
-        let next: RouteTurnOutput;
+        let next: RoutedTurn;
         try { next = await ports.routeTurn(); } catch (error) {
           // Без решения сервера ход не идёт: прежняя ступень могла исчерпаться.
           ports.log(`routeTurn failed, refuse: ${String(error)}`);
@@ -168,6 +179,7 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
   }
   child.end();
   const result = childExit ?? await child.done;
+  await out;
   await finishing;
   if (turnActive || result.transportError) {
     await ports.finishTurn(route, { exitCode: result.code, limits, transportError: result.transportError, durationMs: ports.now() - turnStartedAt }).catch(() => {});

@@ -276,7 +276,10 @@ export function explainProfile(input: SelectInput): { attempts: ExplainedAttempt
 export function nextThreadState(state: ThreadCascadeState, decision: Decision, now: number): ThreadCascadeState {
   switch (decision.kind) {
     case 'run':
-      return { ...state, currentStepId: decision.stepId, currentModelId: decision.modelId, switchedAt: decision.switched ? now : state.switchedAt, waitingSince: null, skippedStepIds: [] };
+      // Отсчёт «не раньше N минут» идёт с момента, когда тред встал на эту ступень,
+      // включая первый ход (currentStepId ещё пуст): иначе тред, начавший не на
+      // приоритетной ступени, возвращался сразу после её освобождения (живой S4).
+      return { ...state, currentStepId: decision.stepId, currentModelId: decision.modelId, switchedAt: decision.stepId !== state.currentStepId ? now : state.switchedAt ?? now, waitingSince: null, skippedStepIds: [] };
     case 'wait':
       return { ...state, waitingSince: decision.waitingSince };
     default:

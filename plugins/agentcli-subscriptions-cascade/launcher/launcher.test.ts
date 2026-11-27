@@ -440,3 +440,27 @@ test('S16: steer в идущий ход — тому же процессу бе�
   assert.equal(routeCalls, 2, 'каждый ход из очереди — свой выбор ступени');
   assert.deepEqual(writes.map(w => (JSON.parse(w) as { message: { content: string } }).message.content), ['ход 1', 'steer: уточнение', 'из очереди 1', 'из очереди 2']);
 });
+
+test('реле: конец хода с исчерпанным лимитом уходит мосту только после отметки ступени', async () => {
+  const { runSessionRelay } = await import('./session-relay.ts');
+  type Route = { action: 'run'; stepId: string; hostId: string; providerId: string; modelId: string | null; local: boolean; cwd: string | null; env: Record<string, string>; stage: { machine: string }; notes: never[] };
+  const route: Route = { action: 'run', stepId: 'tru', hostId: 'tru', providerId: 'claude-code', modelId: null, local: true, cwd: null, env: {}, stage: { machine: 'Tru' }, notes: [] };
+  const order: string[] = [];
+  const stdin = new PassThrough();
+  const relay = runSessionRelay(route, ['--input-format', 'stream-json', `--session-id=${SID}`], SID, {
+    start(_r, _a, onLine) {
+      let resolveDone!: (v: { code: number; transportError: null }) => void;
+      const done = new Promise<{ code: number; transportError: null }>(r => { resolveDone = r; });
+      return { write() { setTimeout(() => { onLine(JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected' } })); onLine(JSON.stringify({ type: 'result', is_error: true })); }, 5); }, end() { resolveDone({ code: 0, transportError: null }); }, kill() {}, done };
+    },
+    routeTurn: async () => route,
+    markLimits: async () => { await new Promise(r => setTimeout(r, 30)); order.push('mark'); },
+    finishTurn: async () => {}, feed: async () => {}, limitFromLine: limitFromClaudeLine,
+    stdin, stdout: { write: (d: string) => { if (d.includes('"result"')) order.push('result'); } }, stderr: { write() {} }, now: Date.now, log() {},
+  });
+  stdin.write(`${JSON.stringify({ type: 'user', message: { content: 'ход' } })}\n`);
+  await new Promise(r => setTimeout(r, 80));
+  stdin.end();
+  await relay;
+  assert.deepEqual(order, ['mark', 'result']);
+});

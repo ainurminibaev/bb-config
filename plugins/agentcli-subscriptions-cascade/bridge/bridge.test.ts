@@ -19,6 +19,8 @@ import { createRouteService, type RouteDeps, type StoredThreadState, type SyncOu
 import { createCascadeBridge, launcherScript } from './wrapper.ts';
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
+/** Тесты не ходят на настоящий сервер BB (BB_SERVER_URL в окружении треда). */
+const NO_SERVER = { call: async () => { throw new Error('сервера в тесте нет'); } };
 
 /** Фальшивый кэш артефактов демона: provider-claude-code/<digest>/host.mjs. */
 function fakeCache(source: string, pluginId = 'provider-claude-code') {
@@ -100,6 +102,7 @@ function wrapperFixture(options: { missing?: boolean } = {}) {
       importModule: async () => { if (options.missing) throw new Error('нет'); return { experimental_providerBridge: inner }; },
     },
     feed: createTimelineFeed({ now: () => 1_000 }),
+    server: NO_SERVER,
     write: line => { out.push(JSON.parse(line) as Record<string, unknown>); },
     socketDir,
   });
@@ -125,6 +128,7 @@ test('обёртка: initialize — ответ штатного моста, mod
       }
     } } }) },
     feed: createTimelineFeed({ now: () => 1_000 }),
+    server: NO_SERVER,
     write: line => { fx.out.push(JSON.parse(line) as Record<string, unknown>); },
     socketDir: fx.socketDir,
   });

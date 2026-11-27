@@ -3,21 +3,30 @@
 // - initialize: грузим штатный мост Claude Code (свежую версию из кэша демона)
 //   и отдаём его ответ; моста нет — отвечаем сами, ход потом откажет с подсказкой.
 // - model/list: каталог профилей каскада (providerOptions.catalog), штатный не спрашиваем.
-// - thread/* и turn/*: мост ступени треда (`providerOptions.cascade.provider`) ровно
-//   той версии, что посчитал сервер (`providerOptions.cascade.digests`).
+// - thread/* и turn/*: мост активного провайдера треда (Claude Code или Codex)
+//   ровно той версии, что посчитал сервер (`providerOptions.cascade.digests`).
+// - Переход Claude ↔ Codex внутри треда (turn/start): сервер говорит, какой
+//   провайдер возьмёт ход (peekProvider). У каждого провайдера своя нативная
+//   сессия; BB знает один providerThreadId треда (outerId) — мост переводит его
+//   в ID нативной сессии активного провайдера и обратно. Курсор сессии — номер
+//   события треда: первый переход — сводка, возврат — thread/resume прежней
+//   сессии + дельта событий после курсора; сессия недоступна — новая со сводкой.
 // - CLI подменяется запускателем: BB_CLAUDE_CODE_EXECUTABLE и
 //   BB_CODEX_BRIDGE_APP_SERVER_COMMAND указывают на скрипты в dataDir.
 // - Мост → runtime: перехват process.stdout.write. providerId в событиях лимита
 //   переписывается на наш, provider-turn запоминается для строк ленты.
-// - Запускатель шлёт события ленты в локальный сокет моста; мост превращает их
-//   в thread/delta.
+// - Запускатель шлёт в локальный сокет моста события ленты и запросы карточки
+//   подтверждения; карточка уходит в runtime как `interaction/request`, ответ —
+//   строкой обратно в сокет.
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer, type Server } from 'node:net';
+import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { BridgeAnswer } from '../launcher/confirm.ts';
 import { LAUNCHER_ENV } from '../launcher/main.ts';
-import type { RouteNote } from './route-contract.ts';
+import { historyHint } from './context-brief.ts';
+import type { ConfirmPrompt, NativeSessions, RouteNote } from './route-contract.ts';
 import { catalogFrom } from './static-catalog.ts';
 import {
   loadNativeBridge, NativeLoadError, nativeLoadHint, NATIVE_BRIDGES,
@@ -29,27 +38,39 @@ export const BRIDGE_PROTOCOL_VERSION = 2;
 type Json = Record<string, unknown>;
 const rec = (v: unknown): Json => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Json : {};
 
-/** Перевод событий ленты в thread/delta (реализация — timeline/, здесь только порт). */
+/** Транспорт карточки: payload `interaction/request` → резолюция runtime. */
+export type InteractionSend = (payload: unknown, signal: AbortSignal) => Promise<unknown>;
+
+/** Перевод событий ленты в thread/delta и карточка подтверждения (реализация — timeline/, здесь только порт). */
 export interface FeedRenderer {
   render(threadId: string, notes: readonly RouteNote[], providerTurnId: string | undefined): unknown[];
+  confirm?(threadId: string, prompt: ConfirmPrompt, send: InteractionSend, providerTurnId: string | undefined, signal: AbortSignal): Promise<BridgeAnswer>;
 }
+
+/** Вызов RPC сервера каскада (REST BB_SERVER_URL). */
+export interface ServerPort { call<T>(method: string, input: unknown): Promise<T> }
 
 export interface CascadeBridgeOptions {
   providerId: string;
   ownArtifactUrl: string;
   loadDeps: LoadDeps;
   feed?: FeedRenderer;
+  /** RPC сервера; нет — по BB_SERVER_URL из окружения моста. */
+  server?: ServerPort;
   /** node, которым запускать запускатель (тот же, что у моста). */
   nodePath?: string;
   /** Запись в stdout в обход перехвата (для тестов — своя). */
   write?(line: string): void;
   log?(line: string): void;
   socketDir?: string;
+  /** Срок ответа штатного моста на служебный thread/start|resume, мс. */
+  innerTimeoutMs?: number;
 }
 
 interface Inner { loaded: LoadedNativeBridge; started: boolean; initialized: boolean }
 
 const shellQuote = (value: string) => `'${value.replace(/'/gu, `'\\''`)}'`;
+const PROVIDER_LABEL: Record<NativeProviderId, string> = { 'claude-code': 'Claude', codex: 'Codex' };
 
 export function launcherScript(args: { nodePath: string; artifact: string; provider: NativeProviderId; self: string; feed: string | null; log: string; pluginId: string }): string {
   const env = [
@@ -71,6 +92,40 @@ function fallbackInitialize() {
   };
 }
 
+/** RPC сервера каскада по REST BB (тот же путь, что у запускателя). */
+export function httpServerPort(env: NodeJS.ProcessEnv, pluginId: () => string, fetchImpl: typeof fetch = fetch): ServerPort {
+  return {
+    async call<T>(method: string, input: unknown): Promise<T> {
+      const base = env.BB_SERVER_URL;
+      if (!base) throw new Error('нет BB_SERVER_URL в окружении моста');
+      const response = await fetchImpl(`${base.replace(/\/+$/u, '')}/api/v1/plugins/${pluginId()}/rpc/${method}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input), signal: AbortSignal.timeout(30_000),
+      });
+      const json = await response.json().catch(() => null) as { ok?: boolean; result?: T; error?: { message?: string } } | null;
+      if (!response.ok || !json?.ok) throw new Error(json?.error?.message ?? `HTTP ${response.status}`);
+      return json.result as T;
+    },
+  };
+}
+
+/** Параметры сессии (thread/start|resume) без ID сессии и ввода — для открытия сессии другого провайдера. */
+function sessionTemplate(params: Json): Json {
+  const { providerThreadId: _id, input: _input, ...rest } = params;
+  return rest;
+}
+
+/** options для штатного моста провайдера: свой мост в cascade.provider, модель ступени для Codex. */
+function optionsFor(options: unknown, provider: NativeProviderId, modelId: string | null): Json {
+  const base = structuredClone(rec(options));
+  const providerOptions = rec(base.providerOptions);
+  base.providerOptions = { ...providerOptions, cascade: { ...rec(providerOptions.cascade), provider } };
+  // Профиль каскада («auto») для Claude подменяет запускатель; Codex берёт модель из turn/start.
+  if (provider === 'codex') {
+    if (modelId) base.model = modelId; else delete base.model;
+  }
+  return base;
+}
+
 export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry & { close(): Promise<void>; ingestInnerOutput(text: string): void } {
   const log = options.log ?? (() => {});
   let rawWrite: (line: string) => void = options.write ?? (line => { process.stdout.write(line); });
@@ -79,12 +134,23 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
   const threadTurn = new Map<string, string>();
   const pendingInnerRequests = new Map<string, Inner>();
   const swallowIds = new Set<string>();
+  // Переход между провайдерами и карточки.
+  const threadOuter = new Map<string, string>();
+  const threadNative = new Map<string, NativeSessions>();
+  /** Сервер ответил, что сессий другого провайдера у треда нет: не спрашивать на каждую команду. */
+  const nativeMissing = new Set<string>();
+  const nativeToOuter = new Map<string, string>();
+  const threadTemplate = new Map<string, Json>();
+  const startRequests = new Map<string, string>();
+  const internalWaiters = new Map<string, (message: Json) => void>();
+  const pendingAsks = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
   let initParams: unknown = null;
   let context: BridgeContext | null = null;
   let loadError: NativeLoadError | null = null;
   let feedServer: Server | null = null;
   let feedPath: string | null = null;
   let internalId = 0;
+  const server: ServerPort = options.server ?? httpServerPort(process.env, () => context?.pluginId ?? 'agentcli-subscriptions-cascade');
 
   const send = (message: unknown) => rawWrite(`${JSON.stringify(message)}\n`);
   const reply = (id: unknown, result: unknown) => send({ jsonrpc: '2.0', id, result });
@@ -108,9 +174,18 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
     let message: Json;
     try { message = JSON.parse(line) as Json; } catch { return line; }
     const id = message.id;
-    if (message.method === undefined && (typeof id === 'string' || typeof id === 'number') && swallowIds.has(String(id))) {
-      swallowIds.delete(String(id));
-      return null;
+    if (message.method === undefined && (typeof id === 'string' || typeof id === 'number')) {
+      const key = String(id);
+      const waiter = internalWaiters.get(key);
+      if (waiter) { internalWaiters.delete(key); waiter(message); return null; }
+      if (swallowIds.has(key)) { swallowIds.delete(key); return null; }
+      // Ответ на thread/start runtime: так мост узнаёт providerThreadId треда для карточек.
+      const startThread = startRequests.get(JSON.stringify(id));
+      if (startThread) {
+        startRequests.delete(JSON.stringify(id));
+        const providerThreadId = rec(message.result).providerThreadId;
+        if (typeof providerThreadId === 'string' && !threadOuter.has(startThread)) threadOuter.set(startThread, providerThreadId);
+      }
     }
     let changed = false;
     if (typeof message.method === 'string' && id !== undefined) {
@@ -128,6 +203,7 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
         changed = rewriteProviderId(d) || changed;
       }
     }
+    if (nativeToOuter.size > 0) changed = rewriteNativeIds(message) || changed;
     return changed ? JSON.stringify(message) : line;
   }
 
@@ -145,6 +221,24 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
     return changed;
   }
 
+  /** ID нативной сессии второго провайдера → providerThreadId, который знает BB. */
+  function rewriteNativeIds(value: Json, depth = 0): boolean {
+    if (depth > 6) return false;
+    let changed = false;
+    for (const [key, child] of Object.entries(value)) {
+      if (key === 'providerThreadId' && typeof child === 'string') {
+        const outer = nativeToOuter.get(child);
+        if (outer && outer !== child) { value[key] = outer; changed = true; }
+        continue;
+      }
+      if (child !== null && typeof child === 'object') {
+        if (Array.isArray(child)) { for (const item of child) if (item && typeof item === 'object') changed = rewriteNativeIds(item as Json, depth + 1) || changed; }
+        else changed = rewriteNativeIds(child as Json, depth + 1) || changed;
+      }
+    }
+    return changed;
+  }
+
   function installTap(): void {
     if (options.write) return; // тест: перехват не нужен, мосты пишут через свой write
     const original = process.stdout.write.bind(process.stdout) as (...args: unknown[]) => boolean;
@@ -157,7 +251,7 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
     }) as typeof process.stdout.write;
   }
 
-  // ---- Сокет ленты для запускателя ----
+  // ---- Сокет ленты и карточек для запускателя ----
   function startFeed(): void {
     if (!options.feed || process.platform === 'win32') return;
     const dir = options.socketDir ?? tmpdir();
@@ -165,25 +259,40 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
     try { rmSync(feedPath, { force: true }); } catch { /* нет файла */ }
     feedServer = createServer(socket => {
       let buffer = '';
+      const controller = new AbortController();
       socket.setEncoding('utf8');
       socket.on('data', chunk => {
         buffer += chunk;
         if (buffer.length > 1 << 20) { socket.destroy(); return; }
-      });
-      socket.on('end', () => {
-        for (const line of buffer.split('\n')) {
-          if (!line.trim()) continue;
-          try {
-            const message = JSON.parse(line) as { threadId?: unknown; notes?: unknown };
-            if (typeof message.threadId !== 'string' || !Array.isArray(message.notes)) continue;
-            emitNotes(message.threadId, message.notes as RouteNote[]);
-          } catch (error) { log(`feed: ${String(error)}`); }
+        let newline = buffer.indexOf('\n');
+        while (newline !== -1) {
+          feedLine(buffer.slice(0, newline), socket, controller.signal);
+          buffer = buffer.slice(newline + 1);
+          newline = buffer.indexOf('\n');
         }
       });
+      socket.on('end', () => { if (buffer.trim()) feedLine(buffer, socket, controller.signal); buffer = ''; });
+      // Запускатель ушёл, не дождавшись ответа (ход прерван) — карточку снимаем.
+      socket.on('close', () => controller.abort());
       socket.on('error', () => {});
     });
     feedServer.on('error', error => log(`feed server: ${error.message}`));
     feedServer.listen(feedPath);
+  }
+
+  function feedLine(line: string, socket: Socket, signal: AbortSignal): void {
+    if (!line.trim()) return;
+    let message: { threadId?: unknown; notes?: unknown; confirm?: unknown };
+    try { message = JSON.parse(line) as typeof message; } catch (error) { log(`feed: ${String(error)}`); return; }
+    if (typeof message.threadId !== 'string') return;
+    const threadId = message.threadId;
+    if (message.confirm && typeof message.confirm === 'object') {
+      void askConfirmation(threadId, message.confirm as ConfirmPrompt, signal)
+        .catch(error => ({ action: 'unavailable', reason: error instanceof Error ? error.message : String(error) }) as BridgeAnswer)
+        .then(answer => { if (!socket.destroyed) socket.end(`${JSON.stringify(answer)}\n`); });
+      return;
+    }
+    if (Array.isArray(message.notes)) emitNotes(threadId, message.notes as RouteNote[]);
   }
 
   function emitNotes(threadId: string, notes: readonly RouteNote[]): void {
@@ -191,6 +300,26 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
     let deltas: unknown[];
     try { deltas = options.feed.render(threadId, notes, threadTurn.get(threadId)); } catch (error) { log(`feed render: ${String(error)}`); return; }
     if (deltas.length > 0) send({ jsonrpc: '2.0', method: 'thread/delta', params: { threadId, deltas } });
+  }
+
+  // ---- Карточка подтверждения: interaction/request в runtime ----
+  function requestInteraction(threadId: string, payload: unknown, signal: AbortSignal): Promise<unknown> {
+    const providerThreadId = threadOuter.get(threadId);
+    if (!providerThreadId) return Promise.reject(new Error('мост не знает сессию треда'));
+    const id = `cascade-ask-${internalId += 1}`;
+    return new Promise((resolve, reject) => {
+      if (signal.aborted) { reject(new Error('карточка снята')); return; }
+      pendingAsks.set(id, { resolve, reject });
+      signal.addEventListener('abort', () => { if (pendingAsks.delete(id)) reject(new Error('карточка снята')); }, { once: true });
+      send({ jsonrpc: '2.0', id, method: 'interaction/request', params: { providerThreadId, threadId, turnId: threadTurn.get(threadId) ?? null, payload } });
+    });
+  }
+
+  async function askConfirmation(threadId: string, prompt: ConfirmPrompt, signal: AbortSignal): Promise<BridgeAnswer> {
+    if (!options.feed?.confirm) return { action: 'unavailable', reason: 'лента каскада не подключена' };
+    if (!threadOuter.has(threadId)) return { action: 'unavailable', reason: 'мост не знает сессию треда' };
+    log(`confirm ${threadId} ${prompt.stepId}`);
+    return options.feed.confirm(threadId, prompt, (payload, s) => requestInteraction(threadId, payload, s), threadTurn.get(threadId), signal);
   }
 
   // ---- Штатные мосты ----
@@ -226,6 +355,17 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
     return inner;
   }
 
+  /** Служебный запрос штатному мосту; ответ не уходит в runtime. */
+  function innerRequest(inner: Inner, method: string, params: Json): Promise<Json> {
+    const id = `cascade-int-${internalId += 1}`;
+    return new Promise(resolve => {
+      const timer = setTimeout(() => { if (internalWaiters.delete(id)) resolve({ error: { message: `${method}: штатный мост не ответил` } }); }, options.innerTimeoutMs ?? 120_000);
+      timer.unref?.();
+      internalWaiters.set(id, message => { clearTimeout(timer); resolve(message); });
+      inner.loaded.entry.handleLine(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
+    });
+  }
+
   function cascadeOptions(params: Json): { provider: NativeProviderId | null; digests: Record<string, string>; forceIncompatible: boolean } {
     const cascade = rec(rec(rec(params.options).providerOptions).cascade);
     const provider = cascade.provider === 'codex' || cascade.provider === 'claude-code' ? cascade.provider : null;
@@ -233,34 +373,192 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
     return { provider, digests, forceIncompatible: cascade.testBridgeIncompatible === true };
   }
 
+  /** Нативные сессии треда: память моста, иначе сервер (после перезапуска моста). */
+  async function nativeOf(threadId: string): Promise<NativeSessions | null> {
+    const known = threadNative.get(threadId);
+    if (known) return known;
+    if (nativeMissing.has(threadId)) return null;
+    const loaded = await server.call<{ sessions: NativeSessions | null }>('nativeSessions', { threadId, sessions: null }).catch(error => {
+      log(`nativeSessions ${threadId}: ${String(error)}`);
+      return { sessions: null };
+    });
+    if (loaded.sessions) remember(threadId, loaded.sessions); else nativeMissing.add(threadId);
+    return loaded.sessions;
+  }
+
+  function remember(threadId: string, state: NativeSessions): void {
+    threadNative.set(threadId, state);
+    threadOuter.set(threadId, state.outerId);
+    for (const session of Object.values(state.sessions)) if (session.nativeId !== state.outerId) nativeToOuter.set(session.nativeId, state.outerId);
+  }
+
+  /** ID нативной сессии активного провайдера вместо ID, который знает BB. */
+  function toNative(params: Json, state: NativeSessions | null): void {
+    if (!state || params.providerThreadId !== state.outerId) return;
+    const active = state.sessions[state.active];
+    if (active) params.providerThreadId = active.nativeId;
+  }
+
+  interface Switched { provider: NativeProviderId; params: Json }
+
+  /**
+   * turn/start: провайдер хода по решению сервера. Тот же — без изменений;
+   * другой — сессия этого провайдера (resume с дельтой или новая со сводкой),
+   * ввод хода получает блок контекста первым элементом.
+   */
+  async function prepareTurnStart(threadId: string, params: Json, fallback: NativeProviderId, digests: Record<string, string>): Promise<Switched> {
+    const outer = typeof params.providerThreadId === 'string' ? params.providerThreadId : threadOuter.get(threadId) ?? null;
+    let state = await nativeOf(threadId);
+    if (!state && outer) state = { outerId: outer, active: fallback, sessions: { [fallback]: { nativeId: outer, coveredSeq: 0 } } };
+    const active: NativeProviderId = state?.active ?? fallback;
+    const peek = await server.call<{ providerId: NativeProviderId | null; modelId: string | null }>('peekProvider', {
+      threadId, requestedModel: typeof rec(params.options).model === 'string' ? rec(params.options).model : null,
+    }).catch(error => { log(`peekProvider ${threadId}: ${String(error)}`); return null; });
+    const target = peek?.providerId ?? active;
+    const template = threadTemplate.get(threadId);
+    if (target === active || !state || !template) {
+      if (target !== active) log(`switch ${threadId} ${active}→${target} skipped: ${!state ? 'нет сессии треда' : 'нет параметров сессии'}`);
+      const next = { ...params };
+      toNative(next, state);
+      if (active === 'codex') next.options = optionsFor(params.options, 'codex', peek?.providerId === 'codex' ? peek.modelId : null);
+      return { provider: active, params: next };
+    }
+
+    const inner = await ensureInner(target, digests[target] ?? null);
+    const from = PROVIDER_LABEL[active];
+    const to = PROVIDER_LABEL[target];
+    const requestId = typeof params.clientRequestId === 'string' ? params.clientRequestId : null;
+    const brief = async (afterSeq: number, mode: 'snapshot' | 'delta') => server.call<{ text: string; throughSeq: number }>('handoffBrief', {
+      threadId, afterSeq, mode, from, to, currentRequestId: requestId,
+    }).catch(error => {
+      log(`handoffBrief ${threadId}: ${String(error)}`);
+      // Сводку собрать не удалось: только как дочитать тред; курсор не двигаем.
+      return { text: `<cascade-handoff from="${from}" to="${to}">\n${historyHint(threadId, [], afterSeq)}\n</cascade-handoff>`, throughSeq: afterSeq };
+    });
+    const sessionOptions = optionsFor(template.options ?? params.options, target, target === 'codex' ? peek?.modelId ?? null : null);
+    const existing = state.sessions[target];
+    let handoff = await brief(existing?.coveredSeq ?? 0, existing ? 'delta' : 'snapshot');
+    let nativeId: string | null = null;
+    const notes: RouteNote[] = [];
+    if (existing) {
+      // Возврат: прежняя сессия этого провайдера (--resume) + дельта после её курсора.
+      const resumed = await innerRequest(inner, 'thread/resume', { ...template, threadId, providerThreadId: existing.nativeId, options: sessionOptions });
+      const result = rec(resumed.result);
+      if (!resumed.error && result.sessionRestorable !== false) nativeId = typeof result.providerThreadId === 'string' ? result.providerThreadId : existing.nativeId;
+      else {
+        const reason = String(rec(resumed.error).message ?? 'сессия не восстанавливается');
+        log(`resume ${target} ${existing.nativeId} failed: ${reason}`);
+        notes.push({ kind: 'problem', message: `Прежняя сессия ${to} недоступна (${reason.slice(0, 120)}) — новая сессия со сводкой треда.` });
+        handoff = await brief(0, 'snapshot');
+      }
+    }
+    if (!nativeId) {
+      const started = await innerRequest(inner, 'thread/start', { ...template, threadId, options: sessionOptions });
+      const id = rec(started.result).providerThreadId;
+      if (started.error || typeof id !== 'string') throw new Error(`${to}: новая сессия не открылась — ${String(rec(started.error).message ?? 'нет providerThreadId')}`);
+      nativeId = id;
+    }
+
+    const leaving = state.sessions[active];
+    const next: NativeSessions = {
+      outerId: state.outerId,
+      active: target,
+      sessions: {
+        ...state.sessions,
+        // Уходящая сессия видела тред до текущего запроса.
+        ...(leaving ? { [active]: { nativeId: leaving.nativeId, coveredSeq: Math.max(leaving.coveredSeq, handoff.throughSeq) } } : {}),
+        [target]: { nativeId, coveredSeq: handoff.throughSeq },
+      },
+    };
+    remember(threadId, next);
+    threadInner.set(threadId, inner);
+    void server.call('nativeSessions', { threadId, sessions: next }).catch(error => log(`nativeSessions save ${threadId}: ${String(error)}`));
+    if (notes.length) emitNotes(threadId, notes);
+    log(`switch ${threadId} ${active}→${target} session=${nativeId} through=${handoff.throughSeq}${existing ? ' (resume)' : ''}`);
+
+    const input = Array.isArray(params.input) ? params.input as unknown[] : [];
+    return {
+      provider: target,
+      params: {
+        ...params,
+        providerThreadId: nativeId,
+        options: optionsFor(params.options, target, target === 'codex' ? peek?.modelId ?? null : null),
+        input: handoff.text ? [{ type: 'text', text: handoff.text }, ...input] : input,
+      },
+    };
+  }
+
   async function routeThreadCommand(message: Json, line: string): Promise<void> {
     const params = rec(message.params);
+    const method = String(message.method);
     const threadId = typeof params.threadId === 'string' ? params.threadId : null;
     const { provider: requested, digests, forceIncompatible } = cascadeOptions(params);
+    if (threadId && (method === 'thread/start' || method === 'thread/resume')) {
+      threadTemplate.set(threadId, sessionTemplate(params));
+      if (method === 'thread/resume' && typeof params.providerThreadId === 'string' && !threadOuter.has(threadId)) threadOuter.set(threadId, params.providerThreadId);
+      if (method === 'thread/start' && message.id !== undefined) startRequests.set(JSON.stringify(message.id), threadId);
+    }
+    if (threadId && typeof params.providerThreadId === 'string' && !threadOuter.has(threadId) && method !== 'thread/start') threadOuter.set(threadId, params.providerThreadId);
+
     const known = threadId ? threadInner.get(threadId) : undefined;
-    const provider: NativeProviderId = requested ?? known?.loaded.spec.providerId ?? 'claude-code';
+    // Активный провайдер треда (переход Claude ↔ Codex) главнее подсказки сервера.
+    const state = threadId && method !== 'thread/start' ? await nativeOf(threadId) : null;
+    let provider: NativeProviderId = state?.active ?? requested ?? known?.loaded.spec.providerId ?? 'claude-code';
+    let outgoing = line;
+    try {
+      if (threadId && method === 'turn/start') {
+        const switched = await prepareTurnStart(threadId, params, provider, digests);
+        provider = switched.provider;
+        outgoing = JSON.stringify({ ...message, params: switched.params });
+      } else if (state && typeof params.providerThreadId === 'string') {
+        const next = { ...params };
+        toNative(next, state);
+        if (next.providerThreadId !== params.providerThreadId) outgoing = JSON.stringify({ ...message, params: next });
+      }
+    } catch (error) {
+      const text = error instanceof NativeLoadError ? nativeLoadHint(error) : error instanceof Error ? error.message : String(error);
+      log(`refuse ${method}: ${text}`);
+      if (message.id !== undefined) fail(message.id, `Каскад подписок: ${text}`, error instanceof NativeLoadError ? { recovery: { kind: 'restartRecommended', message: text, retryable: true } } : undefined);
+      return;
+    }
     const digest = digests[provider] ?? null;
     let inner: Inner;
     try {
       // Приёмка S13: тестовый переключатель делает мост «несовместимым» — тот же путь, что у смены формы моста.
       if (forceIncompatible) throw new NativeLoadError('shape', provider, 'тестовый переключатель S13: мост помечен несовместимым');
-      if (known && known.loaded.spec.providerId === provider && (digest === null || known.loaded.digest === digest)) inner = known;
+      const current = threadId ? threadInner.get(threadId) : undefined;
+      if (current && current.loaded.spec.providerId === provider && (digest === null || current.loaded.digest === digest)) inner = current;
       else inner = await ensureInner(provider, digest);
     } catch (error) {
       const err = error instanceof NativeLoadError ? error : new NativeLoadError('import-failed', provider, String(error));
       const hint = nativeLoadHint(err);
-      log(`refuse ${String(message.method)}: ${err.code} ${err.message}`);
+      log(`refuse ${method}: ${err.code} ${err.message}`);
       if (message.id !== undefined) fail(message.id, hint, { recovery: { kind: 'restartRecommended', message: hint, retryable: err.code === 'artifact-missing' || err.code === 'digest-mismatch' } });
       return;
     }
     if (threadId) threadInner.set(threadId, inner);
-    inner.loaded.entry.handleLine(line);
+    inner.loaded.entry.handleLine(outgoing);
   }
 
-  // Очередь входящих: импорт асинхронный, порядок строк сохраняем.
+  // Очередь входящих: импорт асинхронный, порядок строк сохраняем. Ответы
+  // runtime на карточки каскада идут мимо очереди: ход ждёт их внутри неё.
   let chain: Promise<void> = Promise.resolve();
   function handleLine(line: string): void {
+    if (answerAsk(line)) return;
     chain = chain.then(() => handleOne(line)).catch(error => log(`handleLine: ${String(error)}`));
+  }
+
+  function answerAsk(line: string): boolean {
+    if (pendingAsks.size === 0 || !line.includes('cascade-ask-')) return false;
+    let message: Json;
+    try { message = JSON.parse(line) as Json; } catch { return false; }
+    if (message.method !== undefined || typeof message.id !== 'string') return false;
+    const pending = pendingAsks.get(message.id);
+    if (!pending) return false;
+    pendingAsks.delete(message.id);
+    if (message.error !== undefined) pending.reject(new Error(String(rec(message.error).message ?? 'runtime отклонил карточку')));
+    else pending.resolve(message.result);
+    return true;
   }
 
   async function handleOne(line: string): Promise<void> {
@@ -328,6 +626,7 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
   };
 
   function closeFeed(): Promise<void> {
+    for (const [id, pending] of pendingAsks) { pendingAsks.delete(id); pending.reject(new Error('мост закрывается')); }
     const server = feedServer;
     feedServer = null;
     if (!server) return Promise.resolve();

@@ -18,11 +18,14 @@ export interface BriefInput {
   throughSeq?: number | null;
   /** Ключевые сообщения: seq → короткая подпись («решение владельца по .env»). */
   keyMessages?: readonly { seq: number; label: string }[];
+  /** Нижняя граница сводки (курсор): события после неё дочитываются `--after-seq`. */
+  afterSeq?: number;
 }
 
-export function historyHint(threadId: string, keyMessages: BriefInput['keyMessages'] = []): string {
+export function historyHint(threadId: string, keyMessages: BriefInput['keyMessages'] = [], afterSeq?: number): string {
   const lines = [
     'Полная история этого треда BB доступна по запросу — читай её, когда сводки мало или нужно точное решение пользователя:',
+    ...(afterSeq !== undefined ? [`- события треда после курсора: \`bb thread messages ${threadId} --json --after-seq ${afterSeq}\` (постранично, следующая страница — \`--after-seq <последний seq>\`);`] : []),
     `- последние ходы: \`bb thread messages ${threadId} --format minimal\` (\`--limit <n>\`, весь тред — \`--all\`);`,
     `- одно сообщение с соседними: \`bb thread messages ${threadId} --message <seq> --context 2\`.`,
   ];
@@ -41,7 +44,7 @@ export function crossProviderBrief(input: BriefInput): string {
     '',
     input.summary.trim(),
     '',
-    historyHint(input.threadId, input.keyMessages),
+    historyHint(input.threadId, input.keyMessages, input.afterSeq),
     '</cascade-handoff>',
   ].join('\n');
 }

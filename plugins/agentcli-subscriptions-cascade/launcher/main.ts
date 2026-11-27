@@ -9,10 +9,15 @@
 // Если сервер каскада не ответил — ход НЕ запускается (код 75, понятный текст):
 // штатный CLI этой машины мог бы молча уйти на исчерпанную ступень. Штатно
 // (без каскада) запускаются только служебные вызовы CLI и запуск вне треда.
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { dirname } from 'node:path';
-import { routeNoteSchema, routeTurnOutputSchema, type LimitObservation, type NativeProvider, type RouteNote, type RouteTurnOutput } from '../bridge/route-contract.ts';
+import {
+  answerConfirmationOutputSchema, routeNoteSchema, routeTurnOutputSchema,
+  type ConfirmPrompt, type LimitObservation, type NativeProvider, type RouteNote, type RouteTurnOutput, type RoutedTurn,
+} from '../bridge/route-contract.ts';
+import { parseBridgeAnswer, resolveRoute, type BridgeAnswer } from './confirm.ts';
 import { claudeSessionInfo, claudeSessionPath, flagValue, remoteArgs, remoteEnv, replaceModel, resumeOrStart } from './cli-args.ts';
 import { spawn } from 'node:child_process';
 import { resolveRealExecutable, runLocal } from './local.ts';
@@ -112,8 +117,61 @@ function sendFeed(io: LauncherIo, threadId: string, notes: readonly RouteNote[])
   });
 }
 
+/**
+ * Карточка подтверждения: запрос мосту через тот же сокет, ответ — строкой
+ * обратно. Таймаута нет: ход ждёт владельца. Нет сокета или он закрылся без
+ * ответа — unavailable (ход не идёт, тред цел).
+ */
+export function askBridge(io: Pick<LauncherIo, 'env'>, threadId: string, prompt: ConfirmPrompt, turnKey: string): Promise<BridgeAnswer> {
+  const path = io.env[LAUNCHER_ENV.feed];
+  if (!path) return Promise.resolve({ action: 'unavailable', reason: 'мост каскада не дал сокет для карточки' });
+  return new Promise(resolve => {
+    let settled = false;
+    let buffer = '';
+    const finish = (answer: BridgeAnswer) => { if (settled) return; settled = true; socket.destroy(); resolve(answer); };
+    const socket = connect(path);
+    socket.setEncoding('utf8');
+    socket.on('error', error => finish({ action: 'unavailable', reason: `сокет моста: ${error.message}` }));
+    socket.on('close', () => finish({ action: 'unavailable', reason: 'мост закрыл карточку без ответа' }));
+    socket.on('data', chunk => {
+      buffer += chunk;
+      const newline = buffer.indexOf('\n');
+      if (newline === -1) return;
+      let value: unknown = null;
+      try { value = JSON.parse(buffer.slice(0, newline)); } catch { /* ниже — unavailable */ }
+      finish(parseBridgeAnswer(value));
+    });
+    socket.on('connect', () => socket.write(`${JSON.stringify({ threadId, turnKey, confirm: prompt })}\n`));
+  });
+}
+
+/** Решение хода с карточками подтверждения (launcher/confirm.ts). */
+function routeWithConfirm(io: LauncherIo, threadId: string, input: { provider: NativeProvider; requestedModel: string | null; probe: boolean }): Promise<RoutedTurn> {
+  const projectId = io.env.BB_PROJECT_ID ?? null;
+  const turnKey = `turn-${randomUUID()}`;
+  return resolveRoute({
+    // Решение с прогрессом подготовки в ленте и таймаутом ROUTE_TIMEOUT_MS (синхронизация идёт минутами).
+    routeTurn: key => routeWithProgress(io, threadId, {
+      threadId, projectId, provider: input.provider, requestedModel: input.requestedModel, probe: input.probe, cwd: io.cwd, turnKey: key,
+    }),
+    ask: (prompt, key) => askBridge(io, threadId, prompt, key),
+    answer: async a => answerConfirmationOutputSchema.parse(await callServer(io, 'answerConfirmation', { threadId, projectId, ...a }, 60_000)),
+    feed: notes => sendFeed(io, threadId, notes),
+    log: line => logLine(io, line),
+  }, turnKey);
+}
+
 /** Лимит из строки stream-json Claude (`rate_limit_event`). */
+/** Текст ошибки исчерпания в `result` Claude Code (без rate_limit_event). */
+const LIMIT_TEXT = /hit your (?:weekly |session |5-hour |daily |opus |usage )*limit|usage limit reached|(?:weekly|session) limit (?:reached|exceeded)/iu;
+
 export function limitFromClaudeLine(line: string): LimitObservation | null {
+  if (line.includes('"result"') && LIMIT_TEXT.test(line)) {
+    try {
+      const message = JSON.parse(line) as Record<string, unknown>;
+      if (message.type === 'result' && message.is_error === true) return { status: 'rejected', resetsAt: null, windowType: 'result-text', raw: { status: 'rejected' } };
+    } catch { /* не JSON */ }
+  }
   if (!line.includes('rate_limit')) return null;
   let message: Record<string, unknown>;
   try { message = JSON.parse(line) as Record<string, unknown>; } catch { return null; }
@@ -186,11 +244,9 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
   const session = claudeSessionInfo(args);
   const probe = session.ephemeral;
   const requestedModel = flagValue(args, '--model');
-  let route: RouteTurnOutput;
+  let route: RoutedTurn;
   try {
-    route = await routeWithProgress(io, threadId, {
-      threadId, projectId: io.env.BB_PROJECT_ID ?? null, provider, requestedModel, probe, cwd: io.cwd,
-    });
+    route = await routeWithConfirm(io, threadId, { provider, requestedModel, probe });
   } catch (error) {
     return refuseServerDown(io, threadId, error);
   }
@@ -214,9 +270,10 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
     return runSessionRelay(route, sessionArgs, sessionId, {
       start: (r, childArgs, onLine) => stopWith(io, startStageChild(io, provider, r, childArgs, onLine)),
       sessionExists: r => localSessionFile(io, sessionId, r.cwd) !== null,
-      routeTurn: () => routeWithProgress(io, threadId, {
-        threadId, projectId: io.env.BB_PROJECT_ID ?? null, provider, requestedModel, probe: false, cwd: io.cwd,
-      }),
+      // Каждое новое сообщение пользователя — новый ход со своим turnKey.
+      routeTurn: () => routeWithConfirm(io, threadId, { provider, requestedModel, probe: false }),
+      // Лимит в ходе — отметка до ответа мосту: provider-retry сразу увидит свободную ступень.
+      markLimits: async (r, limits) => { await callServer(io, 'turnLimits', { threadId, stepId: r.stepId, limits: limits.slice(-20) }, 10_000); },
       finishTurn: async (r, info) => {
         const finish = await callServer<{ notes: RouteNote[] }>(io, 'finishTurn', { ...finishInfo(r), ...info, limits: info.limits.slice(-20) }, 120_000);
         await sendFeed(io, threadId, finish.notes);
@@ -299,7 +356,7 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
   return exitCode ?? 1;
 }
 
-type RunRoute = Extract<RouteTurnOutput, { action: 'run' }>;
+type RunRoute = Extract<RoutedTurn, { action: 'run' }>;
 
 /** CLI ступени останавливается вместе с запускателем (S17): kill доходит до машины ступени. */
 export function stopWith(io: Pick<LauncherIo, 'signal'>, child: StageChild): StageChild {
@@ -394,11 +451,10 @@ export function startStageChild(io: LauncherIo, provider: NativeProvider, route:
 
 /** Codex: app-server на всё время runtime. Ступень — на старте процесса. */
 async function runCodex(io: LauncherIo, args: string[], threadId: string): Promise<number> {
-  let route: RouteTurnOutput;
+  // Согласие на ступень Codex спрашивается здесь, при входе на неё (старт app-server).
+  let route: RoutedTurn;
   try {
-    route = await routeWithProgress(io, threadId, {
-      threadId, projectId: io.env.BB_PROJECT_ID ?? null, provider: 'codex', requestedModel: null, probe: false, cwd: io.cwd,
-    });
+    route = await routeWithConfirm(io, threadId, { provider: 'codex', requestedModel: null, probe: false });
   } catch (error) {
     return refuseServerDown(io, threadId, error);
   }
