@@ -78,3 +78,28 @@ test('сервер: «Добавить найденное», сохранени�
   const plan = await harness.callRpc('wizardPlan', { hostId: 'host_mac' }) as { steps: { id: string; privilege: string }[] };
   assert.equal(plan.steps.find(s => s.id === 'folder')!.privilege, 'macos-dialog');
 });
+
+test('пустые настройки → model/list отдаёт профили (до обнаружения и до первого треда)', async () => {
+  // Сервер не открывали, обнаружение не звали: регистрация при запуске.
+  const { harness } = setup();
+  let provider = harness.registrations.providerRegistrations.find(p => p.id === 'subscriptions-cascade');
+  for (let i = 0; i < 50 && !provider; i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+    provider = harness.registrations.providerRegistrations.find(p => p.id === 'subscriptions-cascade');
+  }
+  assert.ok(provider, 'провайдер зарегистрирован при запуске');
+  const catalog = (provider!.experimental_bridgeOptions as { catalog: { id: string }[] }).catalog;
+  assert.deepEqual(catalog.map(m => m.id), ['auto', 'auto-no-codex', 'opus-then-auto', 'fable-then-auto', 'only-opus-5.5', 'only-fable-5.2']);
+  assert.deepEqual((provider!.models?.fallback ?? []).map(m => m.id), catalog.map(m => m.id));
+});
+
+test('нет ни одной машины → каталог всё равно из профилей; режим исполнения по умолчанию — provider', async () => {
+  const { providerModels } = await import('./profiles.ts');
+  const { seedConfig } = await import('./config.ts');
+  const empty = seedConfig([]);
+  assert.equal(empty.policies.executionMode, 'provider', 'пустые настройки — каскад готов к работе');
+  const models = providerModels(empty, []);
+  assert.deepEqual(models.map(m => m.id), ['auto', 'auto-no-codex', 'opus-then-auto', 'fable-then-auto', 'only-opus-5.5', 'only-fable-5.2']);
+  assert.equal(models[0]!.isDefault, true);
+  assert.match(models[0]!.description, /ещё не найдены/u);
+});

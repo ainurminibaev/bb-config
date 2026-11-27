@@ -378,3 +378,16 @@ test('маршрут: следующая ступень другого пров�
   if (r.action === 'refuse') assert.match(r.message, /переход между провайдерами/u);
   void fx;
 });
+
+test('обёртка: model/list без каталога от сервера — профили каскада по умолчанию, а не пустой список', async () => {
+  const { bridge, out } = wrapperFixture({ missing: true });
+  bridge.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'model/list', params: { cwd: '/' } }));
+  bridge.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 8, method: 'model/list', params: { providerOptions: { catalog: [] } } }));
+  bridge.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'model/list', params: { providerOptions: { catalog: [{ id: 'mine', displayName: 'Мой' }] } } }));
+  await bridge.close();
+  const models = (id: number) => ((out.find(m => m.id === id)!.result as { models: { id: string; isDefault?: boolean }[] }).models);
+  assert.deepEqual(models(7).map(m => m.id), ['auto', 'auto-no-codex', 'opus-then-auto', 'fable-then-auto', 'only-opus-5.5', 'only-fable-5.2']);
+  assert.equal(models(7)[0]!.isDefault, true);
+  assert.deepEqual(models(8).map(m => m.id), models(7).map(m => m.id), 'пустой каталог — тоже статический');
+  assert.deepEqual(models(9).map(m => m.id), ['mine'], 'каталог сервера главнее');
+});

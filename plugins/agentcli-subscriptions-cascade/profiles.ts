@@ -158,20 +158,31 @@ export interface ProviderModel {
 /**
  * Пункты списка моделей провайдера «Каскад»: включённые профили в порядке
  * владельца, у которых есть хотя бы одна участвующая ступень. Первый — по умолчанию.
+ *
+ * Список никогда не пустой, пока есть включённые профили: если ни у одного нет
+ * ступени (пустые настройки, машины ещё не обнаружены), показываются все
+ * включённые профили с подсказкой — иначе BB отвечает «No models available»
+ * и тред на каскаде создать нельзя.
  */
 export function providerModels(config: CascadeConfig, accounts: readonly DiscoveredAccount[]): ProviderModel[] {
+  const entry = (p: Profile, description: string, isDefault: boolean): ProviderModel => ({
+    id: p.id, model: p.id, displayName: p.name, description,
+    isDefault, defaultReasoningEffort: 'medium', supportedReasoningEfforts: EFFORTS.map(e => ({ ...e })),
+  });
   const out: ProviderModel[] = [];
   for (const p of config.profiles) {
     if (!p.enabled) continue;
     const plan = buildPlan({ config, requestedModel: p.id, accounts, thread: NEUTRAL_THREAD });
     if (!Array.isArray(plan) || !plan.some(a => a.skip === null)) continue;
-    out.push({
-      id: p.id, model: p.id, displayName: p.name, description: describeProfile(config, p, accounts),
-      isDefault: out.length === 0, defaultReasoningEffort: 'medium', supportedReasoningEfforts: EFFORTS.map(e => ({ ...e })),
-    });
+    out.push(entry(p, describeProfile(config, p, accounts), out.length === 0));
   }
-  return out;
+  if (out.length > 0) return out;
+  const enabled = config.profiles.filter(p => p.enabled);
+  return enabled.map((p, i) => entry(p, PENDING_STEPS_HINT, i === 0));
 }
+
+/** Подпись профиля, пока ступени не найдены (до обнаружения машин). */
+export const PENDING_STEPS_HINT = 'Ступени каскада ещё не найдены — машины определятся при первом ходе или в настройках «Каскада».';
 
 // ---- Лимиты для превью и тестовый источник квоты ----
 

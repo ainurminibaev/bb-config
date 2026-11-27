@@ -417,9 +417,9 @@ function Advanced({ draft, set }: { draft: CascadeConfig; set(patch: Partial<Cas
         <NumberField label="Свежесть показания лимита, с" changed={changed.has('positiveFreshSeconds')} value={p.positiveFreshSeconds} min={5} onChange={v => put({ positiveFreshSeconds: v })} />
         <label className="asc-field"><span>Исполнение хода{changed.has('executionMode') && <ChangedMark />}</span>
           <select value={p.executionMode} onChange={e => put({ executionMode: e.target.value as CascadeConfig['policies']['executionMode'] })}>
-            <option value="off">Выключено — только настройка</option>
-            <option value="relay" disabled>Relay под Claude Code и Codex (в разработке)</option>
-            <option value="provider" disabled>Свой провайдер «Каскад» (в разработке)</option>
+            <option value="provider">Свой провайдер «Каскад» — ходы идут по ступеням</option>
+            <option value="off">Выключено — ходы каскада отклоняются</option>
+            <option value="relay" disabled>Relay под Claude Code и Codex (не реализован)</option>
           </select>
         </label>
         <div className="asc-row asc-span">

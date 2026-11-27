@@ -111,7 +111,8 @@ export const policiesSchema = z.object({
    * Путь исполнения хода: off — только настройка; relay — этап 1 (путь A,
    * подмена CLI штатных провайдеров); provider — этап 2 (путь B, свой провайдер).
    */
-  executionMode: z.enum(['off', 'relay', 'provider']).default('off'),
+  // Пустые настройки — каскад готов к работе; «Выключено» (off) — явный выбор владельца.
+  executionMode: z.enum(['off', 'relay', 'provider']).default('provider'),
   /**
    * Общий приоритет моделей (ключи строк таблицы) для политики `any`.
    * Строки, которых здесь нет, идут следом в порядке таблицы.

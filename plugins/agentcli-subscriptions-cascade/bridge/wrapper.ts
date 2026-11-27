@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LAUNCHER_ENV } from '../launcher/main.ts';
 import type { RouteNote } from './route-contract.ts';
+import { catalogFrom } from './static-catalog.ts';
 import {
   loadNativeBridge, NativeLoadError, nativeLoadHint, NATIVE_BRIDGES,
   type BridgeContext, type BridgeEntry, type LoadDeps, type LoadedNativeBridge, type NativeProviderId,
@@ -287,8 +288,7 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
       return;
     }
     if (method === 'model/list') {
-      const catalog = rec(rec(message.params).providerOptions).catalog;
-      reply(id, { models: Array.isArray(catalog) ? catalog : [], selectedOnlyModels: [] });
+      reply(id, { models: catalogFrom(rec(message.params).providerOptions), selectedOnlyModels: [] });
       return;
     }
     if (method === 'initialized' && id === undefined) {

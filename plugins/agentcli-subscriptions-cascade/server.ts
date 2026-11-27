@@ -77,7 +77,21 @@ export default function plugin(bb: BbPluginApi) {
     if (raw) {
       try { return { config: normalizeConfig(JSON.parse(raw)), seeded: false }; } catch { /* битый JSON — показываем умолчание и issue */ }
     }
+    // Пустые настройки: каскад по умолчанию строится по машинам BB. До первого
+    // обнаружения берём лёгкий список машин (без проб), иначе каскад без машин
+    // не даёт ни ступеней, ни каталога моделей.
+    if (hosts.length === 0) await quickHosts().catch(() => undefined);
     return { config: seedConfig(hosts.map(h => ({ id: h.hostId, name: h.name, platform: h.platform }))), seeded: true };
+  }
+
+  /** Машины BB одним вызовом, без проб и лимитов: имя и платформа по имени. */
+  async function quickHosts(): Promise<void> {
+    const list = await bb.sdk.hosts.list({ signal: AbortSignal.timeout(10_000) });
+    if (hosts.length > 0) return; // обнаружение успело раньше
+    hosts = list.filter(h => h.lifecycle.phase === 'active').map(h => ({
+      hostId: h.id, name: h.name, connected: h.status === 'connected',
+      platform: (/\bmac/i.test(h.name) ? 'macos' : /\bwin/i.test(h.name) ? 'windows' : 'linux') as Platform,
+    }));
   }
 
   async function probe(hostId: string, sharedPath: string): Promise<ProbeResult> {
@@ -271,8 +285,13 @@ export default function plugin(bb: BbPluginApi) {
     },
   });
 
-  // Регистрация провайдера при загрузке — по сохранённой конфигурации, без обнаружения.
-  void loadConfig().then(({ config }) => syncProvider(config)).catch(error => bb.log.warn(`провайдер: ${String(error)}`));
+  // Регистрация провайдера при загрузке: сразу (каталог есть всегда, см. providerModels),
+  // затем в фоне обнаружение машин и уточнённый каталог — без ожидания экрана настроек.
+  void loadConfig().then(({ config }) => syncProvider(config))
+    .catch(error => bb.log.warn(`провайдер: ${String(error)}`))
+    .then(() => discover(false))
+    .then(() => loadConfig()).then(({ config }) => syncProvider(config))
+    .catch(error => bb.log.warn(`обнаружение при запуске: ${String(error)}`));
   settings.onChange(() => { void loadConfig().then(({ config }) => syncProvider(config)).catch(() => undefined); });
 }
 
