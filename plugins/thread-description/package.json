@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-thread-description",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Keeps a short description and a recap for every BB thread and subthread",
   "engines": {

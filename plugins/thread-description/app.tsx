@@ -77,7 +77,8 @@ function InfoButton({ threadId, kind }: { threadId: string; kind: 'description' 
   const hover = (on: boolean) => {
     window.clearTimeout(hideTimer.current);
     // The gap lets the pointer travel from the icon to the card.
-    hideTimer.current = window.setTimeout(() => setHovered(on), on ? 150 : 300);
+    if (on) { setHovered(true); return; }
+    hideTimer.current = window.setTimeout(() => setHovered(false), 300);
   };
   useEffect(() => () => window.clearTimeout(hideTimer.current), []);
   const unseen = Boolean(view?.recapUnseen);
@@ -108,23 +109,21 @@ function InfoButton({ threadId, kind }: { threadId: string; kind: 'description' 
   const busy = view?.busy ?? false;
   const problem = failure ?? view?.error ?? null;
   const label = kind === 'recap' ? 'Сводка треда' : 'Описание треда';
-  const mouse = (event: { pointerType: string }) => event.pointerType === 'mouse';
   const main = kind === 'recap'
     ? view?.recap || (busy ? 'Сводка готовится…' : 'Сводки пока нет.')
     : view?.description || (busy ? 'Описание готовится…' : 'Описания пока нет.');
   const loading = busy && !(kind === 'recap' ? view?.recap : view?.description);
   return <>
-    <button ref={button} type="button" className="tdesc-btn" aria-label={label} title={open ? undefined : label} aria-expanded={open}
+    <button ref={button} type="button" className="tdesc-btn" aria-label={label} aria-expanded={open}
       data-empty={kind === 'recap' ? !view?.recap : !view?.description} data-busy={busy} data-unseen={kind === 'recap' && unseen && !open}
       onClick={() => {
         if (pinned) { close(); return; }
         setPinned(true);
         if (kind === 'recap' && !view?.recap && !busy) void refresh();
       }}
-      onPointerEnter={(event) => { if (mouse(event)) hover(true); }}
-      onPointerLeave={(event) => { if (mouse(event)) hover(false); }}>{kind === 'recap' ? <RecapIcon /> : <InfoIcon />}</button>
+      onMouseEnter={() => hover(true)} onMouseLeave={() => hover(false)}>{kind === 'recap' ? <RecapIcon /> : <InfoIcon />}</button>
     {open && place && createPortal(<div ref={popup} className="tdesc-pop" role="dialog" aria-label={label} style={place}
-      onPointerEnter={(event) => { if (mouse(event)) hover(true); }} onPointerLeave={(event) => { if (mouse(event)) hover(false); }}>
+      onMouseEnter={() => hover(true)} onMouseLeave={() => hover(false)}>
       <div className="tdesc-head">
         <span className="tdesc-title">{kind === 'recap' ? 'Сейчас' : 'О чём тред'}</span>
         {draft === null && <span className="tdesc-tools">
