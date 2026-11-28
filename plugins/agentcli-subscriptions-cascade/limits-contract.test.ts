@@ -18,6 +18,7 @@ const S = JSON.parse(readFileSync(SAMPLES_URL, 'utf8')) as {
   receivedAt: string;
   usageLimits: Record<string, { response: unknown; expected: { state: string; status: string; windows: Record<string, number> } }>;
   vclaude: { rpc: unknown; expected: { state: string; usedPercent: number; remainingUnits: number } };
+  vclaudeCabinetCache: { rpc: unknown; expected: { state: string; usedPercent: number; remainingUnits: number } };
   [source: string]: unknown;
 };
 const NOW = Date.parse(S.receivedAt);
@@ -73,6 +74,20 @@ test('шлюз vclaude: пакет из кабинета (кэш Thread Account 
 });
 
 const TAU_SAMPLES_URL = new URL('../thread-account-usage/fixtures/limits-samples.json', import.meta.url);
+
+test('0.3.8: живой ответ кабинета vclaude из кэша (14 мин, израсходовано 98 %) — квота известна, остаток в единицах', async () => {
+  const sample = S.vclaudeCabinetCache;
+  const reg = defaultRegistry({ usageLimits: async () => ({}), vclaudeUsage: async () => sample.rpc, now: () => NOW });
+  const st = stage('claude-code', { authority: 'gateway', quotaSource: 'vclaude' });
+  const reading = await reg.get('claude-code')!.limits.read(st, new AbortController().signal);
+  const health = healthFromReading(reading, null, { connected: true, now: NOW, policies });
+  assert.equal(stateOf(health), sample.expected.state, `vclaude из кэша кабинета: ${health.reason}`);
+  assert.ok(reading.kind === 'sample');
+  assert.equal(Math.round(reading.windows[0]!.usedPercent!), sample.expected.usedPercent);
+  assert.equal(reading.windows[0]!.remaining?.amount, sample.expected.remainingUnits);
+  // Старше 20 минут — честно «неизвестно».
+  assert.equal(stateOf(healthFromReading(reading, null, { connected: true, now: NOW + 7 * 60_000, policies })), 'unknown');
+});
 
 test('образцы у каскада и Thread Account Usage — один и тот же файл', { skip: !existsSync(TAU_SAMPLES_URL) && 'нет соседнего плагина (установленная копия)' }, () => {
   const own = readFileSync(SAMPLES_URL);

@@ -261,6 +261,11 @@ export default function plugin(bb: BbPluginApi) {
       }))) : [];
       return { host: { hostId: h.id, name: h.name, connected: live, platform: (facts?.platform ?? 'unknown') as Platform }, found };
     }));
+    // 0.3.8: ступени без показания (шлюз vclaude после переустановки, новые ступени) — опрос
+    // в фоне сразу после обнаружения: `limits` и первый ход видят квоту, а не «неизвестно».
+    void loadConfig().then(({ config }) => {
+      for (const step of config.steps) if (step.enabled && !monitor.current(stageOf(step))) void monitor.refresh(stageOf(step), 20_000).catch(() => undefined);
+    }).catch(() => undefined);
     hosts = perHost.map(p => p.host);
     accounts = perHost.flatMap(p => p.found);
     discoveredAt = Date.now();

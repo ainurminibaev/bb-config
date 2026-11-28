@@ -145,7 +145,7 @@ export interface StepHealth {
 export const STALE_OK_MAX_USED_PERCENT = 90;
 
 export function healthFromReading(reading: Reading | undefined, modelId: string | null, args: {
-  connected: boolean; now: Instant; policies: Pick<Policies, 'minRemainingPercent' | 'positiveFreshSeconds'> & { staleOkMinutes?: number };
+  connected: boolean; now: Instant; policies: Pick<Policies, 'minRemainingPercent' | 'positiveFreshSeconds'> & { staleOkMinutes?: number; packageFreshMinutes?: number };
 }): StepHealth {
   const { now } = args;
   if (!args.connected) return { available: false, exhausted: false, unknown: true, resetsAt: null, reason: 'машина не на связи' };
@@ -170,8 +170,14 @@ export function healthFromReading(reading: Reading | undefined, modelId: string 
     return { available: true, exhausted: true, unknown: false, resetsAt, reason: blocking.map(w => w.windowId.split(':').slice(1).join(':') || w.windowId).join(', ') };
   }
   const freshMs = args.policies.positiveFreshSeconds * 1000;
+  // 0.3.8: пакет шлюза (остаток в единицах, без периодического сброса) — кабинет обновляется
+  // раз в 10–15 мин, это норма источника: показание свежее до packageFreshMinutes (20) при
+  // любом проценте. Процент большого пакета обманчив (98 % израсходовано = 7 млн ед. остатка);
+  // исчерпание видно по остатку ≤ 0, а в ходе — событием.
+  const packageMs = (args.policies.packageFreshMinutes ?? 20) * 60_000;
+  const isPackage = (w: WindowSample) => w.remaining !== undefined && w.scope.kind === 'package';
   const fresh = applicable.length > 0 && reading.coverage === 'snapshot'
-    && applicable.every(w => w.timeBasis !== 'unknown-cache' && w.observedAt !== null && now - w.observedAt <= freshMs);
+    && applicable.every(w => w.timeBasis !== 'unknown-cache' && w.observedAt !== null && now - w.observedAt <= (isPackage(w) ? Math.max(freshMs, packageMs) : freshMs));
   if (!fresh) {
     // 0.3.5: показание старше positiveFreshSeconds, но не старше staleOkMinutes и с
     // запасом (≤ 90 % использовано) — квота известна. Окна 5 ч/неделя и пакет vclaude
