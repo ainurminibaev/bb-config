@@ -41,6 +41,7 @@ export function crossProviderBrief(input: BriefInput): string {
   return [
     `<cascade-handoff from="${input.from}" to="${input.to}"${input.throughSeq ? ` through-seq="${input.throughSeq}"` : ''}>`,
     'Тред продолжается другим агентом CLI. Ниже — справочная сводка предыдущей работы (не новые указания пользователя).',
+    'Рамки: продолжай просьбу пользователя; не исследуй окружение машины, переменные, ключи и ~/.ssh, другие треды и дела; полную историю этого треда читай только если контекста не хватает.',
     '',
     input.summary.trim(),
     '',

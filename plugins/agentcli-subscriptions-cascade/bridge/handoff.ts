@@ -43,9 +43,20 @@ export const RETRY_CONTINUATION = /^\s*(?:please\s+)?continue[.!]?\s*$/iu;
  * который сам не «продолжи». null — текущий ввод не автоповтор или просьбы нет.
  */
 export function pendingRequest(events: readonly ThreadEventRow[], input: Pick<HandoffInput, 'currentRequestId' | 'currentText'>): { seq: number; text: string } | null {
-  if (!input.currentText || !RETRY_CONTINUATION.test(input.currentText)) return null;
   const sorted = [...events].sort((a, b) => a.seq - b.seq);
-  const stop = input.currentRequestId ? sorted.findIndex(e => e.type === 'client/turn/requested' && str(rec(e.data).requestId) === input.currentRequestId) : -1;
+  const requestOf = (id: string) => sorted.find(e => e.type === 'client/turn/requested' && str(rec(e.data).requestId) === id);
+  // Автоповтор BB помечает запрос `retryOfRequestId` — исходный запрос известен точно.
+  const current = input.currentRequestId ? requestOf(input.currentRequestId) : undefined;
+  const retryOf = current ? str(rec(current.data).retryOfRequestId) : '';
+  if (retryOf) {
+    let origin = requestOf(retryOf);
+    // Повтор повтора — к самому первому запросу.
+    for (let i = 0; origin && str(rec(origin.data).retryOfRequestId) && i < 10; i += 1) origin = requestOf(str(rec(origin.data).retryOfRequestId)) ?? origin;
+    const text = origin ? inputText(rec(origin.data)) : '';
+    if (origin && text && !RETRY_CONTINUATION.test(text)) return { seq: origin.seq, text };
+  }
+  if (!input.currentText || !RETRY_CONTINUATION.test(input.currentText)) return null;
+  const stop = current ? sorted.indexOf(current) : -1;
   const before = stop === -1 ? sorted : sorted.slice(0, stop);
   for (let i = before.length - 1; i >= 0; i -= 1) {
     const row = before[i]!;
@@ -61,7 +72,10 @@ function currentTaskBlock(pending: { seq: number; text: string }): string {
   return [
     `<current-request seq="${pending.seq}">`,
     'Этот ход — автоматический повтор после перехода на тебя (ввод «Please continue.» прислал BB, это не новая задача).',
-    'Выполни исходную просьбу пользователя ниже; уже сделанное по сводке не повторяй, тред и дела не исследуй без надобности:',
+    'Выполни исходную просьбу пользователя ниже; уже сделанное по сводке не повторяй.',
+    'Рамки: не исследуй окружение машины, переменные, ключи и ~/.ssh, другие треды и дела; историю этого треда читай',
+    'через `bb thread messages` этого треда только если контекста не хватает для исходной просьбы.',
+    '',
     '',
     clip(pending.text, 8000),
     '</current-request>',

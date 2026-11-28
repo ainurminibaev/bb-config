@@ -18,6 +18,7 @@ import {
   type ConfirmPrompt, type LimitObservation, type NativeProvider, type RouteNote, type RouteTurnOutput, type RoutedTurn,
 } from '../bridge/route-contract.ts';
 import { parseBridgeAnswer, resolveRoute, type BridgeAnswer } from './confirm.ts';
+import { startCodexRelay } from './codex-relay.ts';
 import { claudeSessionInfo, claudeSessionPath, flagValue, remoteArgs, remoteEnv, replaceModel, resumeOrStart } from './cli-args.ts';
 import { spawn } from 'node:child_process';
 import { resolveRealExecutable, runLocal } from './local.ts';
@@ -554,26 +555,70 @@ async function runCodex(io: LauncherIo, rawArgs: string[], threadId: string): Pr
     : decided;
   await sendFeed(io, threadId, route.notes);
   if (route.action === 'refuse') { io.stderr.write(`${route.message}\n`); return route.retryable ? 75 : 1; }
+  // Реле JSON-RPC: пути машины треда → путь ступени, синхронизация на каждый ход.
+  const stageCwd = route.cwd;
+  const runRoute = route;
+  const out = splitLines(line => relay.onChildLine(line));
+  const sink = lineSink();
+  const relay = startCodexRelay({
+    stdin: io.stdin,
+    toChild: line => sink.write(line),
+    endChild: () => sink.end(),
+    toBridge: line => { io.stdout.write(`${line}\n`); },
+    bridgeCwd: io.cwd,
+    stageCwd: stageCwd && stageCwd !== io.cwd ? stageCwd : null,
+    prepare: async () => {
+      const r = await callServer<{ ok: boolean; message: string; notes: RouteNote[] }>(io, 'syncTurn', { threadId, stepId: runRoute.stepId, hostId: runRoute.hostId, phase: 'prepare' }, ROUTE_TIMEOUT_MS);
+      await sendFeed(io, threadId, r.notes);
+      return r;
+    },
+    finish: async () => {
+      const r = await callServer<{ notes: RouteNote[] }>(io, 'syncTurn', { threadId, stepId: runRoute.stepId, hostId: runRoute.hostId, phase: 'finish' }, 120_000);
+      await sendFeed(io, threadId, r.notes);
+    },
+    log: line => logLine(io, line),
+  });
+  logLine(io, `codex ${route.local ? 'local' : `remote ${route.hostId}`} cwd=${stageCwd ?? io.cwd}`);
   if (route.local) {
     const command = realCommand(io, 'codex');
     if (!command) return 127;
-    return (await runLocal({ command, args, env: childEnv(io.env, route.env) })).code;
+    const child = spawn(command, args, { env: childEnv(io.env, route.env), cwd: stageCwd ?? undefined, stdio: ['pipe', 'pipe', 'inherit'] });
+    sink.stream.pipe(child.stdin!);
+    child.stdin!.on('error', () => {});
+    child.stdout!.on('data', (d: Buffer) => out.push(d));
+    if (io.signal) io.signal.addEventListener('abort', () => child.kill('SIGTERM'), { once: true });
+    const code = await new Promise<number>(resolve => {
+      child.on('error', () => resolve(127));
+      child.on('close', (c, sig) => { out.flush(); resolve(c ?? (sig ? 1 : 0)); });
+    });
+    return code;
   }
   const api = httpTerminalApi(io.env.BB_SERVER_URL ?? '', io.fetch);
   try {
     const result = await runRemote({
-      api, hostId: route.hostId, cwd: route.cwd ?? io.cwd, command: 'codex', args,
+      api, hostId: route.hostId, cwd: stageCwd ?? io.cwd, command: 'codex', args,
       env: { ...remoteEnv(io.env), ...route.env }, session: null,
       ...(io.signal ? { signal: io.signal } : {}),
-      stdin: io.stdin, stdout: io.stdout as { write(data: Buffer): unknown }, stderr: io.stderr, log: line => logLine(io, line),
+      stdin: sink.stream, stdout: { write: (d: Buffer) => out.push(d) }, stderr: io.stderr, log: line => logLine(io, line),
       // app-server живёт долго: сторожевой таймер шире.
       watchdogMs: 300_000,
     });
+    out.flush();
     return result.code;
   } catch (error) {
+    out.flush();
     io.stderr.write(`Каскад подписок: Codex на ${route.stage.machine} прерван — ${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   }
+}
+
+/** Построчный разбор потока (кадры приходят кусками). */
+function splitLines(onLine: (line: string) => void): { push(d: Buffer | string): void; flush(): void } {
+  let rest = '';
+  return {
+    push(d) { rest += typeof d === 'string' ? d : d.toString('utf8'); const lines = rest.split('\n'); rest = lines.pop() ?? ''; for (const l of lines) onLine(l); },
+    flush() { if (rest) { onLine(rest); rest = ''; } },
+  };
 }
 
 /** Вход процесса запускателя (host.ts вызывает его при CASCADE_LAUNCHER_MAIN=1). */

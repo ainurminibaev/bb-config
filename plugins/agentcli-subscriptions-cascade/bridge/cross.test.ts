@@ -337,7 +337,7 @@ test('мост S3/S5: Claude → Codex (новая сессия со сводк�
   assert.ok(codexStart, 'у Codex своя нативная сессия');
   const codexTurn = codex.lines.find(l => l.method === 'turn/start')! as { params: { providerThreadId: string; input: { text: string }[]; options: { model?: string; providerOptions: { cascade: { provider: string } } } } };
   assert.equal(codexTurn.params.providerThreadId, 'codex-s2');
-  assert.deepEqual(codexTurn.params.input.map(i => i.text), ['SNAPSHOT-0-12', 'дальше']);
+  assert.deepEqual(codexTurn.params.input.map(i => i.text), ['SNAPSHOT-0-12\n\nдальше'], 'сводка — в тексте того же элемента ввода');
   assert.equal(codexTurn.params.options.model, 'gpt-6.2-sol', 'Codex получает модель ступени, а не профиль каскада');
   assert.equal(codexTurn.params.options.providerOptions.cascade.provider, 'codex');
   assert.deepEqual(saved, { outerId: 'claude-s1', active: 'codex', sessions: { 'claude-code': { nativeId: 'claude-s1', coveredSeq: 12 }, codex: { nativeId: 'codex-s2', coveredSeq: 12 } } });
@@ -358,7 +358,7 @@ test('мост S3/S5: Claude → Codex (новая сессия со сводк�
   assert.equal(resume?.params.providerThreadId, 'claude-s1');
   const back = claude.lines.filter(l => l.method === 'turn/start').at(-1) as { params: { providerThreadId: string; input: { text: string }[] } };
   assert.equal(back.params.providerThreadId, 'claude-s1');
-  assert.deepEqual(back.params.input.map(i => i.text), ['DELTA-12-14', 'вернулись']);
+  assert.deepEqual(back.params.input.map(i => i.text), ['DELTA-12-14\n\nвернулись']);
   assert.deepEqual((saved as NativeSessions | null)!.sessions, { 'claude-code': { nativeId: 'claude-s1', coveredSeq: 14 }, codex: { nativeId: 'codex-s2', coveredSeq: 14 } });
   assert.equal((saved as NativeSessions | null)!.active, 'claude-code');
   await bridge.close();
@@ -384,9 +384,15 @@ test('мост: прежняя сессия Claude недоступна — но
   const turnStart = claude.lines.filter(l => l.method === 'turn/start').at(-1) as { params: { providerThreadId: string; input: { text: string }[] } };
   assert.match(turnStart.params.providerThreadId, /^claude-s\d+$/u);
   assert.notEqual(turnStart.params.providerThreadId, 'claude-s0');
-  assert.equal(turnStart.params.input[0]!.text, 'SNAPSHOT-FULL');
+  assert.equal(turnStart.params.input[0]!.text, 'SNAPSHOT-FULL\n\nснова Claude');
   const rows = out.filter(m => m.method === 'thread/delta').flatMap(m => (m.params as { deltas: { kind: string; item?: { payload?: { message?: string } } }[] }).deltas);
   assert.ok(rows.some(d => d.kind === 'item.open' && /Прежняя сессия Claude недоступна/u.test(JSON.stringify(d))), 'строка в ленте о новой сессии');
+  // Строка перехода выходит после открытия хода нового провайдера и с его providerTurnId.
+  const ordered = out.filter(m => m.method === 'thread/delta').flatMap(m => (m.params as { deltas: { kind: string; providerTurnId?: string }[] }).deltas);
+  const openAt = ordered.findIndex(d => d.kind === 'turn.open' && d.providerTurnId === 'claude-t');
+  const rowAt = ordered.findIndex(d => d.kind === 'item.open' && /Прежняя сессия Claude недоступна/u.test(JSON.stringify(d)));
+  assert.ok(openAt !== -1 && rowAt > openAt, `строка после turn.open (${openAt} < ${rowAt})`);
+  assert.equal(ordered[rowAt]!.providerTurnId, 'claude-t');
   await bridge.close();
 });
 
@@ -492,4 +498,34 @@ test('автоповтор после «Да»: Codex получает исхо�
   const out = buildHandoff(events, { threadId: 'thr_1', afterSeq: 0, mode: 'snapshot', from: 'Claude', to: 'Codex', currentRequestId: 'creq_retry', currentText: 'Please continue.' });
   assert.match(out.text, /<current-request seq="3">[\s\S]*автоматический повтор[\s\S]*Добавь колонку KEEP-COLUMN в отчёт[\s\S]*<\/current-request>/u);
   assert.equal(out.throughSeq, 9);
+});
+
+test('сквозной путь S3: «Да» → автоповтор «Please continue.» → первое сообщение Codex содержит исходную просьбу и рамки; строка перехода — в ходе Codex', async () => {
+  const events: ThreadEventRow[] = [
+    { seq: 1, type: 'client/turn/requested', data: { requestId: 'creq_orig', input: [{ type: 'text', text: 'Посчитай строки в README и ответь числом' }] } },
+    { seq: 24, type: 'provider/error', data: { detail: 'Переход на Codex · Mac: ход повторится автоматически уже на Codex.' } },
+    { seq: 27, type: 'client/turn/requested', data: { requestId: 'creq_retry', retryOfRequestId: 'creq_orig', retryAttempt: 2, source: 'tell', input: [{ type: 'text', text: 'Please continue.', mentions: [], visibility: 'agent-only' }] } },
+  ];
+  // Сервер — настоящий createRouteService (handoffBrief по событиям треда).
+  const fxRoutes = fixture({ events });
+  let saved: NativeSessions | null = null;
+  const fx = switchFixture({
+    nativeSessions: input => { if (input.sessions) saved = input.sessions as NativeSessions; return { sessions: input.sessions ?? saved }; },
+    peekProvider: () => ({ providerId: 'codex', modelId: 'gpt-6.2-sol', stage: null }),
+    handoffBrief: input => fxRoutes.routes.handoffBrief(input as never),
+  });
+  const { bridge, out, codex, options } = fx;
+  bridge.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }));
+  bridge.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'thread/start', params: { threadId: 'thr_1', cwd: '/p', options: { ...options, model: 'auto' } } }));
+  await fx.flush();
+  const outer = ((out.find(m => m.id === 2)!.result) as { providerThreadId: string }).providerThreadId;
+  bridge.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'turn/start', params: { threadId: 'thr_1', providerThreadId: outer, clientRequestId: 'creq_retry', input: [{ type: 'text', text: 'Please continue.', mentions: [], visibility: 'agent-only' }], options } }));
+  await fx.flush();
+  const first = codex.lines.find(l => l.method === 'turn/start') as { params: { input: { text: string; visibility?: string }[] } };
+  assert.equal(first.params.input.length, 1);
+  assert.equal(first.params.input[0]!.visibility, 'agent-only', 'поля элемента ввода сохранены');
+  const text = first.params.input[0]!.text;
+  assert.match(text, /<current-request seq="1">[\s\S]*Посчитай строки в README и ответь числом[\s\S]*<\/current-request>/u);
+  assert.match(text, /не исследуй окружение машины, переменные, ключи и ~\/\.ssh, другие треды и дела/u);
+  assert.match(text, /Please continue\.$/u);
 });

@@ -231,6 +231,14 @@ export const executorRpcContract = defineRpcContract({
   routeTurn: { input: routeTurnInputSchema, output: routeTurnOutputSchema },
   finishTurn: { input: finishTurnInputSchema, output: z.object({ notes: z.array(routeNoteSchema) }) },
   threadStatus: { input: z.object({ threadId: z.string().min(1) }), output: threadStatusSchema },
+  /**
+   * Синхронизация хода на закреплённой машине (app-server Codex живёт долго):
+   * prepare — файлы к ходу на машине, finish — вернуть на опору.
+   */
+  syncTurn: {
+    input: z.object({ threadId: z.string().min(1), stepId: z.string(), hostId: z.string(), phase: z.enum(['prepare', 'finish']) }),
+    output: z.object({ ok: z.boolean(), message: z.string(), cwd: z.string().nullable(), notes: z.array(routeNoteSchema) }),
+  },
   /** Модель недоступна на аккаунте ступени («requires usage credits»): попытка ступень × модель снимается. */
   turnModelUnavailable: {
     input: z.object({ threadId: z.string().min(1), stepId: z.string(), modelId: z.string().nullable(), reason: z.string().max(300) }),

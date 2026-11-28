@@ -232,6 +232,8 @@ export interface RouteService {
   threadStatus(threadId: string): Promise<ThreadStatus>;
   /** Идущая подготовка хода треда для строки ленты; null — не готовится. */
   turnProgress(threadId: string): PrepNote | null;
+  /** Синхронизация хода на закреплённой машине (app-server Codex). */
+  syncTurn(input: { threadId: string; stepId: string; hostId: string; phase: 'prepare' | 'finish' }): Promise<{ ok: boolean; message: string; cwd: string | null; notes: RouteNote[] }>;
   /** Модель недоступна на аккаунте ступени («requires usage credits»). */
   turnModelUnavailable(input: { threadId: string; stepId: string; modelId: string | null; reason: string }): Promise<{ ok: boolean }>;
   /** Лимит, полученный в ходе: ступень помечается исчерпанной сразу. */
@@ -508,6 +510,31 @@ export function createRouteService(deps: RouteDeps): RouteService {
     }
   }
 
+  /** Синхронизация хода на закреплённой машине (app-server Codex): без выбора ступени. */
+  async function syncTurn(input: { threadId: string; stepId: string; hostId: string; phase: 'prepare' | 'finish' }): Promise<{ ok: boolean; message: string; cwd: string | null; notes: RouteNote[] }> {
+    if (input.phase === 'finish') {
+      const out = await finishTurn({ threadId: input.threadId, projectId: null, stepId: input.stepId, hostId: input.hostId, exitCode: 0, limits: [] });
+      return { ok: true, message: '', cwd: null, notes: out.notes };
+    }
+    return serial(input.threadId, async () => {
+      const config = await deps.loadConfig();
+      const stored = await deps.load(input.threadId).catch(() => undefined);
+      const projectId = stored?.engine.projectId ?? '';
+      const anchor = anchorHostId(config);
+      if (!deps.sync || !stored || !projectId || (input.hostId === anchor && stored.pendingFlushHostId === null)) return { ok: true, message: '', cwd: null, notes: [] };
+      const outcome = await deps.sync.prepareTurn({ threadId: input.threadId, projectId, workspace: stored.workspace ?? null }, { hostId: input.hostId }).catch(error => ({
+        ok: false as const, reason: 'error', message: error instanceof Error ? error.message : String(error), conflicts: [], timings: [], notices: [],
+      }));
+      const notes = syncNotes(config, outcome);
+      if (!outcome.ok) {
+        const message = refusalText(`синхронизация ${machineLabel(config, input.hostId)}`, outcome.message);
+        return { ok: false, message, cwd: null, notes: [...notes, { kind: 'problem', message: message.slice(0, 300), stepId: input.stepId, note: REFUSAL_ACTIONS }] };
+      }
+      if (input.hostId !== anchor) await deps.save(input.threadId, { ...stored, pendingFlushHostId: input.hostId }).catch(() => {});
+      return { ok: true, message: '', cwd: outcome.cwd, notes };
+    });
+  }
+
   /** Модель недоступна на аккаунте ступени: попытка ступень × модель снимается на сутки. */
   async function turnModelUnavailable(input: { threadId: string; stepId: string; modelId: string | null; reason: string }): Promise<{ ok: boolean }> {
     return serial(input.threadId, async () => {
@@ -753,5 +780,5 @@ export function createRouteService(deps: RouteDeps): RouteService {
     });
   }
 
-  return { routeTurn, finishTurn, answerConfirmation, peekProvider, handoffBrief, nativeSessions, threadStatus, threadScheme, retryAvailability, turnLimits, turnModelUnavailable, turnProgress: threadId => prep.note(threadId) };
+  return { routeTurn, finishTurn, answerConfirmation, peekProvider, handoffBrief, nativeSessions, threadStatus, threadScheme, retryAvailability, turnLimits, turnModelUnavailable, syncTurn, turnProgress: threadId => prep.note(threadId) };
 }

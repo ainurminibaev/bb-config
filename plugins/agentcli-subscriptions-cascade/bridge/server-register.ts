@@ -238,6 +238,7 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     turnProgress: async ({ threadId }) => ({ note: routes.turnProgress(threadId) }),
     turnLimits: input => routes.turnLimits(input),
     turnModelUnavailable: input => routes.turnModelUnavailable(input),
+    syncTurn: input => routes.syncTurn(input),
     answerConfirmation: input => routes.answerConfirmation(input),
     peekProvider: input => routes.peekProvider(input),
     handoffBrief: input => routes.handoffBrief(input),

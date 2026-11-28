@@ -218,7 +218,15 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
       const threadId = typeof params.threadId === 'string' ? params.threadId : null;
       for (const delta of Array.isArray(params.deltas) ? params.deltas as unknown[] : []) {
         const d = rec(delta);
-        if ((d.kind === 'turn.open' || d.kind === 'input.accepted') && typeof d.providerTurnId === 'string' && threadId) threadTurn.set(threadId, d.providerTurnId);
+        if ((d.kind === 'turn.open' || d.kind === 'input.accepted') && typeof d.providerTurnId === 'string' && threadId) {
+          threadTurn.set(threadId, d.providerTurnId);
+          const held = awaitingTurn.get(threadId);
+          if (held) {
+            awaitingTurn.delete(threadId);
+            // После строки открытия хода — отложенные строки перехода с его providerTurnId.
+            if (held.length) setImmediate(() => emitNotes(threadId, held));
+          }
+        }
         changed = rewriteProviderId(d) || changed;
       }
     }
@@ -324,8 +332,21 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
     if (Array.isArray(message.notes)) emitNotes(threadId, message.notes as RouteNote[]);
   }
 
+  /**
+   * Переход на другого провайдера: его сессия (и app-server Codex) открывается до
+   * его хода, строки ленты в это время BB не покажет — они ждут открытия хода.
+   * Состояние маршрута (state) идёт сразу.
+   */
+  const awaitingTurn = new Map<string, RouteNote[]>();
   function emitNotes(threadId: string, notes: readonly RouteNote[]): void {
     if (!options.feed) return;
+    const held = awaitingTurn.get(threadId);
+    if (held) {
+      const rows = notes.filter(n => n.kind !== 'state');
+      held.push(...rows);
+      notes = notes.filter(n => n.kind === 'state');
+      if (notes.length === 0) return;
+    }
     let deltas: unknown[];
     try { deltas = options.feed.render(threadId, notes, threadTurn.get(threadId)); } catch (error) { log(`feed render: ${String(error)}`); return; }
     if (deltas.length > 0) send({ jsonrpc: '2.0', method: 'thread/delta', params: { threadId, deltas } });
@@ -435,6 +456,18 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
   interface Switched { provider: NativeProviderId; params: Json }
 
   /**
+   * Сводка — в текст первого текстового элемента ввода (его поля — mentions,
+   * visibility — сохраняются): отдельный элемент без них штатный мост Codex может отбросить.
+   */
+  function withHandoff(input: unknown[], text: string): unknown[] {
+    if (!text) return input;
+    const at = input.findIndex(i => rec(i).type === 'text');
+    if (at === -1) return [{ type: 'text', text }, ...input];
+    const first = rec(input[at]);
+    return input.map((item, k) => (k === at ? { ...first, text: `${text}\n\n${String(first.text ?? '')}` } : item));
+  }
+
+  /**
    * turn/start: провайдер хода по решению сервера. Тот же — без изменений;
    * другой — сессия этого провайдера (resume с дельтой или новая со сводкой),
    * ввод хода получает блок контекста первым элементом.
@@ -458,6 +491,7 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
     }
 
     const inner = await ensureInner(target, digests[target] ?? null);
+    awaitingTurn.set(threadId, []);
     const from = PROVIDER_LABEL[active];
     const to = PROVIDER_LABEL[target];
     const requestId = typeof params.clientRequestId === 'string' ? params.clientRequestId : null;
@@ -519,7 +553,7 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
         ...params,
         providerThreadId: nativeId,
         options: optionsFor(params.options, target, target === 'codex' ? peek?.modelId ?? null : null),
-        input: handoff.text ? [{ type: 'text', text: handoff.text }, ...input] : input,
+        input: withHandoff(input, handoff.text),
       },
     };
   }
@@ -562,6 +596,9 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
     } catch (error) {
       const text = error instanceof NativeLoadError ? nativeLoadHint(error) : error instanceof Error ? error.message : String(error);
       log(`refuse ${method}: ${text}`);
+      // Переход не состоялся: отложенные строки — сразу (с ходом, который его просил).
+      const held = threadId ? awaitingTurn.get(threadId) : undefined;
+      if (threadId && held) { awaitingTurn.delete(threadId); if (held.length) emitNotes(threadId, held); }
       if (message.id !== undefined) fail(message.id, `Каскад подписок: ${text}`, error instanceof NativeLoadError ? { recovery: { kind: 'restartRecommended', message: text, retryable: true } } : undefined);
       return;
     }
