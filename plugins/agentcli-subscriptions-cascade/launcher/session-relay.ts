@@ -97,6 +97,14 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
   routeFirst?: boolean;
   /** Сторож хода: нет событий от CLI столько — ход завершается ошибкой с автоповтором. По умолчанию 10 мин. */
   idleTimeoutMs?: number;
+  /**
+   * Простой между ходами на чужой машине: CLI ступени завершается чисто (файл сессии
+   * возвращается), следующий ход поднимает его с `--resume`. Терминал BB на чужой
+   * машине живёт, пока жива связь её демона с сервером; при переподключении демона
+   * (WebSocket 1006, раз в минуты–часы) терминал считается остановленным, и файл
+   * сессии последнего хода не возвращается. По умолчанию 2 мин; 0 — держать процесс.
+   */
+  releaseAfterMs?: number;
 } = {}): Promise<number> {
   let route = first;
   let routeFirst = options.routeFirst ?? false;
@@ -110,6 +118,23 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
   let finishing: Promise<void> = Promise.resolve();
   let switching: Promise<void> = Promise.resolve();
   const idleMs = options.idleTimeoutMs ?? 10 * 60_000;
+  const releaseMs = options.releaseAfterMs ?? 2 * 60_000;
+  let releaseTimer: ReturnType<typeof setTimeout> | null = null;
+  let released: StageChild | null = null;
+  const clearRelease = () => { if (releaseTimer) { clearTimeout(releaseTimer); releaseTimer = null; } };
+  /** Между ходами на чужой машине — отпустить CLI ступени после простоя. */
+  const armRelease = () => {
+    clearRelease();
+    if (releaseMs <= 0 || route.local || turnActive || childExit) return;
+    releaseTimer = setTimeout(() => {
+      releaseTimer = null;
+      if (turnActive || childExit) return;
+      ports.log(`release idle stage CLI on ${route.hostId} after ${Math.round(releaseMs / 1000)} s`);
+      released = child;
+      child.end();
+    }, releaseMs);
+    (releaseTimer as { unref?: () => void }).unref?.();
+  };
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
   const clearIdle = () => { if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; } };
   const armIdle = () => {
@@ -171,6 +196,7 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
     if (message?.type === 'result' && turnActive) {
       turnActive = false;
       clearIdle();
+      queueMicrotask(armRelease);
       const done = { exitCode: 0, limits, transportError: null, durationMs: ports.now() - turnStartedAt };
       limits = [];
       const current = route;
@@ -191,6 +217,8 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
     void c.done.then(result => {
       if (c !== child) return;
       childExit = result;
+      clearRelease();
+      if (released === c) { ports.log('stage CLI released between turns'); return; }
       ports.log(`stage CLI exited code=${result.code}${result.transportError ? ` (${result.transportError})` : ''}`);
       // Посреди хода — ход завершается ошибкой сразу, а не висит.
       abortTurn(result.transportError ? `связь с машиной ступени: ${result.transportError}` : `CLI ступени завершился (код ${result.code})`);
@@ -234,6 +262,7 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
       continue;
     }
     if (isUser && !turnActive) {
+      clearRelease();
       if (sawUser || routeFirst) {
         routeFirst = false;
         // Новый ход: решение каскада. Пока решаем — следующие строки ждут.
@@ -260,12 +289,12 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
         }
         if (!sameStage(route, next) || childExit) {
           // Другая ступень или процесс прежней умер — новый процесс продолжает сессию (--resume).
-          if (childExit) ports.log(`stage CLI is gone — restarting on ${next.hostId}/${next.stepId}`);
+          if (childExit) ports.log(`stage CLI ${released ? 'was released' : 'is gone'} — restarting on ${next.hostId}/${next.stepId}`);
           switching = switchTo(next).then(() => undefined);
           await switching;
         } else route = next;
       } else if (childExit) {
-        ports.log('stage CLI is gone — restarting');
+        ports.log(released ? 'stage CLI was released — restarting with --resume' : 'stage CLI is gone — restarting');
         switching = switchTo(route).then(() => undefined);
         await switching;
       }
@@ -282,11 +311,12 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
     child.write(line);
   }
   clearIdle();
+  clearRelease();
   child.end();
   const result = childExit ?? await child.done;
   await out;
   await finishing;
-  if (turnActive || result.transportError) {
+  if (turnActive || (result.transportError && released !== child)) {
     await ports.finishTurn(route, { exitCode: result.code, limits, transportError: result.transportError, durationMs: ports.now() - turnStartedAt }).catch(() => {});
   }
   return result.code;

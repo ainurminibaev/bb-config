@@ -89,3 +89,59 @@ test('сторож хода: CLI молчит дольше порога — пр
   r.stdin.end();
   await r.done;
 });
+
+function releaseRelay(local: boolean, releaseAfterMs: number) {
+  const started: string[][] = [];
+  const ended: number[] = [];
+  const finished: (string | null)[] = [];
+  const logs: string[] = [];
+  const stdin = new PassThrough();
+  const route = { ...mk(local ? 'tru' : 'mac'), local };
+  const done = runSessionRelay(route, ['--input-format', 'stream-json', `--session-id=${SID}`], SID, {
+    start(_r, args, onLine): StageChild {
+      started.push(args);
+      const n = started.length;
+      let resolveDone!: (v: { code: number; transportError: string | null }) => void;
+      const finishedP = new Promise<{ code: number; transportError: string | null }>(r => { resolveDone = r; });
+      return {
+        write(line) { if (JSON.parse(line).type === 'user') setTimeout(() => onLine(JSON.stringify({ type: 'result', n })), 5); },
+        end() { ended.push(n); resolveDone({ code: 0, transportError: null }); },
+        kill() { resolveDone({ code: 143, transportError: null }); },
+        done: finishedP,
+      };
+    },
+    routeTurn: async () => route, sessionExists: () => true,
+    finishTurn: async (_r, info) => { finished.push(info.transportError); },
+    feed: async () => {}, limitFromLine: () => null,
+    stdin, stdout: { write() {} }, stderr: { write() {} }, now: Date.now, log: l => { logs.push(l); },
+  }, { releaseAfterMs, idleTimeoutMs: 60_000 });
+  return { started, ended, finished, logs, stdin, done };
+}
+
+test('простой между ходами на чужой машине: CLI завершается чисто (файл сессии вернётся), следующий ход — с --resume, без ошибок', async () => {
+  const r = releaseRelay(false, 30);
+  r.stdin.write(user('ход 1')); await tick(90);
+  assert.deepEqual(r.ended, [1], 'процесс отпущен после простоя');
+  r.stdin.write(user('ход 2')); await tick(40);
+  r.stdin.end();
+  await r.done;
+  assert.equal(r.started.length, 2);
+  assert.ok(r.started[1]!.includes(`--resume=${SID}`));
+  assert.ok(r.finished.every(t => t === null), `итоги без ошибок связи: ${JSON.stringify(r.finished)}`);
+  assert.ok(r.logs.some(l => /released between turns/u.test(l)));
+});
+
+test('простой на машине моста и быстрый следующий ход — процесс не отпускается', async () => {
+  const local = releaseRelay(true, 30);
+  local.stdin.write(user('ход 1')); await tick(90);
+  local.stdin.write(user('ход 2')); await tick(40);
+  local.stdin.end();
+  await local.done;
+  assert.equal(local.started.length, 1, 'локальная ступень держит процесс');
+  const quick = releaseRelay(false, 500);
+  quick.stdin.write(user('ход 1')); await tick(40);
+  quick.stdin.write(user('ход 2')); await tick(40);
+  quick.stdin.end();
+  await quick.done;
+  assert.equal(quick.started.length, 1, 'ход раньше срока — тот же процесс');
+});
