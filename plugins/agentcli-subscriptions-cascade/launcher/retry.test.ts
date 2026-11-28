@@ -86,6 +86,27 @@ test('S7: «Fable 5.2 requires usage credits» — попытка снята д�
   assert.deepEqual([last[0].type, last[1].api_error_status], ['rate_limit_event', 429]);
 });
 
+test('S7 (vclaude): «API Error: 402 … доступен только в тарифе VClaude Ultra 200» — модель недоступна, ход отдан как лимит', async () => {
+  const gw = 'API Error: 402 Claude Fable доступен только в тарифе VClaude Ultra 200. Смените тариф или выберите другую модель.';
+  assert.ok(MODEL_UNAVAILABLE.test(gw));
+  assert.ok(MODEL_UNAVAILABLE.test('Модель недоступна на вашем тарифе'));
+  assert.equal(MODEL_UNAVAILABLE.test('API Error: 429 rate limit'), false, 'лимит окна — не «недоступна»');
+  assert.equal(MODEL_UNAVAILABLE.test('API Error: 4021 something'), false);
+  const order: string[] = [];
+  const r = relay({
+    first: mk('mac', 'claude-fable-5-1'),
+    route: async () => mk('mac', 'claude-fable-5-1'),
+    reply: (line, onLine) => { if (JSON.parse(line).type === 'user') setTimeout(() => onLine(JSON.stringify({ type: 'result', is_error: true, result: gw })), 5); },
+    markModel: async (route, reason) => { await tick(); order.push(`mark:${route.modelId}:${reason.slice(0, 14)}`); },
+  });
+  r.stdin.write(user('ход')); await new Promise(res => setTimeout(res, 80));
+  r.stdin.end();
+  await r.done;
+  assert.deepEqual(order, ['mark:claude-fable-5-1:API Error: 402']);
+  const last = r.out.slice(-2).map(l => JSON.parse(l));
+  assert.deepEqual([last[0].type, last[1].api_error_status], ['rate_limit_event', 429]);
+});
+
 test('Codex: запускатель всегда отдаёт codex подкоманду app-server (без неё — TUI, «stdin is not a terminal»)', async () => {
   const { codexAppServerArgs } = await import('./main.ts');
   assert.deepEqual(codexAppServerArgs([]), ['app-server']);

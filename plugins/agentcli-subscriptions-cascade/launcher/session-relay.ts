@@ -84,8 +84,13 @@ export function syntheticRefusal(kind: 'limit' | 'overload', message: string, se
   ];
 }
 
-/** Ошибка «модель недоступна на этом аккаунте или тарифе» в result Claude Code. */
-export const MODEL_UNAVAILABLE = /requires (?:usage )?credits|not available (?:on|for) (?:your|this) (?:plan|account|subscription)|(?:do(?:es)? not|don't) have access to (?:the )?(?:model|claude|fable|opus|sonnet)|model[^.]{0,40}(?:not found|not supported|is not available|unavailable)|model_not_found|invalid model/iu;
+/**
+ * Ошибка «модель недоступна на этом аккаунте или тарифе» в result Claude Code.
+ * Кроме ответов Anthropic — отказ API-шлюза (vclaude): «API Error: 402 Claude Fable
+ * доступен только в тарифе VClaude Ultra 200…» (S7, 0.2.15). 402 — оплата/тариф,
+ * не лимит окна: ступень × модель снимается, а не ждёт сброса.
+ */
+export const MODEL_UNAVAILABLE = /requires (?:usage )?credits|API Error: 402\b|payment required|доступ(?:ен|на|но) только (?:в|на) тариф|недоступ(?:ен|на|но) (?:в|на) (?:вашем |этом |текущем )?тариф|не входит в (?:ваш |этот |текущий )?тариф|not available (?:on|for) (?:your|this) (?:plan|account|subscription)|(?:do(?:es)? not|don't) have access to (?:the )?(?:model|claude|fable|opus|sonnet)|model[^.]{0,40}(?:not found|not supported|is not available|unavailable)|model_not_found|invalid model/iu;
 
 export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessionId: string, ports: RelayPorts, options: {
   pendingRefusal?: { kind: 'limit' | 'overload'; message: string } | null;
