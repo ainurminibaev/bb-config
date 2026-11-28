@@ -152,6 +152,24 @@ function ProfileCard({ profile, draft, description, preview, onChange, onDuplica
           })}
         </div>
       )}
+      <div className="asc-field">
+        <span>Потомки <Hint>Правило для всех подтредов этого треда и их подтредов. «Как выбрано у подтреда» — каждый идёт по своему профилю. Явный выбор профиля у подтреда действует только на него.</Hint></span>
+        <div className="asc-row">
+          <select aria-label="Профиль потомков" value={profile.descendants ?? (profile.subthreads === 'codex' ? 'subthread-codex' : '')}
+            onChange={e => onChange({ ...profile, descendants: e.target.value || null, subthreads: undefined })}>
+            <option value="">как выбрано у подтреда</option>
+            <option value="subthread-codex">только Codex, любая машина (задание из 4 частей)</option>
+            {draft.profiles.filter(p => p.id !== profile.id && p.enabled).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          {(profile.descendants || profile.subthreads === 'codex') && (
+            <select aria-label="Если правило потомков исчерпано" value={profile.onDescendantsExhausted ?? 'wait'}
+              onChange={e => onChange({ ...profile, onDescendantsExhausted: e.target.value as 'wait' | 'fallback' })}>
+              <option value="wait">исчерпано — ждать сброса</option>
+              <option value="fallback">исчерпано — на «Авто»</option>
+            </select>
+          )}
+        </div>
+      </div>
       <p className="asc-preview"><span className="asc-now-dot" aria-hidden="true" />{preview}</p>
       <div className="asc-row asc-card-foot">
         <button type="button" className="asc-link" onClick={onDuplicate}>Дублировать</button>
@@ -224,7 +242,8 @@ function DiagramFlow({ attempts: all, draft }: { attempts: readonly ExplainedAtt
           const step = draft.steps.find(s => s.id === a.stepId);
           const phaseBreak = i > 0 && a.phase === 'any' && attempts[i - 1]!.phase === 'preferred';
           const tone = a.skip ? 'skip' : a.state;
-          const note = a.skip === 'excluded' ? 'исключена' : a.skip === 'no-model' ? 'нет модели' : a.skip === 'subthread' ? 'чужая машина' : STATE_TEXT[a.state];
+          const notReady = a.state === 'unavailable' && a.reason?.startsWith('ступень не готова');
+          const note = a.skip === 'excluded' ? 'исключена' : a.skip === 'no-model' ? 'нет модели' : a.skip === 'subthread' ? 'чужая машина' : notReady ? 'не готова' : STATE_TEXT[a.state];
           return (
             <Fragment key={`${a.stepId}|${a.modelId}|${a.skip}|${a.phase}`}>
               {phaseBreak ? <span className="asc-phase">потом Авто →</span> : i > 0 && <span className="asc-arrow" aria-hidden="true">→</span>}

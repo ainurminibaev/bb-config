@@ -161,6 +161,11 @@ export const policiesSchema = z.object({
   positiveFreshSeconds: z.number().int().min(5).max(3600).default(60),
   /** Общий бюджет ожидания чтения лимитов перед ходом. */
   preTurnBudgetMs: z.number().int().min(500).max(60_000).default(5_000),
+  /**
+   * 0.3.5: показание не старше стольких минут с запасом (≤ 90 % использовано) —
+   * квота известна, даже если оно старше positiveFreshSeconds. 0 — выключено.
+   */
+  staleOkMinutes: z.number().int().min(0).max(120).default(15),
   /** Фоновая перепроверка приоритетной ступени при спросе. */
   recheckMinutes: z.number().int().min(1).max(120).default(5),
 });
@@ -304,6 +309,8 @@ export const discoveredAccountSchema = z.object({
   limitsStatus: z.string(),
   error: z.string().nullable(),
   fetchedAt: z.string(),
+  /** 0.3.5: версия CLI из providerCliStatus (проверка готовности ступени); null — неизвестна. */
+  cliVersion: z.string().nullable().optional(),
 });
 export type DiscoveredAccount = z.infer<typeof discoveredAccountSchema>;
 
@@ -374,6 +381,8 @@ export const stateSchema = z.object({
   /** Проекты BB — для режима синхронизации по проекту. */
   projects: z.array(z.object({ id: z.string(), name: z.string() })),
   issues: z.array(z.string()),
+  /** 0.3.5: готовность ступеней (`check`): неготовая включена, но маршрут её пропускает с причиной. */
+  readiness: z.record(z.string(), z.object({ ready: z.boolean(), reason: z.string().nullable(), at: z.number() })).optional(),
 });
 export type CascadeState = z.infer<typeof stateSchema>;
 

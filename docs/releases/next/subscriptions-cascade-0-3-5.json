@@ -1,6 +1,6 @@
 {
   "id": "subscriptions-cascade-0-3-5",
-  "title": "Каскад подписок 0.3.5 — Codex-подтред пробует Codex с неизвестной квотой, откат на «Авто» без S11, лимит Codex из хода",
+  "title": "Каскад подписок 0.3.5 — профиль как правило на дерево тредов, квота видна до хода, команды limits и check",
   "component": "agentcli-subscriptions-cascade",
   "where": "server",
   "kind": "command",

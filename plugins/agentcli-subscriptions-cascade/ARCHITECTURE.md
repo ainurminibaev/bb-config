@@ -754,39 +754,84 @@ RouteNote `notice`: отдельная строка ленты (тип `problem`
 - Тесты: `codex-subthreads.test.ts` (на 0.3.3 падают 8 проверок нового поведения, 6
   проверок «как в 0.3.3» проходят), `brief.test.ts` (на 0.3.3 нет модуля).
 
-## 0.3.5: Codex-подтред при неизвестной квоте и исчерпанной машине родителя
+## 0.3.5: профиль — правило на дерево, видимость лимитов, готовность ступеней
 
-Приёмка 0.3.4 на живом BB: родитель на Tru, Tru исчерпан на неделю, остальные
-ступени — «квота неизвестна», у всех `onUnknown: skip`, S11 включено. Подтред с
-полным заданием получил отказ «Все ступени исчерпаны, а ближайший сброс позже
-порога ожидания». Цепочка: Codex «неизвестен» + `skip` → `wait unknown` → откат на
-«Авто» → S11 держит подтред на Tru → Tru исчерпан → `ask-owner`.
+Поводом стала приёмка 0.3.4 на живом BB. Родитель на Tru, Tru исчерпан на неделю,
+остальные ступени «квота неизвестна» (`onUnknown: skip`), S11 включено. Подтред с
+полным заданием получил отказ «Все ступени исчерпаны, а ближайший сброс позже порога
+ожидания». Цепочка: Codex «неизвестен» → откат на «Авто» → S11 держит подтред на Tru
+→ Tru исчерпан → `ask-owner`.
 
+**Профиль = self + descendants** (`subthreads.ts`, поля `descendants`,
+`onDescendantsExhausted`; 0.3.4 `subthreads: 'codex'` при нормализации становится
+`descendants: 'subthread-codex'`, режим `wait`).
+
+- `inheritedRule` (`route-service.ts`) идёт вверх по `parentThreadId` (до 10 предков,
+  без циклов) и ищет сохранённый `profileId` предка с descendants. Потомок
+  наследует правило, если не выбрал профиль явно (`inheritsRule`): нет `--model`,
+  профиль по умолчанию, профиль родителя, профиль владельца правила или сам профиль
+  правила. Явный выбор действует только на свой тред: его `profileId` не несёт
+  правила, поэтому его потомки находят правило выше. Синтетические профили
+  (`subthread-codex`, `pin:…`) правила не несут.
+- Результат хранится в состоянии треда (`inherited`), его читают повтор после сбоя
+  и схема. `peekProvider` считает правило заново.
+- `onDescendantsExhausted`: `wait` (по умолчанию) — решение движка как есть
+  (`wait`/`ask-owner`/`unavailable`), другие ступени не тратятся; `fallback` —
+  `codexFallbackReason` → ход по «Авто» без S11 (`PlanInput.ignoreHome`) со строкой в
+  ленте. Потомок на Codex на Claude не переходит: Claude не входит в его правило.
+- Проверка задания (4 части) — у каждого потомка на правиле Codex, при первом ходе.
 - **Неизвестная квота Codex — не откат.** У профиля появилось поле `onUnknown`
-  (`skip|try`, без поля — как у ступени), `selectStep` берёт его раньше
-  `step.onUnknown`. `subthread-codex` ставит `try`. Откат на «Авто» — только при
-  исчерпании (`wait exhausted`, `ask-owner`), выключенных ступенях (`unavailable
-  no-steps`) или когда подготовка всех ступеней Codex в этом ходе не удалась
-  (причина «вход на ступени Codex не удался»).
-- **Откат без S11.** `PlanInput.ignoreHome` снимает S11 в `buildPlan` (как у `pin:…`).
-  Маршрут Codex-подтреда передаёт его и для Codex, и для отката на «Авто»
-  (`routeOnce`, `selectWithFallback` — `peekProvider`/`retryAvailability`,
-  `explainNoSteps`, `threadScheme`). Строки «Машина родителя … не в каскаде» у
-  Codex-подтреда нет. В состоянии треда — `codexChild: true`: повтор и схема без
-  запроса родителя.
-- **Лимит Codex из хода.** До 0.3.5 реле app-server (`launcher/codex-relay.ts`) не
+  (главнее `step.onUnknown`); `subthread-codex` ставит `try`.
+
+**Лимиты.**
+
+- `LimitMonitor.refresh`: бюджет хода ограничивает только ожидание. Опоздавший
+  ответ (кабинет vclaude — вход и запрос до 7 с каждый; `usageLimits` UA ~9 с при
+  бюджете 5 с) сохраняется. До 0.3.5 `Promise.race` его выбрасывал.
+- `healthFromReading`: показание старше `positiveFreshSeconds` (60 с), но не старше
+  `staleOkMinutes` (15) и с запасом (≤ 90 % использовано) считается известным.
+  До 0.3.5 кэш кабинета vclaude (TAU обновляет его раз в 2 мин) и окна Codex между
+  ходами давали «unknown», и возврат S4 на них не делался.
+- Обнаружение машин кладёт ответ `usageLimits` в монитор для ступеней по подписке
+  (`monitor.ingest`): квота Codex известна до первого хода.
+- Лимит Codex из хода: реле app-server (`launcher/codex-relay.ts`) раньше не
   передавало `account/rateLimits/updated`, а `observeLimit` заворачивал всё в
-  `rate_limit_event` Claude. Квота Codex без опроса так и оставалась «неизвестной».
-  Теперь `limitFromCodexLine` → порт `limits` → `turnLimits` (окно ≥ 100 % —
-  `rejected` до его сброса, ступень исчерпана в треде сразу), а `observeLimit`
-  отдаёт уведомление адаптеру Codex как есть (`codexEventReading`, монитор).
-- **Опрос квоты Codex.** `refreshLimits` → `usageLimits({ hostId, refresh: true }).codex`.
-  На одной из машин BB отвечает `status: error` «Codex usage request failed (HTTP 403)» →
-  `unknown`. Это ответ Codex на чтение квоты аккаунта, а не дефект каскада. На UA и
-  Tru квота читается.
-- Тесты: `codex-fallback.test.ts` (на 0.3.4 падают 4 проверки нового поведения, 2
-  проверки «как раньше» проходят), `launcher/codex-limits.test.ts` (на 0.3.4 нет
-  `limitFromCodexLine`).
+  `rate_limit_event` Claude. Теперь `limitFromCodexLine` → `turnLimits` (окно ≥ 100 % —
+  `rejected` до сброса), а уведомление уходит адаптеру Codex как есть.
+- Источник квоты Codex — тот же, что у Thread Account Usage
+  (`system.usageLimits({ refresh: true }).codex`). Если BB отвечает `status: error
+  … HTTP 403`, отказ приходит от Codex на чтение квоты аккаунта, а не от каскада.
+- **Контракт видимости** (`limits-contract.test.ts`, `fixtures/limits-samples.json`):
+  - у каждого адаптера реестра и провайдера ступеней `seedConfig`, у каждого
+    `quotaSource` есть образец ответа, и на нём квота известна;
+  - проценты окон совпадают с ожидаемыми;
+  - копия файла в `thread-account-usage` совпадает побайтно, её тест
+    (`usageWindows`, `vclaudeUsedPercent`, `parseVClaudeUsage`) сверяет тот же
+    статус и процент.
+- `bb subscriptions-cascade limits [--json]` — `limitsReport` (`readiness.ts`):
+  состояние, строка, источник, причина.
+
+**Готовность ступени** (`readiness.ts`, `checkStep` — чистая функция по пробам).
+
+- Блокирующие пункты: машина на связи и хост-часть ответила (node); CLI установлен;
+  вход; модели таблицы в каталоге; у исполнителя — общий путь с записью, Mutagen,
+  SSH до опоры (по сохранённому состоянию мастера).
+- Предупреждения: лимиты читаются, совпадение с Thread Account Usage (RPC
+  `accounts` без обновления, `tauStateOf`), версия CLI (`providerCliStatus`, без
+  модельного запроса).
+- `check` запускают CLI, мастер (после прохода) и сохранение настроек с новой
+  ступенью. Результат хранится в kv `readiness`.
+- Неготовая ступень: `withReadiness` → health `available: false` с причиной
+  «ступень не готова: …». Движок её пропускает, схема «i» и настройки показывают
+  «не готова». Перепроверка — в фоне перед ходом, не чаще раза в 10 минут.
+
+**Возврат «Авто» на Claude** — штатный S4. Новое только то, что квота шлюза vclaude
+теперь известна (см. выше).
+
+- Тесты (на 0.3.4 падают проверки нового поведения):
+  - `codex-fallback.test.ts`, `tree.test.ts`, `return-claude.test.ts` (vclaude);
+  - `limits-contract.test.ts` (vclaude) и `limits.test.ts` (поздний ответ, свежесть);
+  - `launcher/codex-limits.test.ts` и `readiness.test.ts` — модулей на 0.3.4 нет.
 
 ## Уборка реплик после тредов (0.2.12, `sync/gc.ts`)
 

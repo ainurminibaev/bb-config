@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
 import { rpcContract, type Account, type QuotaWindow, type Snapshot } from './contract';
-import { appliesToModel, carryModelWindows, claudeProfilePlan, classifyWindow, dedupeAccounts, riskyOverride, vclaudeNote, vclaudeRouted, vclaudeThreadSnapshot } from './logic';
+import { appliesToModel, carryModelWindows, claudeProfilePlan, dedupeAccounts, usageWindows, vclaudeUsedPercent, riskyOverride, vclaudeNote, vclaudeRouted, vclaudeThreadSnapshot } from './logic';
 import { hostContract } from './host-contract';
 import { createVClaudeReader, origin as vclaudeOrigin } from './vclaude';
 import { createComparisonReader } from './vclaude-comparison';
@@ -93,7 +93,7 @@ export default function plugin(bb: BbPluginApi) {
         windows: usage && usage.limitUnits > 0 ? [{
           // endsAt — end of the whole queue; the tick measures from the running package's start.
           kind: 'other' as const, label: 'Тариф', endsAt: usage.endsAt, startsAt: usage.startedAt, resetsAt: null,
-          usedPercent: Math.max(0, Math.min(100, 100 * (1 - usage.remainingUnits / usage.limitUnits))),
+          usedPercent: vclaudeUsedPercent(usage),
         }] : [] };
     });
   }
@@ -137,13 +137,10 @@ export default function plugin(bb: BbPluginApi) {
         const accounts = providers.map(provider => {
           const usage = record(raw[provider.id]);
           const old = saved?.accounts.find(a => a.providerId === provider.id);
-          const ok = usage.status === 'ok';
+          const parsed = usageWindows(usage);
+          const ok = parsed.ok;
           const email = string(usage.accountEmail)?.toLowerCase() ?? null;
-          const windows = ok && Array.isArray(usage.windows) ? carryModelWindows(usage.windows.flatMap(item => {
-            const w = record(item);
-            if (typeof w.label !== 'string' || typeof w.usedPercent !== 'number' || !Number.isFinite(w.usedPercent)) return [];
-            return [{ label: w.label, kind: classifyWindow(w.label, w.kind), usedPercent: w.usedPercent, resetsAt: string(w.resetsAt) }];
-          }), email ? modelWindows.get(`${provider.id}:${email}`) : undefined, Date.now()) : old?.windows ?? [];
+          const windows = ok ? carryModelWindows(parsed.windows, email ? modelWindows.get(`${provider.id}:${email}`) : undefined, Date.now()) : old?.windows ?? [];
           if (ok && email) {
             modelWindows.set(`${provider.id}:${email}`, windows.filter(w => w.kind === 'model'));
             // Kept across plugin reloads: a rate-limited Claude answer omits Fable until its reset.

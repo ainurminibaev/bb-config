@@ -125,7 +125,7 @@ export function SettingsView({ state, draft, dirty, busy, plans, actions, now, i
                 <StepRow key={step.id} step={step} index={index} total={draft.steps.length}
                   machine={machineLabel(step.hostId)} accountLabel={stepLabel(step)}
                   account={state.accounts.find(a => a.hostId === step.hostId && a.providerId === step.providerId)}
-                  limits={state.stepLimits[step.id]} now={at} reordering={reordering} over={reorder.over === index}
+                  limits={state.stepLimits[step.id]} readiness={state.readiness?.[step.id]} now={at} reordering={reordering} over={reorder.over === index}
                   row={reorder.row(index)} handle={reorder.handle(index, `step:${step.id}`)}
                   open={openStep === step.id} onToggle={() => setOpenStep(openStep === step.id ? null : step.id)}
                   onChange={next => set({ steps: draft.steps.map((s, i) => i === index ? next : s) })}
@@ -168,8 +168,9 @@ export function SettingsView({ state, draft, dirty, busy, plans, actions, now, i
 
 // ---- Ступени ----
 
-function StepRow({ step, index, total, machine, accountLabel, account, limits: summary, now, reordering, over, row, handle, open, onToggle, onChange, onMove }: {
+function StepRow({ step, index, total, machine, accountLabel, account, limits: summary, readiness, now, reordering, over, row, handle, open, onToggle, onChange, onMove }: {
   step: Step; index: number; total: number; machine: string; accountLabel: string; now: number;
+  readiness?: { ready: boolean; reason: string | null } | undefined;
   account: CascadeState['accounts'][number] | undefined;
   limits: CascadeState['stepLimits'][string] | undefined;
   reordering: boolean; over: boolean;
@@ -197,6 +198,7 @@ function StepRow({ step, index, total, machine, accountLabel, account, limits: s
           <b>{machine}</b><span className="asc-muted"> · </span>{providerLabel(step.providerId)}
           {accountLabel && accountLabel !== providerShort(step.providerId) && <span className="asc-muted"> · {accountLabel}</span>}
           {step.confirm && <span className="asc-tag" title="Перед входом спрашивает владельца">спросит</span>}
+          {readiness && !readiness.ready && <span className="asc-tag asc-tag-warn" title={`${readiness.reason ?? ''} · bb subscriptions-cascade check --step ${step.id}`}>не готова</span>}
         </span>
         <span className={`asc-limit asc-tone-text-${tone}`} title={cliProblem ?? summary?.text ?? text}>
           <Gauge remaining={remaining} tone={tone} />

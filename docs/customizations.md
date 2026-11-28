@@ -3828,6 +3828,15 @@ proxy-manager 0.3.6: свой значок «Прокси».
   родителя. Встроенный профиль добавляется в настройки один раз (`offeredProfiles`).
   Навык: раздел «Профиль: подтреды на Codex» (что отдавать, шаблон, приёмка). Тесты —
   `codex-subthreads.test.ts`, `brief.test.ts`; шаг — `subscriptions-cascade-0-3-4`.
+- 0.3.5: профиль — правило на дерево (`descendants`, `onDescendantsExhausted: wait|fallback`):
+  потомок без явного профиля наследует правило ближайшего предка. Неизвестная квота
+  Codex — не откат. Откат на «Авто» — без S11. Лимит Codex из хода доходит до каскада.
+  Опоздавший ответ источника квоты сохраняется, показание до 15 мин с запасом известно
+  (`staleOkMinutes`). Новые команды `bb subscriptions-cascade limits` и `check`;
+  неготовая ступень пропускается с причиной. Тест-контракт видимости лимитов на общих
+  образцах `fixtures/limits-samples.json` (копия в Thread Account Usage 0.3.3, её тест
+  сверяет те же статус и процент). Шаги — `subscriptions-cascade-0-3-5`,
+  `thread-account-usage-0-3-3`.
 
 Опирается на BB 0.50.1: плоский каталог моделей (≤ 64), `threads.spawn({ pluginMetadata,
 environment: reuse })`, `threads.getPluginMetadata`, `providerThreadId` в событиях треда,

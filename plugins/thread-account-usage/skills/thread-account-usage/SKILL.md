@@ -75,3 +75,5 @@ installed plugin directory. Build alone does not update the running bundle.
 Тред «Каскада подписок»: кольцо показывает квоту текущей ступени (провайдер, машина, аккаунт из паспорта каскада), в снимке есть поле `cascade`. Каскад не ответил — как раньше. Код: `cascade-passport.ts`, `cascade-step.ts`.
 
 Ступень на VClaude (0.3.1) получает ту же шапку, что тред Claude Code на машине с маршрутом VClaude: `gateway: "vclaude"`, остаток пакета вместо колец. Главный признак — ступень `kind: "gateway"`, `accountKey: "vclaude"`; запасной — ступень-подписка `claude-code`, у машины которой `claudeRoute` указывает на `vclaude.ru`. В панели подпись «ступень каскада» и пояснение «Ступень каскада идёт через шлюз VClaude».
+
+Сверка с каскадом (0.3.3): разбор окон квоты (`usageWindows`) и процента пакета VClaude (`vclaudeUsedPercent`) лежит в `logic.ts`. `limits-contract.test.ts` проверяет их на общем файле образцов `fixtures/limits-samples.json`; этот файл должен совпадать с копией в `agentcli-subscriptions-cascade`. Меняешь разбор или добавляешь источник квоты — обнови образец в обоих плагинах, иначе тесты обоих упадут.

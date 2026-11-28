@@ -341,6 +341,8 @@ export interface ExplainedAttempt extends Attempt {
   state: AttemptState;
   /** Сюда пошёл бы ход прямо сейчас (run или confirm). */
   chosen: boolean;
+  /** 0.3.5: причина состояния лимита (например, «ступень не готова: …»). */
+  reason?: string | null;
 }
 
 /**
@@ -356,7 +358,7 @@ export function explainProfile(input: SelectInput): { attempts: ExplainedAttempt
     const h = input.health(a.stepId, a.modelId);
     const state: AttemptState = !h.available ? 'unavailable' : h.exhausted ? 'exhausted' : h.unknown ? 'unknown' : 'available';
     const chosen = a.skip === null && picked !== null && picked.stepId === a.stepId && picked.modelId === a.modelId;
-    return { ...a, state, chosen };
+    return { ...a, state, chosen, reason: h.reason };
   });
   return { attempts, decision };
 }

@@ -27,6 +27,10 @@ import { createRouteService, rememberMachineLabels, type RouteDeps, type RouteSe
 export interface ExecutorDeps {
   providerId: string;
   loadConfig(): Promise<CascadeConfig>;
+  /** 0.3.5: `limits` — по каждой ступени состояние, процент/остаток, источник, причина unknown. */
+  limits?(): Promise<StepLimitLine[]>;
+  /** 0.3.5: `check` — готовность ступеней (по ступени или машине). */
+  check?(filter: { stepIds?: string[]; hostIds?: string[] }): Promise<StepCheck[]>;
   /** Сборка брошенных реплик единиц-worktree (sync/gc.ts). */
   gc?(options: GcOptions): Promise<GcReport>;
   /** Пометить модель недоступной на аккаунте машины (видно в таблице моделей). */
@@ -48,6 +52,8 @@ export interface ExecutorDeps {
   observeLimit(config: CascadeConfig, step: Step, event: unknown): void;
   sync: SyncPort | null;
 }
+
+import { formatCheck, formatLimits, type StepCheck, type StepLimitLine } from '../readiness.ts';
 
 const STATE_KEY = (threadId: string) => `exec:thread:${threadId}`;
 const NOTES_KEY = (threadId: string) => `exec:notes:${threadId}`;
@@ -431,6 +437,8 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
       { name: 'gc', summary: 'Убрать реплики и сессии Mutagen архивированных и удалённых тредов (опора не трогается)', usage: 'bb subscriptions-cascade gc [--dry-run] [--machine <hostId|имя>] [--json]' },
       { name: 'test-bridge', summary: 'Приёмка S13: считать штатный мост несовместимым (без правки BB)', usage: 'bb subscriptions-cascade test-bridge --incompatible|--compatible' },
       { name: 'resolve', summary: 'Просьба «Codex 6.2 на Tru», «на аккаунте vclaude» → закреплённая ступень каскада (pin:…), кандидаты или запасной путь', usage: 'bb subscriptions-cascade resolve "<просьба>" [--json]' },
+      { name: 'limits', summary: 'Лимиты по ступеням: состояние, процент или остаток, источник, причина «неизвестно» — то, что видит каскад', usage: 'bb subscriptions-cascade limits [--json]' },
+      { name: 'check', summary: 'Готовность ступеней: машина, CLI и вход, лимиты и сверка с Thread Account Usage, модели, общий путь, Mutagen, SSH', usage: 'bb subscriptions-cascade check [--step <id>|--host <id|имя>] [--json]' },
       { name: 'adopt', summary: 'Перевести треды в каскад (Handoff) и снять автоповтор у исходных', usage: 'bb subscriptions-cascade adopt --stuck|--thread <id>|--project <id> [--dry-run] [--model <профиль>] [--json] · --native --thread <id> [--model <профиль>] [--prompt <текст>] [--wait <сек>] [--dry-run] — та же сессия Claude в треде каскада, то же окружение' },
     ],
     async run(argv, ctx) {
@@ -498,6 +506,27 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
         if (rest.includes('--json')) return { exitCode: 0, stdout: `${JSON.stringify(result)}\n` };
         return { exitCode: 0, stdout: formatResolve(result) };
       }
+      if (command === 'limits') {
+        if (!deps.limits) return { exitCode: 2, stderr: 'отчёт о лимитах недоступен\n' };
+        const lines = await deps.limits();
+        if (rest.includes('--json')) return { exitCode: 0, stdout: `${JSON.stringify({ steps: lines })}\n` };
+        return { exitCode: 0, stdout: formatLimits(lines) };
+      }
+      if (command === 'check') {
+        if (!deps.check) return { exitCode: 2, stderr: 'проверка недоступна\n' };
+        const config = await deps.loadConfig();
+        const si = rest.indexOf('--step');
+        const hi = rest.indexOf('--host');
+        const stepId = si !== -1 ? rest[si + 1] : undefined;
+        const hostRef = hi !== -1 ? rest[hi + 1] : undefined;
+        if (stepId && !config.steps.some(s => s.id === stepId)) return { exitCode: 2, stderr: `ступень «${stepId}» не найдена (${config.steps.map(s => s.id).join(', ')})\n` };
+        const machine = hostRef ? config.machines.find(m => m.hostId === hostRef || m.label.toLowerCase() === hostRef.toLowerCase()) : undefined;
+        if (hostRef && !machine) return { exitCode: 2, stderr: `машина «${hostRef}» не найдена в каскаде\n` };
+        const checks = await deps.check({ ...(stepId ? { stepIds: [stepId] } : {}), ...(machine ? { hostIds: [machine.hostId] } : {}) });
+        const exitCode = checks.some(c => !c.ready) ? 1 : 0;
+        if (rest.includes('--json')) return { exitCode, stdout: `${JSON.stringify({ steps: checks })}\n` };
+        return { exitCode, stdout: formatCheck(checks) };
+      }
       if (command === 'adopt') {
         const parsed = parseAdoptArgs(rest);
         if ('error' in parsed) return { exitCode: 2, stderr: `${parsed.error}\n` };
@@ -515,7 +544,7 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
         if (rest.includes('--json')) return { exitCode: items.some(i => i.error) ? 1 : 0, stdout: `${JSON.stringify({ dryRun: options.dryRun, items })}\n` };
         return { exitCode: items.some(i => i.error) ? 1 : 0, stdout: formatAdopt(items, options.dryRun) };
       }
-      return { exitCode: 2, stderr: 'команды: status, resolve, setup, gc, test-quota, test-bridge, adopt\n' };
+      return { exitCode: 2, stderr: 'команды: status, resolve, limits, check, setup, gc, test-quota, test-bridge, adopt\n' };
     },
   });
 
