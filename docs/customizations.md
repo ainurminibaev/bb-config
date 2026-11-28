@@ -3847,6 +3847,9 @@ proxy-manager 0.3.6: свой значок «Прокси».
   отказа (пробуется, текущая ступень «липкая»); `pin:` пробует при неизвестной квоте;
   свежий тред на `pin:<Codex>` открывает сессию; последняя конфигурация в kv;
   `limits` по кэшу. Шаг — `subscriptions-cascade-0-3-7`.
+- 0.3.8: пакет vclaude свежий 20 мин при любом проценте; после обнаружения машин
+  опрашиваются ступени без показания; образец живого ответа VClaude в тест-контракте
+  (TAU 0.3.4). Шаги — `subscriptions-cascade-0-3-8`, `thread-account-usage-0-3-4`.
 
 Опирается на BB 0.50.1: плоский каталог моделей (≤ 64), `threads.spawn({ pluginMetadata,
 environment: reuse })`, `threads.getPluginMetadata`, `providerThreadId` в событиях треда,

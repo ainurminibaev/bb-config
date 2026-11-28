@@ -12,6 +12,7 @@ const S = JSON.parse(readFileSync(new URL('./fixtures/limits-samples.json', impo
   receivedAt: string;
   usageLimits: Record<string, { response: unknown; expected: { status: string; windows: Record<string, number> } }>;
   vclaude: { cabinet: unknown; rpc: { usage: { limitUnits: number; remainingUnits: number } }; expected: { status: string; usedPercent: number; remainingUnits: number } };
+  vclaudeCabinetCache: { rpc: { usage: { limitUnits: number; remainingUnits: number } }; expected: { usedPercent: number; remainingUnits: number } };
 };
 
 test('usageLimits: статус и проценты окон по каждому провайдеру — как ожидает каскад', () => {
@@ -28,4 +29,10 @@ test('vclaude: разбор кабинета даёт тот же пакет, ч
   assert.equal(usage.remainingUnits, S.vclaude.rpc.usage.remainingUnits);
   assert.equal(usage.remainingUnits, S.vclaude.expected.remainingUnits);
   assert.equal(Math.round(vclaudeUsedPercent(usage)), S.vclaude.expected.usedPercent);
+});
+
+test('0.3.8: живой ответ RPC vclaude из кэша — тот же процент и остаток, что видит каскад', () => {
+  const u = S.vclaudeCabinetCache.rpc.usage;
+  assert.equal(Math.round(vclaudeUsedPercent(u)), S.vclaudeCabinetCache.expected.usedPercent);
+  assert.equal(u.remainingUnits, S.vclaudeCabinetCache.expected.remainingUnits);
 });

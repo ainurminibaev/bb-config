@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-thread-account-usage",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "type": "module",
   "scripts": {
     "test": "node --test *.test.ts",

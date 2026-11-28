@@ -1,0 +1,30 @@
+{
+  "id": "thread-account-usage-0-3-4",
+  "title": "Thread Account Usage 0.3.4 — образец живого ответа VClaude в сверке с каскадом",
+  "component": "thread-account-usage",
+  "where": "server",
+  "kind": "command",
+  "applies": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "applicable",
+    "thread-account-usage",
+    "0.3.4"
+  ],
+  "apply": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "apply",
+    "thread-account-usage",
+    "0.3.4"
+  ],
+  "verify": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "check",
+    "thread-account-usage",
+    "0.3.4"
+  ],
+  "rerun": "Актуальная работающая версия проходит проверку без установки.",
+  "rollback": "Установите предыдущий тег thread-account-usage/v0.3.3."
+}
