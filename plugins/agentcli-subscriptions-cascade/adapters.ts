@@ -25,6 +25,8 @@ export interface AdapterDeps {
   usageLimits(hostId: string, signal: AbortSignal): Promise<Record<string, unknown>>;
   /** RPC `thread-account-usage.vclaude`: `{ usage, error }`; плагин не установлен — reject. */
   vclaudeUsage(refresh: boolean, signal: AbortSignal): Promise<unknown>;
+  /** 0.4.0: квота Codex через app-server машины (если usageLimits её не отдал, например HTTP 403). */
+  codexRateLimits?(hostId: string, signal: AbortSignal): Promise<unknown>;
   now(): Instant;
 }
 
@@ -146,7 +148,13 @@ export function codexLimits(deps: AdapterDeps): LimitsAdapter {
     provider: 'codex',
     supports: () => ({ poll: true, events: true }),
     async read(stage, signal) {
-      return readingFromUsageLimits((await deps.usageLimits(stage.hostId, signal)).codex, stage, deps.now(), true);
+      const usage = await deps.usageLimits(stage.hostId, signal).then(u => u.codex).catch(() => undefined);
+      const reading = readingFromUsageLimits(usage, stage, deps.now(), true);
+      if (reading.kind === 'sample' || !deps.codexRateLimits) return reading;
+      // usageLimits не отдал квоту (403 с российского IP) — спросить сам Codex на машине.
+      const own = await deps.codexRateLimits(stage.hostId, signal).catch(() => null);
+      const fromCodex = readingFromUsageLimits(rec(own).usage ?? undefined, stage, deps.now(), true);
+      return fromCodex.kind === 'sample' ? fromCodex : reading;
     },
     onNativeEvent: (stage, event, receivedAt) => codexEventReading(stage, event, receivedAt),
   };

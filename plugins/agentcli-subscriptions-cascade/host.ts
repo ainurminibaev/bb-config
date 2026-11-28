@@ -16,6 +16,7 @@ import { createCascadeBridge } from './bridge/wrapper.ts';
 import { LAUNCHER_ENV, launcherMain } from './launcher/main.ts';
 import { syncHostContract } from './sync/contract.ts';
 import { syncHostHandlers } from './sync/host-handlers.ts';
+import { readCodexRateLimits } from './launcher/codex-quota.ts';
 
 async function detectPlatform(): Promise<Platform> {
   if (process.platform === 'darwin') return 'macos';
@@ -37,6 +38,7 @@ export default experimental_defineHostEntry({
   contract: { ...hostContract, ...syncHostContract },
   handlers: {
     ...syncHostHandlers,
+    codexRateLimits: () => readCodexRateLimits(),
     probe: async ({ sharedPath }) => {
       const [platform, exists, writable, mutagen] = await Promise.all([
         detectPlatform(), can(sharedPath, constants.F_OK), can(sharedPath, constants.W_OK), mutagenVersion(),

@@ -190,16 +190,26 @@ export function buildPlan(input: PlanInput): Attempt[] | Unavailable {
     }
   }
   if (profile.policy !== 'only') {
+    // 0.4.0: модель важнее машины. Сначала модель по общему приоритету, внутри модели —
+    // ступени по порядку профиля. Первая готовая попытка — лучшая доступная модель:
+    // ход не уходит на ступень с моделью хуже, пока текущая модель есть на другой, а
+    // возврат S4 на более высокую ступень — только к той же или лучшей модели.
+    // Модель без ID на машине в план ступени не попадает (без попытки). Ступени без
+    // строк таблицы своего провайдера (модель CLI по умолчанию) — после всех моделей.
     const priority = modelPriority(config);
-    for (const { step, excluded } of steps) {
-      if (excluded || offHome(step)) { push(step, 'any', null, null, excluded ? 'excluded' : 'subthread'); continue; }
-      const placed = priority
-        .filter(r => r.providerId === step.providerId)
-        .map(r => ({ r, modelId: effectiveModelId(r, step.hostId, account(step.hostId, step.providerId)) }))
-        .filter(x => x.modelId !== null);
-      if (placed.length === 0) push(step, 'any', null, null, null);
-      for (const x of placed) push(step, 'any', x.r, x.modelId, null);
+    const live = steps.filter(({ step, excluded }) => !excluded && !offHome(step));
+    const placedOn = new Set<string>();
+    for (const r of priority) {
+      for (const { step } of live) {
+        if (step.providerId !== r.providerId) continue;
+        const modelId = effectiveModelId(r, step.hostId, account(step.hostId, step.providerId));
+        if (modelId === null) continue;
+        placedOn.add(step.id);
+        push(step, 'any', r, modelId, null);
+      }
     }
+    for (const { step } of live) if (!placedOn.has(step.id) && !priority.some(r => r.providerId === step.providerId && effectiveModelId(r, step.hostId, account(step.hostId, step.providerId)) !== null)) push(step, 'any', null, null, null);
+    for (const { step, excluded } of steps) if (excluded || offHome(step)) push(step, 'any', null, null, excluded ? 'excluded' : 'subthread');
   }
   return out;
 }

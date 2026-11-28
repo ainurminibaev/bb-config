@@ -1,6 +1,6 @@
 // Умолчания и нормализация конфигурации. Чистые функции, без SDK.
 import type { Stage } from './adapter.ts';
-import { defaultProfiles } from './profiles.ts';
+import { defaultProfiles, renameLegacyProfile } from './profiles.ts';
 import { autoCodexChildrenProfile } from './subthreads.ts';
 import { AUTO_CODEX_CHILDREN_ID, SUBTHREAD_CODEX_ID, configSchema, stepSchema, type CascadeConfig, type Machine, type ModelRow, type Platform, type Step } from './contract.ts';
 
@@ -106,7 +106,7 @@ export function normalizeConfig(input: unknown): CascadeConfig {
   // Пустой список, оставленный владельцем, не заполняется заново.
   const hasProfiles = typeof input === 'object' && input !== null && Array.isArray((input as { profiles?: unknown }).profiles);
   // 0.3.4 → 0.3.5: `subthreads: 'codex'` — правило потомков `descendants: 'subthread-codex'`.
-  let profiles = (hasProfiles ? uniqueBy(config.profiles, p => p.id) : defaultProfiles({ models })).map(p => {
+  let profiles = (hasProfiles ? uniqueBy(config.profiles, p => p.id) : defaultProfiles({ models })).map(renameLegacyProfile).map(p => {
     if (p.subthreads !== 'codex') return p;
     const { subthreads: _legacy, ...rest } = p;
     return { ...rest, descendants: p.descendants ?? SUBTHREAD_CODEX_ID, onDescendantsExhausted: p.onDescendantsExhausted ?? 'wait' };

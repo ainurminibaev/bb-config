@@ -64,7 +64,8 @@ export default function plugin(bb: BbPluginApi) {
     pluginId: 'thread-account-usage', method: 'vclaude', input: { refresh }, signal,
     outputSchema: z.object({ usage: z.unknown(), error: z.string().nullable() }),
   });
-  const registry = defaultRegistry({ usageLimits, vclaudeUsage, now: () => Date.now() });
+  const codexRateLimits = (hostId: string, signal: AbortSignal) => hostClient.call('codexRateLimits', {}, { hostId, signal: AbortSignal.any([signal, AbortSignal.timeout(25_000)]) });
+  const registry = defaultRegistry({ usageLimits, vclaudeUsage, codexRateLimits, now: () => Date.now() });
   // Модуль мониторинга лимитов: по LimitsAdapter на провайдер; движок читает его через healthFromReading.
   const monitor = new LimitMonitor(provider => registry.get(provider)?.limits);
   // Синхронизация файлов (Mutagen): исполнитель вызывает fileSync.prepareTurn / finishTurn вокруг хода.
@@ -90,7 +91,7 @@ export default function plugin(bb: BbPluginApi) {
     health: (config, threadId) => quotaLookupFor(config, threadId, (id, modelId) => {
       const step = config.steps.find(s => s.id === id);
       const blocked = step ? blockedModel(step.hostId, modelId) : null;
-      if (blocked) return { available: false, exhausted: false, unknown: false, resetsAt: null, reason: `модель недоступна: ${blocked.reason}` };
+      if (blocked) return { available: false, exhausted: false, unknown: false, resetsAt: null, reason: `недоступна на этой ступени: ${blocked.reason}` };
       const health = healthFromReading(step ? monitor.current(stageOf(step)) : undefined, modelId, { connected: step ? connected.has(step.hostId) : false, now: Date.now(), policies: config.policies });
       // 0.3.5: неготовая ступень (check) недоступна с причиной — маршрут её пропускает.
       const mark = readiness[id];
@@ -249,7 +250,8 @@ export default function plugin(bb: BbPluginApi) {
       if (live) {
         const config = await loadConfig().then(r => r.config).catch(() => null);
         for (const step of config?.steps ?? []) {
-          if (step.hostId !== h.id || step.authority !== 'subscription' || usage[step.providerId] === undefined) continue;
+          // Без квоты в ответе (403 у Codex) — не кладём «неизвестно»: ступень опросится в фоне своим адаптером.
+          if (step.hostId !== h.id || step.authority !== 'subscription' || (usage[step.providerId] as { status?: unknown } | undefined)?.status !== 'ok') continue;
           const stage = stageOf(step);
           monitor.ingest(stage, readingFromUsageLimits(usage[step.providerId], stage, at, true), at);
         }

@@ -29,11 +29,11 @@ test('каскад по умолчанию: Tru → Mac (шлюз) → UA (Pro) 
 
 test('профили из коробки: названия, политики и порядок', () => {
   assert.deepEqual(config().profiles.map(p => [p.id, p.name, p.policy, p.modelKey, p.excludedProviders]), [
-    ['auto', 'Авто', 'any', null, []],
-    ['auto-no-codex', 'Авто · без Codex', 'any', null, ['codex']],
-    ['auto-codex-children', 'Авто · подтреды на Codex', 'any', null, []],
-    ['opus-then-auto', 'Opus → Авто', 'prefer-then-any', 'opus-5.5', []],
-    ['fable-then-auto', 'Fable → Авто', 'prefer-then-any', 'fable-5.2', []],
+    ['auto', 'Лучшая модель · любая машина', 'any', null, []],
+    ['auto-no-codex', 'Лучшая модель · без Codex', 'any', null, ['codex']],
+    ['auto-codex-children', 'Лучшая модель · подтреды на Codex', 'any', null, []],
+    ['opus-then-auto', 'Opus, потом лучшая', 'prefer-then-any', 'opus-5.5', []],
+    ['fable-then-auto', 'Fable, потом лучшая', 'prefer-then-any', 'fable-5.2', []],
     ['only-opus-5.5', 'Только Opus 5.5', 'only', 'opus-5.5', []],
     ['only-fable-5.2', 'Только Fable 5.2', 'only', 'fable-5.2', []],
   ]);
@@ -47,10 +47,13 @@ test('only: «Только Opus» — Claude Opus на Tru → vclaude Opus на
   assert.deepEqual(pick(d), ['run', UA_PRO, 'claude-opus-5-5']);
 });
 
-test('any: на ступени — лучшая модель по приоритету; модельное окно уводит на следующую модель той же ступени', () => {
+test('any (0.4.0): модель важнее машины — Opus исчерпан на Tru → Opus на следующей ступени, а не Fable на Tru', () => {
   assert.deepEqual(pick(selectStep(input({}))), ['run', TRU_MAX, 'claude-opus-5-5']);
   const d = selectStep(input({ [`${TRU_MAX}|claude-opus-5-5`]: exhausted(NOW + 60_000) }));
-  assert.deepEqual(pick(d), ['run', TRU_MAX, 'claude-fable-5-2']);
+  assert.ok(d.kind === 'run' && d.stepId !== TRU_MAX && /opus/u.test(d.modelId ?? ''), JSON.stringify(d));
+  // Opus нигде нет — следующая модель по приоритету, ступени по порядку.
+  const opusOut = (id: string, m: string | null) => (/opus/u.test(m ?? '') ? exhausted(NOW + 60_000) : ok);
+  assert.deepEqual(pick(selectStep({ ...input({}), health: opusOut })), ['run', TRU_MAX, 'claude-fable-5-2']);
   const c = config();
   c.policies.modelPriority = ['fable-5.2', 'opus-5.5'];
   assert.deepEqual(pick(selectStep(input({}, { config: c }))), ['run', TRU_MAX, 'claude-fable-5-2'], 'приоритет моделей задаётся в настройках');

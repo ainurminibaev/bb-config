@@ -1,0 +1,30 @@
+{
+  "id": "subscriptions-cascade-0-4-0",
+  "title": "Каскад подписок 0.4.0 — модель важнее машины, 402 «лимит» и «тариф» раздельно, квота Codex через сам Codex",
+  "component": "agentcli-subscriptions-cascade",
+  "where": "server",
+  "kind": "command",
+  "applies": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "applicable",
+    "agentcli-subscriptions-cascade",
+    "0.4.0"
+  ],
+  "apply": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "apply",
+    "agentcli-subscriptions-cascade",
+    "0.4.0"
+  ],
+  "verify": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "check",
+    "agentcli-subscriptions-cascade",
+    "0.4.0"
+  ],
+  "rerun": "Актуальная работающая версия проходит проверку без установки.",
+  "rollback": "Установите предыдущий тег agentcli-subscriptions-cascade/v0.3.9."
+}
