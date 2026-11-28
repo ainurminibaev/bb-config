@@ -3742,6 +3742,34 @@ proxy-manager 0.3.6: свой значок «Прокси».
   `bb plugin remove thread-description`.
 - **Обновление для установивших:** шаг `plugin-thread-description` в релизе v1.20.0.
 
+## Каскад подписок 0.3.0 — подтреды, закреплённые ступени, resolve, adopt --native (28 ноября 2026)
+
+Плагин `agentcli-subscriptions-cascade` 0.3.0 (`plugins/agentcli-subscriptions-cascade/`).
+Подробно — `ARCHITECTURE.md` плагина, раздел «0.3.0»; как пользоваться — навык
+`subscriptions-cascade` («Если ты сам на каскаде», «Запуск подтредов», «Закреплённые
+ступени», «Одновременные ходы и рабочая папка», «adopt --native»).
+
+- Окружение CLI ступени: `BB_CASCADE_PROFILE`, `BB_CASCADE_STEP` (промпт не меняется).
+- На чужой ступени CLI видит тред BB (`BB_THREAD_ID`, `BB_PROJECT_ID`, `BB_ENVIRONMENT_ID`,
+  своё `BB_THREAD_STORAGE`; адрес сервера и `bb` — машины ступени).
+- Закреплённые ступени `pin:<stepId>[:<модель>]` в списке моделей после профилей;
+  `bb subscriptions-cascade resolve "<просьба>" [--json]`.
+- `bb subscriptions-cascade adopt --native --thread <id> [--dry-run]` — тред Claude Code
+  на каскад с той же сессией (копия jsonl при первом ходе).
+- Codex на ступени — штатная песочница и сеть (ограничение 0.2.8 снято).
+- Писатели одной машины в одной папке не ждут друг друга; опора не блокируется.
+- `routeTurn` по билету (`routeTurnResult`): подготовка дольше 300 с не рвёт запрос.
+- Ступень: `maxConcurrent` (по умолчанию без лимита) и `onBusy: wait|next` — в «⋯» ступени.
+
+Опирается на BB 0.50.1: плоский каталог моделей (≤ 64), `threads.spawn({ pluginMetadata,
+environment: reuse })`, `threads.getPluginMetadata`, `providerThreadId` в событиях треда,
+окружение терминала BB машины (`BB_SERVER_URL`, `BB_CLI`). Тесты: `npm test --prefix
+plugins/agentcli-subscriptions-cascade` (246; новые — `pins.test.ts`, `busy.test.ts`,
+`bridge/adopt-native.test.ts`, `bridge/route-jobs.test.ts`), `npm run typecheck`,
+`bb plugin build`. Обновление для установивших — шаг `subscriptions-cascade-0-3-0`
+(`docs/releases/next/`, `plugin_git_update.py`); откат — тег
+`agentcli-subscriptions-cascade/v0.2.16`.
+
 ## Каскад подписок 0.1.1–0.1.9 — исправления живой приёмки (28 ноября 2026)
 
 Плагин ставится тредом приёмки на сервер BB из коммитов ветки плагина;

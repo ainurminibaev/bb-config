@@ -109,10 +109,21 @@ export function remoteArgs(args: readonly string[]): { args: string[]; dropped: 
 const REMOTE_ENV_ALLOW = /^(CLAUDE_CODE_|MAX_THINKING_TOKENS$|DISABLE_|BASH_DEFAULT_TIMEOUT_MS$|BASH_MAX_TIMEOUT_MS$|MCP_TIMEOUT$|CODEX_)/u;
 const REMOTE_ENV_DENY = /(OAUTH|_TOKEN$|_KEY$|SECRET|PASSWORD|CREDENTIAL|_HOME$|CONFIG_DIR$|EXECUTABLE$|BASE_URL$)/u;
 
+/**
+ * Тред BB для CLI на машине ступени (0.3.0): без них `bb status` там пустой и
+ * агент не знает свой тред. Переносятся только ID треда, проекта, окружения и
+ * хранилище треда (агент заменяет путь на существующий на машине ступени).
+ * Адрес сервера и путь `bb` (`BB_SERVER_URL`, `BB_CLI`, `BB_HOST_DAEMON_PORT`) —
+ * свои у каждой машины: их даёт терминал BB машины ступени, отсюда не уезжают.
+ * Токенов BB штатный мост CLI не ставит — `bb` на машине ступени ходит через свой демон.
+ */
+export const REMOTE_THREAD_ENV = ['BB_THREAD_ID', 'BB_PROJECT_ID', 'BB_ENVIRONMENT_ID', 'BB_THREAD_STORAGE'] as const;
+
 export function remoteEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined) continue;
+    if ((REMOTE_THREAD_ENV as readonly string[]).includes(key)) { out[key] = value; continue; }
     if (!REMOTE_ENV_ALLOW.test(key) || REMOTE_ENV_DENY.test(key)) continue;
     out[key] = value;
   }
@@ -135,4 +146,27 @@ export function probeArgs(args: readonly string[], exists: (sessionId: string) =
     out.push(arg);
   }
   return out;
+}
+
+/**
+ * `adopt --native` (0.3.0): строки jsonl исходной сессии Claude под новым ID —
+ * поле `sessionId` каждой записи меняется на ID сессии нового треда, остальное
+ * как есть. Нечитаемые строки не переносятся.
+ */
+export function forkSessionLines(text: string, fromId: string, toId: string): string {
+  const out: string[] = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line) as Record<string, unknown>;
+      if (entry && typeof entry === 'object' && entry.sessionId === fromId) entry.sessionId = toId;
+      out.push(JSON.stringify(entry));
+    } catch { /* обрывок строки — пропускаем */ }
+  }
+  return out.length > 0 ? `${out.join('\n')}\n` : '';
+}
+
+/** В файле сессии уже есть разговор (сообщения пользователя или ответа) — копию поверх не кладём. */
+export function hasConversation(text: string): boolean {
+  return /"type"\s*:\s*"(user|assistant)"/u.test(text);
 }

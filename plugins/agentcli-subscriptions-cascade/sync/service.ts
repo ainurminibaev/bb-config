@@ -24,6 +24,8 @@ export interface SyncService {
   gc(options: GcOptions): Promise<GcReport>;
   prepareTurn(thread: SyncThreadInput, step: SyncStepRef, progress?: SyncProgress): Promise<SyncResult>;
   finishTurn(thread: SyncThreadInput, step: SyncStepRef): Promise<SyncResult>;
+  /** Кто сейчас пишет рабочую папку треда на исполнителе: машина и треды (0.3.0). */
+  writerOf(thread: SyncThreadInput): Promise<{ hostId: string; threadIds: string[] } | null>;
   applyMode(projectId: string): Promise<SyncResult>;
   teardown(projectId: string, options?: { removeMount?: boolean }): Promise<SyncResult>;
   status(projectId: string): Promise<ProjectSyncState & { mode: SyncModeExt }>;
@@ -234,6 +236,7 @@ export function createSyncService(bb: BbPluginApi, loadConfig: () => Promise<{ c
     },
     prepareTurn: async (thread, step, progress) => orchestrator.prepareTurn(await unitOf(thread), step, progress),
     finishTurn: async (thread, step) => orchestrator.finishTurn(await unitOf(thread), step),
+    writerOf: async thread => orchestrator.writerOf((await unitOf(thread)).projectId),
     applyMode: projectId => orchestrator.applyMode(projectId),
     teardown: (projectId, options) => orchestrator.teardown(projectId, options),
     async status(projectId) {

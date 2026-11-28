@@ -1,10 +1,11 @@
 // Маршрутизатор хода на сервере плагина: решение движка до запуска CLI,
 // синхронизация файлов до и после хода, состояние треда, паспорт треда.
 // Все обращения к BB и sync/ — через зависимости: тестируется без SDK.
+import { profileName } from '../pins.ts';
 import { bindingEpoch } from '../config.ts';
 import { grant, pruneConsents, type Consent } from '../consent.ts';
 import type { CascadeConfig, DiscoveredAccount, Step } from '../contract.ts';
-import { explainProfile, nextThreadState, selectStep, type Decision, type HealthLookup, type ThreadCascadeState } from '../engine.ts';
+import { BUSY_RECHECK_MS, explainProfile, nextThreadState, selectStep, type Decision, type HealthLookup, type ThreadCascadeState } from '../engine.ts';
 import { previewText, usesTestQuota } from '../profiles.ts';
 import { buildHandoff, type ThreadEventRow } from './handoff.ts';
 import type {
@@ -26,6 +27,8 @@ export interface SyncPort {
   finishTurn(thread: { threadId: string; projectId: string; workspace?: string | null }, step: { hostId: string }): Promise<SyncOutcome>;
   /** Режим синхронизации проекта для паспорта. */
   modeOf?(config: CascadeConfig, projectId: string): string;
+  /** Кто пишет рабочую папку на исполнителе (0.3.0): второй тред идёт на ту же машину. */
+  writerOf?(thread: { threadId: string; projectId: string; workspace?: string | null }): Promise<{ hostId: string; threadIds: string[] } | null>;
 }
 
 export interface ThreadInfo {
@@ -65,6 +68,11 @@ export interface StoredThreadState {
   skipTurnKey?: string | null;
   /** Нативные сессии треда по провайдерам (переход Claude ↔ Codex). */
   native?: NativeSessions | null;
+  /**
+   * `adopt --native`: исходная сессия Claude, которую продолжает первый ход
+   * треда. `done` — ход Claude с ней завершился успешно, копия больше не нужна.
+   */
+  seed?: { sessionId: string; sourceThreadId: string; done: boolean } | null;
 }
 
 export interface RouteDeps {
@@ -88,6 +96,8 @@ export interface RouteDeps {
   sleep?(ms: number): Promise<void>;
   /** Сколько ждать, пока другой живой тред пишет рабочую папку. По умолчанию 10 мин. */
   busyWaitMs?: number;
+  /** Сколько ждать места на занятой ступени (maxConcurrent, onBusy: wait). По умолчанию 30 мин. */
+  stepBusyWaitMs?: number;
   /** Повторы шага подготовки при сбое (обрыв SSH, ошибка Mutagen). По умолчанию 2, пауза 5 с. */
   prepRetries?: number;
   prepRetryPauseMs?: number;
@@ -103,10 +113,23 @@ export interface RouteDeps {
   saveProjectConsents?(projectId: string, consents: Consent[]): Promise<void>;
   /** События треда после seq (по возрастанию) — для сводки и дельты другой нативной сессии. */
   threadEvents?(threadId: string, afterSeq: number): Promise<ThreadEventRow[]>;
+  /** Название треда для строк ленты («Жду: папку держит тред <название> на Mac»). */
+  threadTitle?(threadId: string): Promise<string | null>;
+  /** Посев `adopt --native` для нового треда (одноразовый ключ в метаданных треда → хранилище плагина). */
+  adoptSeed?(threadId: string): Promise<{ sourceSessionId: string; sourceThreadId: string } | null>;
 }
 
 /** Что сделать владельцу, если ход не начался (рядом со строкой отказа). */
 export const REFUSAL_ACTIONS = 'Что сделать: повторите ход · пропустить ступень — выключите её в настройках «Каскада» · Настроить: Настройки → Плагины → «Каскад подписок» → «Настроить» или bb subscriptions-cascade setup';
+
+/**
+ * Окружение CLI ступени: профиль треда (`auto`, `pin:…`) и ступень. Подтред,
+ * запущенный из такого треда, берёт профиль отсюда (`bb thread spawn … --provider
+ * subscriptions-cascade --model "$BB_CASCADE_PROFILE"`).
+ */
+export function cascadeEnv(profileId: string, stepId: string): Record<string, string> {
+  return { BB_CASCADE_PROFILE: profileId, BB_CASCADE_STEP: stepId };
+}
 
 /** «Ход не запущен: Каскад подписок → <источник>: <причина>». */
 export function refusalText(source: string, reason: string): string {
@@ -241,6 +264,35 @@ export interface RouteService {
   threadScheme(threadId: string): Promise<{ name: string; text: string; test: boolean; attempts: unknown[]; config: unknown } | null>;
 }
 
+/**
+ * Идущие ходы по ступеням (для `maxConcurrent`): ступень → тред → начало хода.
+ * У треда один ход: новый ход снимает прежний. Ход без finishTurn (упал
+ * запускатель) перестаёт считаться через 3 часа. Хранится в памяти сервера:
+ * после перезагрузки плагина счёт начинается заново.
+ */
+export class ActiveTurns {
+  private readonly steps = new Map<string, Map<string, number>>();
+  static readonly STALE_MS = 3 * 3_600_000;
+  start(stepId: string, threadId: string, now: number): void {
+    for (const turns of this.steps.values()) turns.delete(threadId);
+    const turns = this.steps.get(stepId) ?? new Map<string, number>();
+    turns.set(threadId, now);
+    this.steps.set(stepId, turns);
+  }
+  finish(stepId: string, threadId: string): void { this.steps.get(stepId)?.delete(threadId); }
+  /** Ходы других тредов на ступени. */
+  count(stepId: string, exceptThreadId: string, now: number): number {
+    const turns = this.steps.get(stepId);
+    if (!turns) return 0;
+    let n = 0;
+    for (const [threadId, since] of turns) {
+      if (now - since > ActiveTurns.STALE_MS) { turns.delete(threadId); continue; }
+      if (threadId !== exceptThreadId) n += 1;
+    }
+    return n;
+  }
+}
+
 export function createRouteService(deps: RouteDeps): RouteService {
   const warn = deps.warn ?? (() => {});
   // Один ход треда за раз: параллельные запуски CLI одного треда (пробы
@@ -255,6 +307,7 @@ export function createRouteService(deps: RouteDeps): RouteService {
   }
 
   let lastConfig: CascadeConfig | null = null;
+  const activeTurns = new ActiveTurns();
   const prep = new PrepTracker(deps.now, hostId => (lastConfig ? machineLabel(lastConfig, hostId) : hostId));
   async function projectConsentsOf(projectId: string): Promise<Consent[]> {
     if (!projectId || !deps.projectConsents) return [];
@@ -277,6 +330,26 @@ export function createRouteService(deps: RouteDeps): RouteService {
   }
 
   /** Решение и подготовка хода; skipped — ступени, пропущенные в этом ходе после сбоя подготовки. */
+  /** «Жду: папку держит тред <название> на <машина>». */
+  async function holderLine(threadId: string, projectId: string, workspace: string | null, config: CascadeConfig): Promise<string> {
+    const holder = await deps.sync?.writerOf?.({ threadId, projectId, workspace }).catch(() => null);
+    const other = holder?.threadIds.find(t => t !== threadId);
+    if (!holder || !other) return 'Жду освобождения рабочей папки';
+    const title = await deps.threadTitle?.(other).catch(() => null);
+    return `Жду: папку держит тред ${title ? `«${title.slice(0, 60)}»` : other} на ${machineLabel(config, holder.hostId)}`;
+  }
+
+  /**
+   * Посев `adopt --native`: уже записанный в состоянии треда или (только до первого
+   * хода треда) по одноразовому ключу из метаданных. Ошибка чтения — без посева.
+   */
+  async function adoptSeedOf(threadId: string, stored: StoredThreadState): Promise<NonNullable<StoredThreadState['seed']> | null> {
+    if (stored.seed) return stored.seed.done ? null : stored.seed;
+    if (stored.lastRun !== null || !deps.adoptSeed) return null;
+    const found = await deps.adoptSeed(threadId).catch(error => { warn(`посев adopt --native: ${String(error)}`); return null; });
+    return found ? { sessionId: found.sourceSessionId, sourceThreadId: found.sourceThreadId, done: false } : null;
+  }
+
   async function routeOnce(input: ReturnType<typeof routeTurnInputSchema.parse>, skipped: string[]): Promise<RouteTurnOutput> {
     {
       const config = await deps.loadConfig();
@@ -325,9 +398,48 @@ export function createRouteService(deps: RouteDeps): RouteService {
       // Согласие «на ход», данное до автоповтора (смена провайдера внутри хода), — и на повтор.
       const carry = stored.carryConsent && stored.carryConsent.until > now ? config.steps.find(st => st.id === stored.carryConsent!.stepId) : undefined;
       if (carry) forever.push(grant('turn', { stepId: carry.id, bindingEpoch: bindingEpoch(carry), threadId: input.threadId, turnId: engine.turnId, projectId, now }, null));
-      const decision: Decision = selectStep({
-        config, requestedModel: profileId, accounts: deps.accounts(), thread: { ...engine, skippedStepIds: [...cardSkipped, ...skipped], consents: [...engine.consents, ...forever] }, health: withObserved(deps.health(config, input.threadId), stored.observed, now, stored.modelBlocks), now,
+      // Папку уже пишет тред на исполнителе: второй тред предпочитает ту же машину
+      // (писатели одной машины не ждут друг друга), если она есть в его профиле и доступна.
+      const anchorNow = anchorHostId(config);
+      const unitWorkspace = bridgeHost !== null && bridgeHost === anchorNow ? input.cwd : null;
+      const holder = deps.sync?.writerOf && projectId
+        ? await deps.sync.writerOf({ threadId: input.threadId, projectId, workspace: unitWorkspace }).catch(() => null)
+        : null;
+      const preferHostId = holder && holder.hostId !== anchorNow && holder.threadIds.some(t => t !== input.threadId) ? holder.hostId : null;
+      // Опора с писателем не блокируется — предпочтение нужно, только когда ход ушёл бы
+      // на третью машину и ждал там освобождения папки.
+      let prefer: string | null = null;
+      const decide = (at: number): Decision => selectStep({
+        preferHostId: prefer,
+        config, requestedModel: profileId, accounts: deps.accounts(), thread: { ...engine, skippedStepIds: [...cardSkipped, ...skipped], consents: [...engine.consents, ...forever] }, health: withObserved(deps.health(config, input.threadId), stored.observed, at, stored.modelBlocks), now: at,
+        running: stepId => activeTurns.count(stepId, input.threadId, at),
       });
+      let decision: Decision = decide(now);
+      if (preferHostId && (decision.kind === 'run' || decision.kind === 'confirm') && decision.hostId !== anchorNow && decision.hostId !== preferHostId) {
+        prefer = preferHostId;
+        decision = decide(now);
+      }
+      const busyNotes: RouteNote[] = [];
+      // Ступень занята (maxConcurrent, onBusy: wait): ход ждёт освобождения со строкой в ленте.
+      if (decision.kind === 'wait' && decision.reason === 'busy') {
+        const step = config.steps.find(st => st.id === (decision as { stepId: string | null }).stepId);
+        const machine = step ? machineLabel(config, step.hostId) : 'ступени';
+        const started = deps.now();
+        const limitMs = deps.stepBusyWaitMs ?? 30 * 60_000;
+        const sleep = deps.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
+        if (step) prep.begin(input.threadId, { reason: 'start', from: null, to: stageLabel(config, { stepId: step.id, hostId: step.hostId, providerId: step.providerId, modelId: null }), stepId: step.id });
+        while (decision.kind === 'wait' && decision.reason === 'busy' && deps.now() - started < limitMs) {
+          prep.attempt(input.threadId, `Жду: на ${machine} уже ${decision.running ?? step?.maxConcurrent ?? ''} ход(ов) · ${Math.round((deps.now() - started) / 1000)} с`);
+          await sleep(BUSY_RECHECK_MS);
+          decision = decide(deps.now());
+        }
+        prep.attempt(input.threadId, null);
+        if (decision.kind === 'wait' && decision.reason === 'busy') {
+          const note = `Жду: на ${machine} уже ${decision.running ?? ''} ход(ов) (предел ${step?.maxConcurrent ?? '—'}) — не освободилась за ${Math.round(limitMs / 60_000)} мин.`;
+          return { action: 'refuse', retryable: true, message: refusalText('ступень занята', note), notes: [{ kind: 'wait', cause: 'recheck', until: null, note, ...(step ? { stepId: step.id } : {}) }] };
+        }
+        busyNotes.push({ kind: 'wait', cause: 'recheck', until: null, note: `Ждал свободного места на ${machine} ${Math.round((deps.now() - started) / 1000)} с (предел ходов ${step?.maxConcurrent ?? '—'}).` });
+      }
 
       const save = (next: StoredThreadState) => deps.save(input.threadId, next).catch(error => warn(`состояние треда: ${String(error)}`));
 
@@ -468,7 +580,7 @@ export function createRouteService(deps: RouteDeps): RouteService {
         const waitStarted = deps.now();
         const busyWaitMs = deps.busyWaitMs ?? 10 * 60_000;
         while (!outcome.ok && outcome.reason === 'busy' && deps.now() - waitStarted < busyWaitMs) {
-          prep.attempt(input.threadId, `жду освобождения рабочей папки · ${Math.round((deps.now() - waitStarted) / 1000)} с`);
+          prep.attempt(input.threadId, `${await holderLine(input.threadId, projectId, workspace, config)} · ${Math.round((deps.now() - waitStarted) / 1000)} с`);
           await sleep(10_000);
           outcome = await prepare();
         }
@@ -507,8 +619,11 @@ export function createRouteService(deps: RouteDeps): RouteService {
         notes.push({ kind: 'problem', message: message.slice(0, 300), stage: to, stepId: decision.stepId, note: REFUSAL_ACTIONS });
         return { action: 'refuse', retryable: false, message, notes };
       }
+      notes.unshift(...busyNotes);
+      activeTurns.start(decision.stepId, input.threadId, deps.now());
       notes.push({ kind: 'run', stage: to, stepId: decision.stepId });
       notes.push({ kind: 'state', phase: 'running', stage: to, stepId: decision.stepId, profileId });
+      const seed = decision.providerId === 'claude-code' ? await adoptSeedOf(input.threadId, stored) : null;
       await save({
         ...stored, profileId,
         engine: nextThreadState(engine, decision, now),
@@ -516,8 +631,15 @@ export function createRouteService(deps: RouteDeps): RouteService {
         pendingFlushHostId: decision.hostId !== anchor && needsSync ? decision.hostId : stored.pendingFlushHostId,
         workspace,
         carryConsent: stored.carryConsent && stored.carryConsent.stepId === decision.stepId ? null : stored.carryConsent ?? null,
+        ...(seed ? { seed } : {}),
       });
-      return { action: 'run', stepId: decision.stepId, hostId: decision.hostId, providerId: decision.providerId, modelId: decision.modelId, local, cwd, env, stage: to, notes };
+      // Тред знает, что он на каскаде, через окружение CLI ступени (0.3.0), а не через
+      // промпт: начало запроса не меняется, кэш промптов не теряется.
+      const stageEnv = { ...env, ...cascadeEnv(profileId, decision.stepId) };
+      return {
+        action: 'run', stepId: decision.stepId, hostId: decision.hostId, providerId: decision.providerId, modelId: decision.modelId, local, cwd, env: stageEnv, stage: to, notes,
+        ...(seed && !seed.done ? { seedSession: { sessionId: seed.sessionId } } : {}),
+      };
     }
   }
 
@@ -542,6 +664,7 @@ export function createRouteService(deps: RouteDeps): RouteService {
         return { ok: false, message, cwd: null, notes: [...notes, { kind: 'problem', message: message.slice(0, 300), stepId: input.stepId, note: REFUSAL_ACTIONS }] };
       }
       if (input.hostId !== anchor) await deps.save(input.threadId, { ...stored, pendingFlushHostId: input.hostId }).catch(() => {});
+      activeTurns.start(input.stepId, input.threadId, deps.now());
       return { ok: true, message: '', cwd: outcome.cwd, notes };
     });
   }
@@ -584,10 +707,16 @@ export function createRouteService(deps: RouteDeps): RouteService {
       for (const observation of input.limits) if (step) deps.observeLimit(config, step, observation);
       const notes: RouteNote[] = [];
       if (input.probe) return { notes };
+      activeTurns.finish(input.stepId, input.threadId);
       let stored = await deps.load(input.threadId).catch(() => undefined);
       if (stored && input.limits.length) {
         stored = { ...stored, observed: mergeObserved(stored.observed, input.stepId, input.limits, deps.now()) };
         await deps.save(input.threadId, stored).catch(error => warn(`лимит хода: ${String(error)}`));
+      }
+      // Первый удачный ход Claude переведённого треда: сессия продолжена, копия больше не нужна.
+      if (stored?.seed && !stored.seed.done && input.exitCode === 0 && step?.providerId === 'claude-code') {
+        stored = { ...stored, seed: { ...stored.seed, done: true } };
+        await deps.save(input.threadId, stored).catch(error => warn(`посев: ${String(error)}`));
       }
       const projectId = input.projectId ?? stored?.engine.projectId ?? '';
       const anchor = anchorHostId(config);
@@ -640,9 +769,8 @@ export function createRouteService(deps: RouteDeps): RouteService {
     const profileId = stored.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto';
     const now = deps.now();
     const explained = explainProfile({ config, requestedModel: profileId, accounts: deps.accounts(), thread: stored.engine, health: withObserved(deps.health(config, threadId), stored.observed, now), now });
-    const profile = config.profiles.find(p => p.id === profileId);
     return {
-      name: profile?.name ?? profileId,
+      name: profileName(config, profileId),
       text: previewText(config, explained.decision, explained.attempts, now),
       test: usesTestQuota(config, threadId),
       attempts: explained.attempts,

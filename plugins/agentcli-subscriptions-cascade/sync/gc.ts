@@ -6,7 +6,7 @@
 // Основная папка проекта (единица = ID проекта) gc не касается.
 import type { CascadeConfig, Machine } from '../contract.ts';
 import { MUTAGEN_LABEL, labelValue } from './mutagen.ts';
-import type { ProjectSyncState } from './orchestrator.ts';
+import { writerThreads, type ProjectSyncState } from './orchestrator.ts';
 import { buildContext, parseUnitId, syncUnitId } from './service.ts';
 
 export interface UnitRecord { unitId: string; projectId: string; workspace: string; threads?: string[] }
@@ -38,7 +38,8 @@ export function judgeUnit(unit: UnitRecord, owners: ReadonlySet<string>, live: R
   if (owners.size === 0) return { action: 'keep', reason: 'владелец неизвестен — не трогаю' };
   const alive = [...owners].filter(t => live.has(t));
   if (alive.length) return { action: 'keep', reason: `живой тред ${alive.join(', ')}` };
-  if (state?.writer && live.has(state.writer.threadId)) return { action: 'keep', reason: `блокировка писателя живого треда ${state.writer.threadId}` };
+  const liveWriter = state?.writer ? Object.keys(writerThreads(state.writer)).find(t => live.has(t)) : undefined;
+  if (liveWriter) return { action: 'keep', reason: `блокировка писателя живого треда ${liveWriter}` };
   const anchorTurn = Object.keys(state?.anchorTurns ?? {}).find(t => live.has(t));
   if (anchorTurn) return { action: 'keep', reason: `идёт ход ${anchorTurn} на опоре` };
   const lock = state?.writer ? ` (блокировка брошенного хода ${state.writer.threadId} на ${state.writer.hostId}: его изменения уйдут в карантин)` : '';

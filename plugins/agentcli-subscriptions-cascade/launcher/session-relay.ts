@@ -26,6 +26,8 @@ export interface RelayPorts {
   /** Запустить CLI ступени: строки stdout — в onLine. */
   start(route: Extract<RoutedTurn, { action: 'run' }>, args: string[], onLine: (line: string) => void): StageChild;
   routeTurn(): Promise<RoutedTurn>;
+  /** Перед запуском CLI на ступени хода: посев сессии `adopt --native`. */
+  prepareSession?(route: Extract<RoutedTurn, { action: 'run' }>): void;
   /** Записал ли CLI файл сессии (для `--resume` на новой ступени). Нет порта — считается записанным. */
   sessionExists?(route: Extract<RoutedTurn, { action: 'run' }>): boolean;
   /** Лимит исчерпан в ходе: отметить ступень до того, как мост увидит конец хода. */
@@ -56,7 +58,10 @@ export function resumeArgs(args: readonly string[], sessionId: string): string[]
   return [...out, `--resume=${sessionId}`];
 }
 
-const sameStage = (a: RunRoute, b: RunRoute) => a.stepId === b.stepId && a.hostId === b.hostId && a.modelId === b.modelId;
+// Профиль треда — в окружении CLI (BB_CASCADE_PROFILE): сменили профиль на той же
+// ступени (например, «Закреплено» → «Авто») — процесс перезапускается с --resume.
+const sameStage = (a: RunRoute, b: RunRoute) => a.stepId === b.stepId && a.hostId === b.hostId && a.modelId === b.modelId
+  && (a.env?.BB_CASCADE_PROFILE ?? null) === (b.env?.BB_CASCADE_PROFILE ?? null);
 
 function parse(line: string): Record<string, unknown> | null {
   if (!line.startsWith('{')) return null;
@@ -242,6 +247,7 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
     await finishing;
     route = next;
     childExit = null;
+    ports.prepareSession?.(route);
     child = ports.start(route, argsFor(route, true), onLine);
     watchChild(child);
     // Начало сессии для нового процесса: те же служебные запросы, ответы — не мосту.

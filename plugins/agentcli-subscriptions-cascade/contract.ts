@@ -73,6 +73,13 @@ export const stepSchema = z.object({
   enabled: z.boolean().default(true),
   /** Переход на ступень только после подтверждения владельца (профиль может переопределить). */
   confirm: z.boolean().default(false),
+  /**
+   * Сколько ходов (всех тредов и подтредов) одновременно идут на ступени (0.3.0);
+   * null — без лимита. Для слабой машины рядом с продом.
+   */
+  maxConcurrent: z.number().int().min(1).max(64).nullable().default(null),
+  /** Ступень занята (maxConcurrent): wait — ход ждёт освобождения, next — идёт на следующую ступень профиля. */
+  onBusy: z.enum(['wait', 'next']).default('wait'),
 });
 export type Step = z.infer<typeof stepSchema>;
 

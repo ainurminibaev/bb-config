@@ -66,6 +66,8 @@ export default function plugin(bb: BbPluginApi) {
     },
     saveConfig: async config => { await settings.experimental_set({ config: JSON.stringify(normalizeConfig(config), null, 2) }); },
     accounts: () => accounts,
+    hosts: () => hosts.map(h => ({ hostId: h.hostId, name: h.name })),
+    blockedModel: (hostId, modelId) => blockedModel(hostId, modelId) !== null,
     ensureDiscovered: () => discover(false),
     health: (config, threadId) => quotaLookupFor(config, threadId, (id, modelId) => {
       const step = config.steps.find(s => s.id === id);
@@ -75,7 +77,7 @@ export default function plugin(bb: BbPluginApi) {
     }),
     refreshLimits: async (config, steps) => { await Promise.all(steps.map(s => monitor.refresh(stageOf(s), config.policies.preTurnBudgetMs).catch(() => undefined))); },
     observeLimit: (_config, step, event) => monitor.observe(stageOf(step), event, Date.now()),
-    sync: { prepareTurn: (t, s, progress) => fileSync.prepareTurn(t, s, progress), finishTurn: (t, s) => fileSync.finishTurn(t, s), modeOf: (config, projectId) => syncModeOf(config, projectId) },
+    sync: { prepareTurn: (t, s, progress) => fileSync.prepareTurn(t, s, progress), finishTurn: (t, s) => fileSync.finishTurn(t, s), writerOf: t => fileSync.writerOf(t), modeOf: (config, projectId) => syncModeOf(config, projectId) },
   });
   // Схема каскада в метке ступени — тот же движок и состояние треда, что у исполнителя.
   timeline.provideScheme(threadId => executor.scheme(threadId));
@@ -150,7 +152,7 @@ export default function plugin(bb: BbPluginApi) {
   let registration: { dispose(): void } | null = null;
   let catalogKey = '';
   async function syncProvider(config: CascadeConfig): Promise<void> {
-    const models = providerModels(config, accounts);
+    const models = providerModels(config, accounts, (hostId, modelId) => blockedModel(hostId, modelId) !== null);
     const key = JSON.stringify(models);
     if (key === catalogKey && registration) return;
     catalogKey = key;

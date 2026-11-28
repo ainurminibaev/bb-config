@@ -14,12 +14,12 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { connect } from 'node:net';
 import { dirname } from 'node:path';
 import {
-  answerConfirmationOutputSchema, routeNoteSchema, routeTurnOutputSchema,
+  answerConfirmationOutputSchema, routeNoteSchema, routeTurnAsyncOutputSchema, routeTurnOutputSchema,
   type ConfirmPrompt, type LimitObservation, type NativeProvider, type RouteNote, type RouteTurnOutput, type RoutedTurn,
 } from '../bridge/route-contract.ts';
 import { parseBridgeAnswer, resolveRoute, type BridgeAnswer } from './confirm.ts';
-import { SANDBOX_ARGS, startCodexRelay } from './codex-relay.ts';
-import { claudeSessionInfo, claudeSessionPath, flagValue, probeArgs, remoteArgs, remoteEnv, replaceModel, resumeOrStart } from './cli-args.ts';
+import { startCodexRelay } from './codex-relay.ts';
+import { claudeSessionInfo, claudeSessionPath, flagValue, forkSessionLines, hasConversation, probeArgs, remoteArgs, remoteEnv, replaceModel, resumeOrStart } from './cli-args.ts';
 import { spawn } from 'node:child_process';
 import { resolveRealExecutable, runLocal } from './local.ts';
 import { RemoteRunError, runRemote } from './remote.ts';
@@ -83,8 +83,24 @@ async function callServer<T>(io: LauncherIo, method: string, input: unknown, tim
  * раз в `pollMs` спрашиваем turnProgress и шлём заметку `prep` в ленту —
  * строка перехода обновляется на месте (синхронизация идёт минутами).
  */
+/**
+ * routeTurn по билету (0.3.0): каждый запрос короче минуты, решение — когда
+ * готово, но не дольше ROUTE_TIMEOUT_MS. Длинная подготовка (ожидание рабочей
+ * папки, первая синхронизация) больше не рвёт fetch на 300 с. Старый сервер
+ * флага не знает и отвечает решением сразу — так тоже работает.
+ */
+export async function routeByTicket(io: LauncherIo, input: unknown, requestMs = 60_000): Promise<RouteTurnOutput> {
+  const startedAt = io.now();
+  let reply = routeTurnAsyncOutputSchema.parse(await callServer<unknown>(io, 'routeTurn', { ...(input as Record<string, unknown>), async: true }, requestMs));
+  while (reply.action === 'pending') {
+    if (io.now() - startedAt > ROUTE_TIMEOUT_MS) throw new Error(`сервер каскада не решил ход за ${Math.round(ROUTE_TIMEOUT_MS / 60_000)} мин`);
+    reply = routeTurnAsyncOutputSchema.parse(await callServer<unknown>(io, 'routeTurnResult', { ticket: reply.ticket }, requestMs));
+  }
+  return reply;
+}
+
 export async function routeWithProgress(io: LauncherIo, threadId: string, input: unknown, pollMs = 1_500): Promise<RouteTurnOutput> {
-  const route = callServer<unknown>(io, 'routeTurn', input, ROUTE_TIMEOUT_MS).then(r => routeTurnOutputSchema.parse(r));
+  const route = routeByTicket(io, input);
   let settled = false;
   void route.finally(() => { settled = true; }).catch(() => undefined);
   let last = '';
@@ -228,6 +244,34 @@ export function localSessionFile(io: Pick<LauncherIo, 'cwd' | 'env'>, sessionId:
   return null;
 }
 
+/**
+ * `adopt --native`: перед первым ходом переведённого треда копия исходной сессии
+ * Claude ложится под ID сессии этого треда (на машине моста; на чужую машину её
+ * везёт обычный перенос файла сессии), дальше — обычный `--resume`. Файл с уже
+ * идущим разговором не трогается. Нет исходного файла — ход идёт новой сессией.
+ */
+export function materializeSeed(io: Pick<LauncherIo, 'cwd' | 'env'> & { log?: (line: string) => void }, route: { seedSession?: { sessionId: string } | null }, sessionId: string | null): boolean {
+  const seed = route.seedSession;
+  if (!seed || !sessionId || seed.sessionId === sessionId) return false;
+  const target = claudeSessionPath(io.cwd, sessionId, io.env);
+  try {
+    if (existsSync(target) && hasConversation(readFileSync(target, 'utf8'))) return false;
+    const source = localSessionFile(io, seed.sessionId, null);
+    if (!source) { io.log?.(`adopt: исходной сессии ${seed.sessionId} нет на этой машине — ход идёт новой сессией`); return false; }
+    const data = forkSessionLines(readFileSync(source, 'utf8'), seed.sessionId, sessionId);
+    if (!data) return false;
+    mkdirSync(dirname(target), { recursive: true });
+    const tmp = `${target}.cascade-${process.pid}`;
+    writeFileSync(tmp, data, { mode: 0o600 });
+    renameSync(tmp, target);
+    io.log?.(`adopt: сессия ${seed.sessionId} скопирована как ${sessionId}`);
+    return true;
+  } catch (error) {
+    io.log?.(`adopt: копия сессии не удалась: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+}
+
 /** Окружение для локального CLI: без служебных переменных запускателя. */
 function childEnv(env: NodeJS.ProcessEnv, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {};
@@ -332,6 +376,7 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
   // Сессия считается созданной, только если CLI её записал: ход, упавший до
   // запуска CLI, оставляет штатному мосту `--resume` на несуществующую сессию.
   // Файлы сессий возвращаются на машину моста после каждого хода на чужой машине.
+  if (!probe && route.action === 'run') materializeSeed({ ...io, log: line => logLine(io, line) }, route, session.sessionId);
   const sessionArgs = probe ? probeArgs(args, id => localSessionFile(io, id, null) !== null) : resumeOrStart(args, id => localSessionFile(io, id, route.action === 'run' ? route.cwd : null) !== null);
   if (sessionArgs.join('\0') !== args.join('\0')) logLine(io, `сессии ${session.sessionId} ещё нет — старт с --session-id вместо --resume`);
 
@@ -419,6 +464,7 @@ async function runStreamSession(io: LauncherIo, provider: NativeProvider, args: 
   return runSessionRelay(idle, sessionArgs, sessionId, {
     start: (r, childArgs, onLine) => stopWith(io, startStageChild(io, provider, r, childArgs, onLine)),
     sessionExists: r => localSessionFile(io, sessionId, r.cwd) !== null,
+    prepareSession: r => { materializeSeed({ ...io, log: line => logLine(io, line) }, r, sessionId); },
     // Каждое новое сообщение пользователя — новый ход со своим turnKey.
     routeTurn: () => routeWithConfirm(io, threadId, { provider, requestedModel, probe: false }),
     // Лимит в ходе — отметка до ответа мосту: provider-retry сразу увидит свободную ступень.
@@ -539,8 +585,8 @@ export function codexAppServerArgs(args: readonly string[]): string[] {
 }
 
 async function runCodex(io: LauncherIo, rawArgs: string[], threadId: string): Promise<number> {
-  // Песочница ступени — и в конфиге app-server (сеть выключена, только workspace-write).
-  const args = [...codexAppServerArgs(rawArgs), ...SANDBOX_ARGS];
+  // Песочница и сеть — как у штатного треда Codex: параметры моста не меняются (0.3.0).
+  const args = codexAppServerArgs(rawArgs);
   // Старт app-server — это открытие сессии, а не ход: карточку BB здесь не покажет.
   // Согласие на Codex даётся раньше, в ходе (мост открывает сессию Codex только после «Да»).
   let decided: RouteTurnOutput;
@@ -568,7 +614,6 @@ async function runCodex(io: LauncherIo, rawArgs: string[], threadId: string): Pr
     toBridge: line => { io.stdout.write(`${line}\n`); },
     bridgeCwd: io.cwd,
     stageCwd: stageCwd && stageCwd !== io.cwd ? stageCwd : null,
-    sandboxRoot: stageCwd ?? io.cwd,
     prepare: async () => {
       const r = await callServer<{ ok: boolean; message: string; notes: RouteNote[] }>(io, 'syncTurn', { threadId, stepId: runRoute.stepId, hostId: runRoute.hostId, phase: 'prepare' }, ROUTE_TIMEOUT_MS);
       await sendFeed(io, threadId, r.notes);

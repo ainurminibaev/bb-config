@@ -274,7 +274,7 @@ test('маршрут S1: Tru исчерпан — ход на Mac, строка 
   assert.equal(r.stepId, MAC_GW);
   assert.equal(r.local, false);
   assert.equal(r.cwd, '/opt/bbfs/proj');
-  assert.deepEqual(r.env, { CASCADE_SYNC: '1' });
+  assert.deepEqual(r.env, { CASCADE_SYNC: '1', BB_CASCADE_PROFILE: 'auto', BB_CASCADE_STEP: MAC_GW });
   const kinds = r.notes.map(n => n.kind);
   assert.deepEqual(kinds, ['switch', 'sync', 'run', 'state']);
   const sw = r.notes[0]!;

@@ -106,5 +106,5 @@ export function limitLine(summary: CascadeState['stepLimits'][string] | undefine
 
 /** Параметры ступени отличаются от умолчаний схемы (тогда у «⋯» метка). */
 export function stepCustomized(step: Step): boolean {
-  return step.authority !== 'subscription' || step.quotaSource !== 'provider' || step.onUnknown !== 'skip' || step.confirm;
+  return step.authority !== 'subscription' || step.quotaSource !== 'provider' || step.onUnknown !== 'skip' || step.confirm || step.maxConcurrent !== null;
 }

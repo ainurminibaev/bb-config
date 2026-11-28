@@ -12,6 +12,7 @@ import { hasConsent, type Consent } from './consent.ts';
 import { AUTO_MODEL_ID, MODEL_ID_PREFIX, type CascadeConfig, type DiscoveredAccount, type ModelRow, type Profile, type Step } from './contract.ts';
 import type { StepHealth } from './limits.ts';
 import { effectiveModelId } from './models.ts';
+import { isPinId, pinnedProfile } from './pins.ts';
 
 export type { StepHealth } from './limits.ts';
 export type HealthLookup = (stepId: string, modelId: string | null) => StepHealth;
@@ -51,6 +52,13 @@ export interface SelectInput extends PlanInput {
   thread: ThreadCascadeState;
   health: HealthLookup;
   now: number;
+  /** Сколько ходов других тредов сейчас идут на ступени (для `maxConcurrent`). Нет — лимит не проверяется. */
+  running?: (stepId: string) => number;
+  /**
+   * Машина, где рабочую папку уже пишет другой тред: из готовых попыток берутся
+   * её, если они есть (писатели одной машины не ждут друг друга). Нет — обычный порядок.
+   */
+  preferHostId?: string | null;
 }
 
 export interface Target { stepId: string; hostId: string; providerId: string; modelId: string | null }
@@ -77,7 +85,9 @@ export type Decision =
        /** Сброс окна, из-за которого ушли с прежней ступени: граница тредового согласия. */
        triggerResetAt: number | null;
        skipped: readonly string[] } & Target)
-  | { kind: 'wait'; until: number; stepId: string | null; waitingSince: number; reason: 'exhausted' | 'unknown' }
+  | { kind: 'wait'; until: number; stepId: string | null; waitingSince: number; reason: 'exhausted' | 'unknown' | 'busy';
+      /** reason busy: сколько ходов уже идёт на ступени. */
+      running?: number }
   | { kind: 'ask-owner'; reason: 'wait-too-long' | 'no-reset-known'; earliestReset: number | null }
   | { kind: 'unavailable'; reason: 'no-steps' | 'profile-disabled' | 'unknown-profile' | 'unknown-model' };
 
@@ -89,6 +99,8 @@ type Unavailable = Extract<Decision, { kind: 'unavailable' }>;
 export function resolveProfile(config: CascadeConfig, requestedModel: string): Profile | Unavailable {
   const found = config.profiles.find(p => p.id === requestedModel);
   if (found) return found.enabled ? found : { kind: 'unavailable', reason: 'profile-disabled' };
+  // Закреплённая ступень `pin:<stepId>[:<модель>]` (0.3.0): только эта ступень.
+  if (isPinId(requestedModel)) return pinnedProfile(config, requestedModel) ?? { kind: 'unavailable', reason: 'unknown-profile' };
   if (requestedModel.startsWith(MODEL_ID_PREFIX)) {
     return { id: requestedModel, name: requestedModel, enabled: true, policy: 'only', modelKey: requestedModel.slice(MODEL_ID_PREFIX.length), stepOrder: null, excludedSteps: [], excludedProviders: [], confirm: {} };
   }
@@ -137,7 +149,9 @@ export function buildPlan(input: PlanInput): Attempt[] | Unavailable {
   if (profile.policy !== 'any' && !row) return { kind: 'unavailable', reason: 'unknown-model' };
   const account = (hostId: string, providerId: string) => accounts.find(a => a.hostId === hostId && a.providerId === providerId);
   const steps = profileSteps(config, profile);
-  const offHome = (step: Step) => thread.isSubthread && !config.policies.subthreadsUseOtherMachines && thread.homeHostId !== null && step.hostId !== thread.homeHostId;
+  // Закреплённую ступень выбрал владелец явно — запрет «подтред только на машине родителя» на неё не действует.
+  const pinned = isPinId(profile.id);
+  const offHome = (step: Step) => !pinned && thread.isSubthread && !config.policies.subthreadsUseOtherMachines && thread.homeHostId !== null && step.hostId !== thread.homeHostId;
   const out: Attempt[] = [];
   const seen = new Set<string>();
   const push = (step: Step, phase: Attempt['phase'], r: ModelRow | null, modelId: string | null, skip: Attempt['skip']) => {
@@ -187,9 +201,22 @@ export function selectStep(input: SelectInput): Decision {
   const all: Candidate[] = plan.filter(a => a.skip === null)
     .map(a => ({ ...a, step: config.steps.find(s => s.id === a.stepId)!, health: input.health(a.stepId, a.modelId) }));
   if (all.length === 0) return { kind: 'unavailable', reason: 'no-steps' };
-  const ready = all.filter(c => isReady(c) && !thread.skippedStepIds.includes(c.stepId));
+  const freeAll = all.filter(c => isReady(c) && !thread.skippedStepIds.includes(c.stepId));
+  const onWriterHost = input.preferHostId ? freeAll.filter(c => c.hostId === input.preferHostId) : [];
+  const free = onWriterHost.length > 0 ? onWriterHost : freeAll;
 
-  if (ready.length === 0) return waitOrAsk(all, input);
+  // Ступень занята (maxConcurrent): onBusy next — дальше по профилю, wait — ход ждёт
+  // её освобождения, если раньше по порядку нет свободной ступени.
+  const ready: Candidate[] = [];
+  for (const c of free) {
+    const running = c.step.maxConcurrent !== null && input.running ? input.running(c.stepId) : 0;
+    if (c.step.maxConcurrent === null || running < c.step.maxConcurrent) { ready.push(c); continue; }
+    if (c.step.onBusy === 'wait' && ready.length === 0) return busyWait(c, running, input);
+  }
+  if (ready.length === 0) {
+    const busy = free[0];
+    return busy ? busyWait(busy, input.running?.(busy.stepId) ?? 0, input) : waitOrAsk(all, input);
+  }
 
   const best = ready[0]!;
   const isCurrent = (c: Target) => c.stepId === thread.currentStepId && (thread.currentModelId === undefined || c.modelId === thread.currentModelId);
@@ -218,6 +245,13 @@ export function selectStep(input: SelectInput): Decision {
   const order = all.findIndex(isCurrent);
   const returning = switched && order !== -1 && all.indexOf(chosen) < order;
   return { kind: 'run', fromStepId: thread.currentStepId, switched, returning, pendingReturn, ...target(chosen) };
+}
+
+/** Пауза перепроверки занятой ступени. */
+export const BUSY_RECHECK_MS = 5_000;
+
+function busyWait(c: Candidate, running: number, input: SelectInput): Decision {
+  return { kind: 'wait', until: input.now + BUSY_RECHECK_MS, stepId: c.stepId, waitingSince: input.thread.waitingSince ?? input.now, reason: 'busy', running };
 }
 
 /** Все попытки исчерпаны или неизвестны: ждать ближайшего сброса/проверки, но не дольше N часов. */

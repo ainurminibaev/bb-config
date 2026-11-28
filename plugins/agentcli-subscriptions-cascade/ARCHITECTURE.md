@@ -6,7 +6,7 @@
 задаёт свободно. Файлы проекта лежат по общему пути, по умолчанию `/opt/bbfs`.
 Mutagen держит этот путь одинаковым на всех машинах.
 
-Версия 0.2.8. Готовы настройки, обнаружение, профили каскада, движок выбора
+Версия 0.3.0 (изменения — раздел «0.3.0» ниже). Готовы настройки, обнаружение, профили каскада, движок выбора
 ступени, модуль лимитов, тестовый источник квоты (в том числе для одного треда
 из CLI), согласия, служебные строки, мастер «Настроить» и исполнитель пути B
 (свой провайдер, импорт штатного моста Claude Code, запуск CLI на машине
@@ -26,6 +26,8 @@ Mutagen держит этот путь одинаковым на всех маш
 | `config.ts` | Каскад по умолчанию (Tru Max → Mac vclaude → UA Pro → Codex на Mac и UA с подтверждением), профили по умолчанию, нормализация, `stageOf`, `bindingEpoch` | да |
 | `models.ts` | Таблица ассоциаций: канонический ключ, автосопоставление, статусы ячеек | да |
 | `engine.ts` | `buildPlan` (профиль → попытки «ступень × модель»), `selectStep` (`run`, `confirm`, `wait`, `ask-owner`, `unavailable`), `explainProfile` (схема «i») | да |
+| `pins.ts` | Закреплённые ступени `pin:<stepId>[:<модель>]`: разбор, синтетический профиль, пункты списка моделей | да |
+| `resolve.ts` | `resolve "<просьба>"` → закреплённая ступень, кандидаты или запасной путь со штатным провайдером | да |
 | `profiles.ts` | Профили из коробки, заготовки «+ Профиль», подпись «Старт: …», список моделей провайдера, превью, тестовый источник квоты | да |
 | `limits.ts` | Модуль лимитов: `Reading` из usageLimits и пакета vclaude, слияние, `healthFromReading`, `LimitMonitor` | да, кроме кэша монитора |
 | `consent.ts` | Согласия «на ход / в треде до сброса / навсегда» | да |
@@ -39,6 +41,8 @@ Mutagen держит этот путь одинаковым на всех маш
 | `bridge/server-register.ts` | RPC `routeTurn`/`finishTurn`/`threadStatus`, CLI `status`/`adopt`, `deriveProviderOptions` | — |
 | `bridge/feed.ts` | `RouteNote` → строки `timeline/` | да |
 | `bridge/adopt.ts` | «Перевести в каскад»: Handoff + `provider-retry cancel` | да, через порты |
+| `bridge/adopt-native.ts` | `adopt --native`: ожидание простоя, ID сессии из событий, посев (ключ в метаданных треда → kv), тред каскада в том же окружении | да, через порты |
+| `bridge/route-jobs.ts` | Решение перед ходом по билету: `routeTurn` с `async` + `routeTurnResult` | да |
 | `bridge/static-catalog.ts` | Каталог профилей по умолчанию для `model/list`, если сервер не передал свой (список моделей не бывает пустым) | да |
 | `bridge/prep-progress.ts` | Прогресс подготовки хода: события sync/ → строка «Подготовка Mac: … · 22 % · 0:47», трекер для RPC `turnProgress` | да, кроме трекера |
 | `test-quota.ts` | Тестовая квота одного треда: разбор `--set`, ступень по ссылке, относительный сброс, CLI `test-quota` и RPC `testQuota` | да |
@@ -312,14 +316,19 @@ BB runtime ──stdin/stdout──► мост «Каскада» (bridge/wrapp
   `bb subscriptions-cascade status --thread <id> --json` →
   `{cascade, profileId, step{hostId, providerId, model, accountKey, kind}, anchorHostId, syncMode, path, freshCopyHostId}`.
 - **Перевод тредов**: `bb subscriptions-cascade adopt --stuck|--thread <id>|--project <id> [--dry-run] [--model <профиль>]`
-  — штатный Handoff (`--to subscriptions-cascade`) и `provider-retry cancel` у исходного.
+  — штатный Handoff (`--to subscriptions-cascade`) и `provider-retry cancel` у исходного;
+  `adopt --native --thread <id>` — та же сессия Claude (раздел «0.3.0»).
 
 Опирается на внутренности BB 0.50.1 (проверять после обновления BB):
 кэш артефактов `<daemonDataDir>/plugin-host-artifacts/<pluginId>/<sha256>/host.mjs`,
 `BB_CLAUDE_CODE_EXECUTABLE`, `BB_CODEX_BRIDGE_APP_SERVER_COMMAND/_ARGS`, ключи
 `providerOptions` моста Claude (`memoryEnabled`, `sandboxEnabled` …), REST
 `/api/v1/terminals*` и `/api/v1/plugins/<id>/rpc|cli`, формат ID терминала
-`term_[23456789a-km-z]{10}`, поведение моста под root (`isBypassPermissionsAvailable`).
+`term_[23456789a-km-z]{10}`, поведение моста под root (`isBypassPermissionsAvailable`),
+окружение терминала BB машины (`BB_SERVER_URL`, `BB_CLI`, `BB_HOST_DAEMON_PORT`), путь
+данных BB `…/npm/lib/node_modules/…` и `thread-storage/<тред>`, поля событий треда
+`providerThreadId`, поля треда `status`/`queuedMessageCount`/`environmentId`,
+`threads.spawn({ pluginMetadata })` и `threads.getPluginMetadata` (0.3.0).
 
 ## Сбои и штатные механизмы BB (S14–S17)
 
@@ -483,14 +492,14 @@ BB runtime ──stdin/stdout──► мост «Каскада» (bridge/wrapp
 - **Нет исходной просьбы при автоповторе** (или сводка недоступна) — блок
   «Контекста нет — коротко спроси пользователя, что продолжить. Не ищи сам»;
   подсказки читать треды в запасной сводке больше нет.
-- **Песочница.** Штатный мост Codex для режима «workspace» даёт `workspaceWrite`
-  с `networkAccess: true`, для «full» — `danger-full-access`. На ступени каскада
-  реле переписывает `sandbox`/`sandboxPolicy` в thread/start, thread/resume и
-  turn/start: `workspace-write`, сеть выключена, корни записи — только папка
-  ступени (чужие, например thread-storage машины моста, убираются); политика
-  одобрений треда не меняется. App-server запускается с
-  `-c sandbox_mode="workspace-write" -c sandbox_workspace_write.network_access=false`.
-  Чтение файлов вне папки песочница Codex не запрещает — это задают рамки сводки.
+- **Песочница (снята в 0.3.0).** С 0.2.8 по 0.2.16 реле переписывало песочницу
+  Codex строже штатной (`workspace-write`, сеть выключена, корни записи — только
+  папка ступени, `-c sandbox_mode=…` у app-server). Причина — Codex на «Please
+  continue.» исследовал окружение — снята в 0.2.9 блоком `<current-request>`.
+  С 0.3.0 Codex на ступени получает ровно те `sandbox`/`sandboxPolicy`/сеть, что
+  прислал штатный мост BB (как в обычном треде Codex); реле меняет только пути.
+  Рамки поведения остаются в сводке. Тесты: `launcher/codex-relay.test.ts`,
+  `launcher/launcher.test.ts` (аргументы app-server без добавок).
 
 ## Пробы, мёртвый процесс сессии, сторож хода (0.2.10)
 
@@ -568,6 +577,84 @@ RouteNote `notice`: отдельная строка ленты (тип `problem`
 формулировки шлюза («доступен только в тарифе», «недоступна на тарифе») снимают
 ступень × модель, как у Claude Pro, а ход уходит мосту как лимит и повторяется на
 следующей попытке профиля. Тест: `launcher/retry.test.ts` (на 0.2.15 падает).
+
+## 0.3.0: подтреды через каскад, закреплённые ступени, resolve, adopt --native
+
+- **Тред знает, что он на каскаде, — через окружение.** `routeTurn` кладёт в `env`
+  хода `BB_CASCADE_PROFILE` (профиль треда) и `BB_CASCADE_STEP` (ступень); запускатель
+  передаёт `env` CLI всех путей (Claude локально и на чужой машине, stream-сессия,
+  app-server Codex). В промпт и сообщения ничего не добавляется: префикс запроса
+  неизменен, кэш промптов (87–99 % попаданий) не теряется. Сменился профиль на той же
+  ступени — реле сессии перезапускает CLI с `--resume` (`sameStage` сравнивает и
+  `BB_CASCADE_PROFILE`), чтобы подтреды брали новый профиль.
+- **Тред BB на чужой ступени.** `remoteEnv` переносит `BB_THREAD_ID`, `BB_PROJECT_ID`,
+  `BB_ENVIRONMENT_ID`, `BB_THREAD_STORAGE`; агент (`launcher/agent-source.ts`) берёт из
+  окружения терминала BB своей машины `BB_SERVER_URL`, `BB_CLI`, `BB_HOST_DAEMON_PORT`,
+  а `BB_THREAD_STORAGE` заменяет на `<данные BB машины>/thread-storage/<тред>` (данные
+  BB — по пути `BB_CLI` `…/npm/lib/node_modules/…`, иначе `~/.bb`; папка создаётся).
+  Токенов BB штатный мост CLI не ставит: `bb` ходит через демон своей машины. Проверено
+  на стенде (терминал BB на Mac с окружением агента): `bb status` и `bb thread show` видят
+  тред Tru. Тест: `launcher/launcher.test.ts` (`remoteEnv`, окружение агента).
+- **Закреплённые ступени** (`pins.ts`). `pin:<stepId>` — `any` только на этой ступени,
+  `pin:<stepId>:<ключ>` — `only`; остальные ступени исключены, подтверждение входа
+  выключено (выбор владельца), запрет «подтред на машине родителя» не действует.
+  `resolveProfile` строит профиль на каждом выборе — в настройках он не хранится; ступень
+  исчезла — `unknown-profile`. Состояние треда (ступень, сессии, папка, отсчёт возврата)
+  ключуется тредом, а не профилем: смена на «Авто» продолжает ту же сессию (тест
+  `pins.test.ts`).
+- **Меню.** Выбор модели BB 0.50.1 групп не умеет: каталог (`availableModelSchema`,
+  `PluginProviderFallbackModel`) несёт только `id`, `displayName`, `description`,
+  efforts, `isDefault`; лишние поля zod срезает; в выборе одна вкладка провайдера,
+  плоский список с поиском (>5 пунктов) и единственное подменю «More models»
+  (`selectedOnlyModels`), до 64 моделей (`PROVIDER_FALLBACK_MODELS_MAX`). Поэтому
+  `providerModels` = профили, затем закреплённые ступени («Tru · Codex · GPT-6.2 Sol»),
+  всего ≤ 64; лишние закреплённые отрезаются. Модель треда при смене проверяется по
+  каталогу (`thread-execution-override.ts`), поэтому `resolve` отдаёт только ID из списка.
+- **`resolve`** (`resolve.ts`, CLI): слова просьбы (латиница и кириллица, «маке» ≈ Mac)
+  → машина (метка каскада или имя машины BB), CLI, аккаунт (подпись ступени, «на
+  аккаунте X»), модель (семейство, версия, уточняющие слова) → `match` | `candidates` |
+  `fallback{provider, machine, machineLabel, model, reason, nearest}`. Только чтение
+  настроек, таблицы и уже обнаруженных каталогов.
+- **`adopt --native`** (`bridge/adopt-native.ts`). Ждёт `status: idle` и пустую очередь
+  исходного треда, берёт ID сессии Claude из событий (`thread/identity`, `turn/*` →
+  `providerThreadId`), кладёт посев `adopt:pending:<ключ>` в kv и создаёт тред
+  `threads.spawn({ environment: { type: 'reuse' }, providerId: subscriptions-cascade,
+  model, title, parentThreadId, prompt, pluginMetadata: { adoptNonce } })`. Метаданные
+  может писать кто угодно, поэтому в них только одноразовый ключ: сервер на первом
+  `routeTurn` треда (`lastRun === null`) читает ключ, забирает посев (`adopt:thread:<тред>`)
+  и отдаёт запускателю `seedSession`. Запускатель на машине треда (`materializeSeed`)
+  копирует jsonl исходной сессии под ID сессии нового треда (поле `sessionId` заменено,
+  файл с уже идущим разговором не трогается), затем обычный `--resume`; на чужую ступень
+  копия едет обычным переносом файла сессии. Посев снимается после первого удачного хода
+  Claude. Ограничение: первый ход на ступени Codex исходной памяти не видит (сводка — по
+  событиям нового треда). Исходный тред не меняется.
+- **Писатели одной машины** (`sync/orchestrator.ts`). `writer.threads` — все треды,
+  пишущие реплику на машине писателя (счётчик на машину и единицу). Первый делает
+  выравнивание по опоре и карантин; тред на той же машине входит без ожидания
+  (`joinWriter`: только flush W, без выравнивания и карантина — иначе карантин забрал бы
+  незаконченную запись соседа). Конец хода не последнего писателя — flush W на опору, W
+  не ставится на паузу, снимка нет; последний — обычный `release` (пауза, снимок).
+  Брошенные писатели (тред не active или старше 6 ч) снимаются и при входе, и на конце
+  хода соседа. Ход на опоре при писателе на исполнителе и ход исполнителя при ходе на
+  опоре не блокируются (W two-way-safe, строка «пишут рабочую папку одновременно»);
+  ждёт только третья машина. Маршрут спрашивает `writerOf` единицы: если ход ушёл бы на
+  третью машину, а машина писателя есть в профиле и готова — берётся она
+  (`selectStep({ preferHostId })`); иначе ожидание со строкой «Жду: папку держит тред
+  «<название>» на <машина>» (по билету, п. «Решение по билету»). Тесты:
+  `sync/sync.test.ts`, `busy.test.ts`.
+- **Решение по билету** (`bridge/route-jobs.ts`). Запускатель шлёт `routeTurn` с
+  `async: true`; сервер отвечает не дольше ~20 с решением или `{action:'pending',
+  ticket}`, дальше `routeTurnResult` (каждый запрос ≤ 60 с, всего ≤ 20 мин). Старый
+  запускатель без флага получает ответ, как раньше. Билеты — в памяти сервера:
+  перезагрузка плагина → «решение неизвестно» → отказ с повтором. Тест:
+  `bridge/route-jobs.test.ts` (подготовка 6 мин).
+- **Лимит ходов на ступени.** `step.maxConcurrent` (null — без лимита), `step.onBusy`
+  (`wait` | `next`). Счётчик `ActiveTurns` в `route-service.ts`: ход считается от решения
+  `run` (и `syncTurn prepare` Codex) до `finishTurn`, у треда один ход, ход без
+  завершения истекает через 3 ч, свой ход не считается. Движок: занятая ступень с
+  `next` пропускается, с `wait` (если раньше по порядку нет свободной) — решение
+  `wait/busy`; маршрут ждёт с перепроверкой каждые 5 с и строкой «Жду: на <машина> уже N
+  ход(ов)» (до 30 мин, затем отказ с повтором). Тест: `busy.test.ts`.
 
 ## Уборка реплик после тредов (0.2.12, `sync/gc.ts`)
 

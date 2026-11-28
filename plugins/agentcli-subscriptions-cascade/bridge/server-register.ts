@@ -14,6 +14,10 @@ import { formatThreadTestQuota, parseTestQuotaSpec, withThreadTestQuota } from '
 import type { CascadeConfig, DiscoveredAccount, Step, TestQuotaEntry, WizardMachineState } from '../contract.ts';
 import type { HealthLookup } from '../engine.ts';
 import { formatAdopt, parseAdoptArgs, runAdopt, type AdoptPorts, type AdoptThread } from './adopt.ts';
+import { formatResolve, resolveRequest } from '../resolve.ts';
+import { createRouteJobs } from './route-jobs.ts';
+import { DEFAULT_ADOPT_PROMPT, formatNativeAdopt, runNativeAdopt, seedFor, sessionFromEvents, type AdoptSeed, type NativeAdoptPorts, type SeedStore } from './adopt-native.ts';
+import { randomUUID } from 'node:crypto';
 import { digestMap, nativeBridgeStatus, type NativeBridgeStatus } from './digests.ts';
 import { executorRpcContract, PROVIDER_RETRY_AVAILABILITY, retryAvailabilityContract, type LimitObservation } from './route-contract.ts';
 import type { Consent } from '../consent.ts';
@@ -32,6 +36,10 @@ export interface ExecutorDeps {
   /** Записать конфигурацию (тестовая квота треда из CLI/RPC). */
   saveConfig?(config: CascadeConfig): Promise<void>;
   accounts(): readonly DiscoveredAccount[];
+  /** Машины BB из обнаружения (имя → ID) — для `resolve`, в том числе не из каскада. */
+  hosts?(): readonly { hostId: string; name: string }[];
+  /** Модель недоступна на аккаунте машины (таблица моделей, на сутки). */
+  blockedModel?(hostId: string, modelId: string): boolean;
   /** Обнаружение аккаунтов, если ещё не было (движку нужны модели машин). */
   ensureDiscovered(): Promise<void>;
   /** Лимиты ступени для движка (реальные; тестовый источник подставляется здесь). */
@@ -223,7 +231,29 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
   // worktree на опоре ушёл бы в основную папку проекта (живой S1 на 0.1.7).
   const threadInfo = async (threadId: string): Promise<ThreadInfo | null> => threadInfoFrom(await bb.sdk.threads.get({ threadId, include: 'environment' } as never));
 
+  // Посев `adopt --native`: одноразовый ключ (метаданные треда) → посев (kv плагина).
+  const SEED_PENDING = (nonce: string) => `adopt:pending:${nonce}`;
+  const SEED_THREAD = (threadId: string) => `adopt:thread:${threadId}`;
+  const seedStore: SeedStore = {
+    pending: async nonce => (await bb.storage.kv.get<AdoptSeed>(SEED_PENDING(nonce))) ?? null,
+    claim: async (nonce, threadId, seed) => { await bb.storage.kv.set(SEED_THREAD(threadId), seed); await bb.storage.kv.delete(SEED_PENDING(nonce)); },
+    claimed: async threadId => (await bb.storage.kv.get<AdoptSeed>(SEED_THREAD(threadId))) ?? null,
+  };
+  const adoptSeed = async (threadId: string) => {
+    const meta = rec(await bb.sdk.threads.getPluginMetadata({ threadId } as never).catch(() => null));
+    // BB 0.50 отдаёт сами метаданные плагина (JSON-объект); обёртку читаем терпимо.
+    const values = typeof meta.adoptNonce === 'string' ? meta : rec(meta.metadata ?? meta.value);
+    const nonce = typeof values.adoptNonce === 'string' && /^[0-9a-f-]{16,64}$/u.test(values.adoptNonce) ? values.adoptNonce : null;
+    return seedFor(seedStore, threadId, nonce, Date.now());
+  };
+
   const routes = createRouteService({
+    adoptSeed,
+    threadTitle: async threadId => {
+      const r = rec(await bb.sdk.threads.get({ threadId }).catch(() => null));
+      const t = rec(r.thread ?? r);
+      return typeof t.title === 'string' && t.title ? t.title : null;
+    },
     loadConfig: deps.loadConfig,
     accounts: deps.accounts,
     health: deps.health,
@@ -251,6 +281,7 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     warn: message => bb.log.warn(message),
     ...consentAndHandoffPorts(bb),
   });
+  const routeJobs = createRouteJobs((input: Parameters<RouteService['routeTurn']>[0]) => routes.routeTurn(input));
 
   /** Подмена квоты треда: `spec` пустой — только показать; clear — снять перед записью. */
   async function applyTestQuota(threadId: string, spec: string, clear: boolean): Promise<{ config: CascadeConfig } | { error: string }> {
@@ -275,7 +306,9 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
       if ('error' in result) throw new Error(result.error);
       return { threadId, steps: result.config.testQuota.threads[threadId] ?? null };
     },
-    routeTurn: input => routes.routeTurn(input),
+    // С `async` (запускатель 0.3.0+) — ответ не дольше ~20 с, дальше опрос по билету.
+    routeTurn: input => (input.async ? routeJobs.start(input) : routes.routeTurn(input)),
+    routeTurnResult: ({ ticket }) => routeJobs.result(ticket),
     finishTurn: input => routes.finishTurn(input),
     threadStatus: ({ threadId }) => routes.threadStatus(threadId),
     turnProgress: async ({ threadId }) => ({ note: routes.turnProgress(threadId) }),
@@ -325,6 +358,42 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     },
   };
 
+  const nativeAdoptPorts: NativeAdoptPorts = {
+    async getThread(threadId) {
+      const r = rec(await bb.sdk.threads.get({ threadId }).catch(() => null));
+      const t = rec(r.thread ?? r);
+      if (typeof t.id !== 'string') return null;
+      const str = (v: unknown) => typeof v === 'string' && v ? v : null;
+      return {
+        id: t.id, title: str(t.title) ?? '', providerId: str(t.providerId) ?? '', projectId: str(t.projectId) ?? '',
+        environmentId: str(t.environmentId), parentThreadId: str(t.parentThreadId), archived: t.archivedAt !== null && t.archivedAt !== undefined,
+        status: str(t.status), queued: typeof t.queuedMessageCount === 'number' ? t.queuedMessageCount : 0,
+      };
+    },
+    async sessionId(threadId) {
+      const base = { threadId, order: 'desc', limit: String(THREAD_EVENTS_PAGE) };
+      const types = ['thread/identity', 'thread/started', 'turn/completed', 'turn/started', 'turn/input/accepted'];
+      const list = (args: Record<string, unknown>) => bb.sdk.threads.events.list(args as never) as Promise<unknown>;
+      const raw = await list({ ...base, types }).catch(() => list(base)).catch(() => []);
+      const rows = (Array.isArray(raw) ? raw : []).map(item => { const row = rec(item); return { type: String(row.type ?? ''), data: row.data }; });
+      return sessionFromEvents(rows);
+    },
+    saveSeed: async (nonce, seed) => { await bb.storage.kv.set(SEED_PENDING(nonce), seed); },
+    dropSeed: async nonce => { await bb.storage.kv.delete(SEED_PENDING(nonce)); },
+    async spawn(args) {
+      const r = rec(await bb.sdk.threads.spawn({
+        projectId: args.projectId, environment: { type: 'reuse', environmentId: args.environmentId }, providerId: deps.providerId, model: args.model,
+        title: args.title, prompt: args.prompt, ...(args.parentThreadId ? { parentThreadId: args.parentThreadId } : {}), pluginMetadata: { adoptNonce: args.nonce },
+      } as never));
+      const t = rec(r.thread ?? r);
+      if (typeof t.id !== 'string') throw new Error('BB не вернул ID нового треда');
+      return t.id;
+    },
+    sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+    now: Date.now,
+    randomId: () => randomUUID(),
+  };
+
   bb.cli.register({
     name: 'subscriptions-cascade',
     summary: 'Каскад подписок: паспорт треда и перевод тредов в каскад',
@@ -334,7 +403,8 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
       { name: 'setup', summary: 'Мастер «Настроить»: продолжить, перепроверить, настроить с нуля; разрешить вход на опору по ключу', usage: 'bb subscriptions-cascade setup [--machine <hostId|имя>] [--recheck] [--reset] [--allow-ssh] [--dry-run] [--json]' },
       { name: 'gc', summary: 'Убрать реплики и сессии Mutagen архивированных и удалённых тредов (опора не трогается)', usage: 'bb subscriptions-cascade gc [--dry-run] [--machine <hostId|имя>] [--json]' },
       { name: 'test-bridge', summary: 'Приёмка S13: считать штатный мост несовместимым (без правки BB)', usage: 'bb subscriptions-cascade test-bridge --incompatible|--compatible' },
-      { name: 'adopt', summary: 'Перевести треды в каскад (Handoff) и снять автоповтор у исходных', usage: 'bb subscriptions-cascade adopt --stuck|--thread <id>|--project <id> [--dry-run] [--model <профиль>] [--json]' },
+      { name: 'resolve', summary: 'Просьба «Codex 6.2 на Tru», «на аккаунте vclaude» → закреплённая ступень каскада (pin:…), кандидаты или запасной путь', usage: 'bb subscriptions-cascade resolve "<просьба>" [--json]' },
+      { name: 'adopt', summary: 'Перевести треды в каскад (Handoff) и снять автоповтор у исходных', usage: 'bb subscriptions-cascade adopt --stuck|--thread <id>|--project <id> [--dry-run] [--model <профиль>] [--json] · --native --thread <id> [--model <профиль>] [--prompt <текст>] [--wait <сек>] [--dry-run] — та же сессия Claude в треде каскада, то же окружение' },
     ],
     async run(argv, ctx) {
       const [command, ...rest] = argv;
@@ -393,15 +463,32 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
         bridgeIncompatible = on;
         return { exitCode: 0, stdout: on ? 'Мост помечен несовместимым: ходы каскада отклоняются с подсказкой, штатные провайдеры работают. Снять: --compatible.\n' : 'Тестовый переключатель снят.\n' };
       }
+      if (command === 'resolve') {
+        // Только чтение настроек, таблицы моделей и уже обнаруженных каталогов — без вызова моделей.
+        const text = rest.filter(a => a !== '--json').join(' ').trim();
+        if (!text) return { exitCode: 2, stderr: 'укажите просьбу: bb subscriptions-cascade resolve "Codex 6.2 на Tru" [--json]\n' };
+        const result = resolveRequest({ config: await deps.loadConfig(), accounts: deps.accounts(), hosts: deps.hosts?.() ?? [], blocked: deps.blockedModel, text });
+        if (rest.includes('--json')) return { exitCode: 0, stdout: `${JSON.stringify(result)}\n` };
+        return { exitCode: 0, stdout: formatResolve(result) };
+      }
       if (command === 'adopt') {
         const parsed = parseAdoptArgs(rest);
         if ('error' in parsed) return { exitCode: 2, stderr: `${parsed.error}\n` };
+        if (parsed.native) {
+          const result = await runNativeAdopt(nativeAdoptPorts, {
+            threadId: parsed.threadId!, dryRun: parsed.dryRun, model: parsed.model, prompt: parsed.prompt ?? DEFAULT_ADOPT_PROMPT,
+            waitSeconds: parsed.waitSeconds ?? 600, providerId: deps.providerId,
+          });
+          const failed = Boolean(result.error) || result.action === 'skip';
+          if (rest.includes('--json')) return { exitCode: failed ? 1 : 0, stdout: `${JSON.stringify({ dryRun: parsed.dryRun, native: true, item: result })}\n` };
+          return { exitCode: failed ? 1 : 0, stdout: formatNativeAdopt(result, parsed.dryRun) };
+        }
         const options = { ...parsed, providerId: deps.providerId };
         const items = await runAdopt(adoptPorts, options);
         if (rest.includes('--json')) return { exitCode: items.some(i => i.error) ? 1 : 0, stdout: `${JSON.stringify({ dryRun: options.dryRun, items })}\n` };
         return { exitCode: items.some(i => i.error) ? 1 : 0, stdout: formatAdopt(items, options.dryRun) };
       }
-      return { exitCode: 2, stderr: 'команды: status, setup, gc, test-quota, test-bridge, adopt\n' };
+      return { exitCode: 2, stderr: 'команды: status, resolve, setup, gc, test-quota, test-bridge, adopt\n' };
     },
   });
 
