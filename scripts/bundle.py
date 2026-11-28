@@ -7,6 +7,9 @@ checked and repaired. It keeps what the user decided:
 
   - a component the user excluded (`exclude <id>`, or a refusal recorded in
     the update journal) is never installed;
+  - an `optional` component (experimental, needs its own setup) is installed
+    only after the user takes it (`choose --take <id>` or `include <id>`);
+    once installed it is updated like any other;
   - a disabled plugin is updated but stays disabled;
   - a plugin installed from a different source (own fork, newer build) is
     kept and reported, never replaced;
@@ -84,6 +87,8 @@ def errors(data, root):
         for dependency in component.get('requires', []):
             if dependency not in seen:
                 problems.append(f'{name}: requires {dependency}, which must be declared before it')
+        if 'optional' in component and not isinstance(component['optional'], bool):
+            problems.append(f'{name}: optional must be true or false')
         for hook in component.get('configure', []) + ([component['adopt']] if component.get('adopt') else []):
             if not all(isinstance(hook.get(k), list) and hook[k] for k in ('check', 'apply')):
                 problems.append(f'{name}: hooks need check and apply argv lists')
@@ -101,6 +106,7 @@ def read_selection(root):
     path = selection_path(root)
     data = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
     data.setdefault('excluded', {})
+    data.setdefault('included', {})
     return data
 
 
@@ -129,12 +135,16 @@ def refusals(root):
 def excluded(root, components, installed=None):
     """{id: reason}. An explicit exclusion always counts; a refusal recorded during
     an update only while the plugin is still absent (installing it later means
-    the user changed their mind)."""
+    the user changed their mind). An optional component counts as excluded while
+    it is absent and the user has not taken it."""
     ids = {c['id'] for c in components}
-    chosen = {k: v.get('reason', '') for k, v in read_selection(root)['excluded'].items()}
+    selection = read_selection(root)
+    chosen = {k: v.get('reason', '') for k, v in selection['excluded'].items()}
     present = set(installed or ())
     found = {k: v for k, v in refusals(root).items() if k in ids and k not in present}
-    return {**found, **chosen}
+    optional = {c['id']: f'необязательный: ставится по выбору (bundle.py choose --take {c["id"]})'
+                for c in components if c.get('optional') and c['id'] not in present and c['id'] not in selection['included']}
+    return {**optional, **found, **chosen}
 
 
 # --- observation -------------------------------------------------------------
@@ -490,8 +500,10 @@ def main(argv=None, root=ROOT):
             selection = read_selection(root)
             for component in skip:
                 selection['excluded'][component] = {'reason': 'снята галочка при обновлении', 'at': updates.now()}
+                selection['included'].pop(component, None)
             for component in take:
                 selection['excluded'].pop(component, None)
+                selection['included'][component] = {'at': updates.now()}
             write_selection(root, selection)
             print(json.dumps({'excluded': sorted(selection['excluded'])}, ensure_ascii=False, indent=1))
             return 0
@@ -502,8 +514,10 @@ def main(argv=None, root=ROOT):
             selection = read_selection(root)
             if args.command == 'exclude':
                 selection['excluded'][args.component] = {'reason': args.reason, 'at': updates.now()}
+                selection['included'].pop(args.component, None)
             else:
                 selection['excluded'].pop(args.component, None)
+                selection['included'][args.component] = {'at': updates.now()}
             write_selection(root, selection)
             print(json.dumps({'excluded': sorted(selection['excluded'])}, ensure_ascii=False, indent=1))
             return 0

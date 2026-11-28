@@ -152,6 +152,26 @@ class BundleTests(unittest.TestCase):
         result, _ = self.converge([self.local('alpha', '1.1.0')], 'check')
         self.assertEqual(self.states(result)['alpha'], 'ok')
 
+    def test_optional_component_is_installed_only_when_taken(self):
+        self.declared['components'][3]['optional'] = True  # beta: experimental, needs its own setup
+        (self.root / 'config/bundle.json').write_text(json.dumps(self.declared))
+        result, fake = self.converge([])
+        self.assertEqual(self.states(result)['beta'], 'excluded')
+        self.assertNotIn('beta', fake.plugins)
+        self.assertTrue(result['converged'])
+        self.assertEqual(bundle.main(['choose', '--take', 'beta'], self.root), 0)
+        result, fake = self.converge([])
+        self.assertEqual(self.states(result)['beta'], 'installed')
+        # Installed optional component is updated like any other, even without a recorded choice.
+        bundle.write_selection(self.root, {'excluded': {}})
+        result, _ = self.converge([self.local('beta', '0.1.0')])
+        self.assertEqual(self.states(result)['beta'], 'updated')
+        self.assertEqual(bundle.main(['exclude', 'beta'], self.root), 0)
+        self.assertNotIn('beta', bundle.read_selection(self.root)['included'])
+        self.declared['components'][3]['optional'] = 'yes'
+        (self.root / 'config/bundle.json').write_text(json.dumps(self.declared))
+        self.assertIn('beta: optional must be true or false', bundle.errors(json.loads((self.root / 'config/bundle.json').read_text()), self.root))
+
     def test_foreign_sources_and_newer_builds_are_kept(self):
         plugins = [{'id': 'alpha', 'version': '9.0.0', 'source': 'git:https://example.org/own-alpha.git@^9', 'rootDir': '/own',
                     'enabled': True, 'status': 'running'}]

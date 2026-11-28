@@ -46,6 +46,7 @@ KodaForge 0.7.100, ChatGPT Realtime 0.1.0; более новая даёт пре
 | `limit-guard` | свой плагин | `plugins/limit-guard` | режимы у порога лимита подписки | — |
 | `pr-issues` | свой плагин | `plugins/pr-issues` | страница PR и issue на GitHub | `gh` с входом на сервере BB |
 | `context-mode-rollout` | свой плагин | `plugins/context-mode-rollout` | context-mode во всех агентах на всех машинах | Node.js с npm на машинах (сейчас Node ≥ 24.15) |
+| `agentcli-subscriptions-cascade` | свой плагин, **необязательный** | `plugins/agentcli-subscriptions-cascade` | экспериментальный провайдер «Каскад подписок»; паспорт треда читают `limit-guard`, `thread-account-usage`, `codex-delegation-watch`, `file-local-open`, `project-open`, `git-thread-provenance` | мастер «Настроить»: Mutagen, `/opt/bbfs`, SSH-доступ машин к серверу BB; свой вход CLI на каждой машине-ступени |
 
 Вне плагинов: на каждой машине с Codex — `python3 scripts/codex_defaults.py --apply --verify`.
 Это действие на других машинах; установка показывает его в `attention`.
@@ -70,6 +71,7 @@ Tokenomics — внутри `plugins/voice-mode-keeper`) и правки Voice M
 | старая версия | свой — пересборка из релиза; форк/каталог — `bb plugin update`, при упоре в сохранённый диапазон — `bb plugin update --range` (настройки и секреты остаются) |
 | отключён пользователем | обновляет, оставляет отключённым |
 | исключён (`scripts/bundle.py exclude <id>` или отказ, записанный в журнале) | не ставит |
+| необязательный компонент (`"optional": true`, например экспериментальный «Каскад подписок») ещё не стоит | не ставит, пока пользователь не выбрал его (`scripts/bundle.py choose --take <id>` или `include <id>`); уже установленный обновляет как обычно |
 | стоит из другого источника или более новая сборка | оставляет как есть, сообщает |
 | форк Voice Mode стоит из каталожного оригинала | переводит на форк проверенной миграцией (без секретов; с секретом — останавливается) |
 | закреплён на точном теге | `bb plugin update --range` невозможен: ошибка с пояснением, удаление не выполняется |
