@@ -41,7 +41,12 @@ test('свёрнутые строки: короткие подписи веса 
   const sw = { type: 'switch', from: TRU, to: MAC, at: NOW };
   assert.equal(label({ ...sw, reason: 'limit', state: 'done', steps: [{ label: 'пауза', ms: 500 }, { label: 'flush', ms: 3000 }] }).completed, 'Tru исчерпан → Mac · Opus · 3,5 с');
   assert.equal(label({ ...sw, reason: 'limit', state: 'running' }).pending, 'Tru исчерпан → Mac · Opus…');
-  assert.equal(label({ type: 'switch', reason: 'return', window: 'Max', from: MAC, to: TRU, state: 'done', at: NOW }).completed, 'Max свободен → Tru');
+  assert.equal(label({ type: 'switch', reason: 'return', window: 'Max', from: MAC, to: TRU, state: 'done', at: NOW }).completed, 'Лимит Max сброшен → Tru ← Mac');
+  // S5: возврат Codex → Claude на той же машине — видно смену провайдера.
+  const MAC_CODEX = { machine: 'Mac', provider: 'Codex', account: 'Codex' };
+  assert.equal(label({ type: 'switch', reason: 'return', from: MAC_CODEX, to: MAC, state: 'done', at: NOW }).completed, 'Лимит сброшен → Mac · Claude ← Codex');
+  assert.equal(label({ type: 'switch', reason: 'return', from: { ...MAC_CODEX, machine: 'UA' }, to: MAC, state: 'done', at: NOW }).completed, 'Лимит сброшен → Mac · Claude ← UA · Codex');
+  assert.equal(label({ type: 'switch', reason: 'limit', from: MAC, to: MAC_CODEX, state: 'done', at: NOW }).completed, 'Mac · Claude исчерпан → Mac · Codex');
   assert.equal(label({ ...sw, reason: 'unavailable', state: 'done' }).completed, 'Tru не на связи → Mac · Opus');
   assert.equal(label({ ...sw, reason: 'limit', state: 'failed', error: 'копии разошлись' }).completed, 'Не перешёл на Mac: копии разошлись');
   assert.equal(label({ type: 'switch', reason: 'start', from: null, to: MAC, state: 'done', steps: [{ label: 's', ms: 1200 }], at: NOW }).completed, 'Ход на Mac · Opus · 1,2 с');

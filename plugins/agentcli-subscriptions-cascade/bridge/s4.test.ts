@@ -2,7 +2,7 @@
 // треда не на приоритетной ступени и при тестовой квоте) и лимит, полученный в ходе.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ACCOUNTS, MAC_GW, TRU, TRU_MAX, config as baseConfig, exhausted, ok } from '../fixtures.ts';
+import { ACCOUNTS, MAC, MAC_CODEX, MAC_GW, TRU, TRU_MAX, config as baseConfig, exhausted, ok } from '../fixtures.ts';
 import type { CascadeConfig } from '../contract.ts';
 import { quotaLookupFor } from '../profiles.ts';
 import { createRouteService, mergeObserved, type StoredThreadState } from './route-service.ts';
@@ -215,4 +215,27 @@ test('provider-retry availability: свой тред — за доли секу�
   const t1 = performance.now();
   assert.deepEqual(await stuck.retryAvailability('thr_own'), { kind: 'ready' });
   assert.ok(performance.now() - t1 < 1_000);
+});
+
+test('S5: возврат Codex → Claude — строка перехода «возврат» с исходной ступенью Codex, и когда движок не видел ход Codex', async () => {
+  for (const engineSaw of [true, false]) {
+    const fx = fixture();
+    fx.setQuota('available');
+    assert.equal(stepOf(await fx.routes.routeTurn(turn)), TRU_MAX);
+    // Прошлый ход шёл на Codex (Mac) 31 мин назад; лимит Claude сброшен.
+    const stored = fx.store.get('thr_s4')!;
+    fx.store.set('thr_s4', {
+      ...stored,
+      lastRun: { stepId: MAC_CODEX, hostId: MAC, providerId: 'codex', modelId: null, at: fx.now() },
+      engine: engineSaw ? { ...stored.engine, currentStepId: MAC_CODEX, currentModelId: undefined, switchedAt: fx.now() } : stored.engine,
+    });
+    fx.tick(31 * 60_000);
+    const back = await fx.routes.routeTurn(turn);
+    assert.equal(stepOf(back), TRU_MAX);
+    const sw = back.action === 'run' ? back.notes.find(n => n.kind === 'switch') : undefined;
+    assert.ok(sw && sw.kind === 'switch', `строка перехода есть (движок видел Codex: ${engineSaw})`);
+    assert.equal(sw.reason, 'return');
+    assert.equal(sw.from?.provider, 'Codex');
+    assert.equal(sw.to.provider, 'Claude');
+  }
 });

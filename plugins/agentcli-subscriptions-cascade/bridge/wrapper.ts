@@ -219,8 +219,13 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
       const threadId = typeof params.threadId === 'string' ? params.threadId : null;
       for (const delta of Array.isArray(params.deltas) ? params.deltas as unknown[] : []) {
         const d = rec(delta);
-        if ((d.kind === 'turn.open' || d.kind === 'input.accepted') && typeof d.providerTurnId === 'string' && threadId) {
-          threadTurn.set(threadId, d.providerTurnId);
+        // Штатный мост Claude открывает ход без providerTurnId (`{kind:'turn.open'}`,
+        // `input.accepted` только с clientRequestId), Codex — с ним. Отложенные строки
+        // перехода отпускаются в обоих случаях; ID хода Codex после возврата на Claude
+        // не переносится на ход Claude.
+        if ((d.kind === 'turn.open' || d.kind === 'input.accepted') && threadId) {
+          if (typeof d.providerTurnId === 'string') threadTurn.set(threadId, d.providerTurnId);
+          else if (d.kind === 'turn.open') threadTurn.delete(threadId);
           const held = awaitingTurn.get(threadId);
           if (held) {
             awaitingTurn.delete(threadId);

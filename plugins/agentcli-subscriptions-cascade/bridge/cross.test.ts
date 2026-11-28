@@ -277,7 +277,12 @@ function switchFixture(server: Partial<Record<string, (input: Record<string, unk
         }
         if (m.method === 'turn/start') {
           emit({ jsonrpc: '2.0', id: m.id, result: { providerTurnId: `${provider}-t` } });
-          emit({ jsonrpc: '2.0', method: 'thread/delta', params: { threadId: params.threadId, providerThreadId: params.providerThreadId, deltas: [{ kind: 'turn.open', providerTurnId: `${provider}-t` }] } });
+          // Как штатные мосты BB 0.50.1: Codex открывает ход с providerTurnId, Claude — без него
+          // (`[{kind:'turn.open'},{kind:'input.accepted',clientRequestId}]`).
+          const deltas = provider === 'codex'
+            ? [{ kind: 'turn.open', providerTurnId: 'codex-t' }, { kind: 'input.accepted', clientRequestId: params.clientRequestId, providerTurnId: 'codex-t' }]
+            : [{ kind: 'turn.open' }, { kind: 'input.accepted', clientRequestId: params.clientRequestId }];
+          emit({ jsonrpc: '2.0', method: 'thread/delta', params: { threadId: params.threadId, providerThreadId: params.providerThreadId, deltas } });
         }
       },
     };
@@ -390,10 +395,9 @@ test('мост: прежняя сессия Claude недоступна — но
   assert.ok(rows.some(d => d.kind === 'item.open' && /Прежняя сессия Claude недоступна/u.test(JSON.stringify(d))), 'строка в ленте о новой сессии');
   // Строка перехода выходит после открытия хода нового провайдера и с его providerTurnId.
   const ordered = out.filter(m => m.method === 'thread/delta').flatMap(m => (m.params as { deltas: { kind: string; providerTurnId?: string }[] }).deltas);
-  const openAt = ordered.findIndex(d => d.kind === 'turn.open' && d.providerTurnId === 'claude-t');
+  const openAt = ordered.findIndex(d => d.kind === 'turn.open');
   const rowAt = ordered.findIndex(d => d.kind === 'item.open' && /Прежняя сессия Claude недоступна/u.test(JSON.stringify(d)));
   assert.ok(openAt !== -1 && rowAt > openAt, `строка после turn.open (${openAt} < ${rowAt})`);
-  assert.equal(ordered[rowAt]!.providerTurnId, 'claude-t');
   await bridge.close();
 });
 
@@ -475,7 +479,8 @@ test('сквозная карточка: запускатель → сокет �
     for (let i = 0; i < 50 && !request; i += 1) { await fx.flush(); request = out.find(m => m.method === 'interaction/request') as typeof request; }
     assert.ok(request, 'мост отправил interaction/request');
     assert.equal(request!.params.providerThreadId, 'claude-s1');
-    assert.equal(request!.params.turnId, 'claude-t', 'карточка — внутри текущего хода');
+    // Штатный мост Claude не сообщает ID хода: карточка привязывается к текущему ходу самим BB.
+    assert.equal(request!.params.turnId, null, 'ID хода Claude неизвестен — без чужого ID');
     assert.equal(request!.params.payload.kind, CONFIRM_KIND);
     const data = request!.params.payload.data;
     bridge.handleLine(JSON.stringify({ jsonrpc: '2.0', id: request!.id, result: { kind: 'request_answer', value: { action: 'go', scope: 'turn', proposalId: data.proposalId, revision: data.revision } } }));
@@ -593,4 +598,52 @@ test('живой формат событий BB (S3 0.2.7): исходная п�
   // Просьбы нет вовсе — блок «спроси».
   const none = buildHandoff([], { ...base, currentRequestId: null });
   assert.equal(none.text, NO_CONTEXT_BLOCK);
+});
+
+test('S5 сквозь сокет ленты: возврат Codex → Claude — строка «Лимит сброшен → Mac · Claude ← Codex» от запускателя выходит в ленту', async t => {
+  const { createServer, createConnection } = await import('node:net');
+  const probe = join(realpathSync(mkdtempSync(join(tmpdir(), 'cxp-'))), 's.sock');
+  const canListen = await new Promise<boolean>(resolve => { const s = createServer(); s.on('error', () => resolve(false)); s.listen(probe, () => s.close(() => resolve(true))); });
+  if (!canListen) { t.skip('unix-сокеты недоступны в этой среде'); return; }
+  const saved: NativeSessions = { outerId: 'claude-s0', active: 'codex', sessions: { 'claude-code': { nativeId: 'claude-s0', coveredSeq: 12 }, codex: { nativeId: 'codex-s9', coveredSeq: 12 } } };
+  const fx = switchFixture({
+    nativeSessions: input => ({ sessions: input.sessions ?? saved }),
+    peekProvider: () => ({ providerId: 'claude-code', modelId: null, stage: null }),
+    handoffBrief: () => ({ text: 'DELTA', throughSeq: 14 }),
+  });
+  const { bridge, out, options } = fx;
+  const dataDir = realpathSync(mkdtempSync(join(tmpdir(), 'cxd-')));
+  const before = { claude: process.env.BB_CLAUDE_CODE_EXECUTABLE, codex: process.env.BB_CODEX_BRIDGE_APP_SERVER_COMMAND };
+  bridge.start!({ pluginId: 'agentcli-subscriptions-cascade', dataDir, tempDir: dataDir });
+  const { readFileSync } = await import('node:fs');
+  const socket = readFileSync(process.env.BB_CLAUDE_CODE_EXECUTABLE!, 'utf8').match(/CASCADE_FEED_SOCKET='([^']+)'/u)?.[1];
+  const send = (notes: unknown[]) => new Promise<void>(resolve => {
+    const c = createConnection(socket!);
+    c.on('connect', () => c.end(`${JSON.stringify({ threadId: 'thr_1', notes })}\n`, () => resolve()));
+  });
+  const rows = () => out.filter(m => m.method === 'thread/delta').flatMap(m => (m.params as { deltas: { kind: string; providerTurnId?: string; item?: { payload?: { type?: string; reason?: string } } }[] }).deltas);
+  try {
+    assert.ok(socket);
+    bridge.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }));
+    bridge.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'thread/resume', params: { threadId: 'thr_1', providerThreadId: 'claude-s0', cwd: '/p', options } }));
+    await fx.flush();
+    // Ход Codex: ID хода Codex запомнен мостом.
+    fx.codex.handle({ method: 'turn/start', id: 'x', params: { threadId: 'thr_1', providerThreadId: 'codex-s9', clientRequestId: 'creq_c' } });
+    await fx.flush();
+    // Ход 93: лимит Claude сброшен — мост переключает на Claude (resume), запускатель Claude шлёт строку возврата.
+    bridge.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'turn/start', params: { threadId: 'thr_1', providerThreadId: 'claude-s0', clientRequestId: 'creq_93', input: [{ type: 'text', text: 'что в файлах?' }], options } }));
+    await fx.flush();
+    const back = { kind: 'switch', reason: 'return', from: { machine: 'Mac', provider: 'Codex', account: 'Codex' }, to: { machine: 'Mac', provider: 'Claude', account: 'vclaude' }, resetAt: null, stepId: 'host_mac:claude-code:*' };
+    await send([back, { kind: 'state', phase: 'running', stage: back.to, stepId: back.stepId }]);
+    let row: ReturnType<typeof rows>[number] | undefined;
+    for (let i = 0; i < 50 && !row; i += 1) { await fx.flush(); row = rows().find(d => d.kind === 'item.open' && d.item?.payload?.type === 'switch' && d.item.payload.reason === 'return'); }
+    assert.ok(row, 'строка возврата в ленте');
+    assert.notEqual(row!.providerTurnId, 'codex-t', 'строка не привязана к ходу Codex');
+    const label = JSON.stringify(row);
+    assert.match(label, /Лимит сброшен → Mac · Claude ← Codex/u);
+  } finally {
+    await bridge.close();
+    if (before.claude === undefined) delete process.env.BB_CLAUDE_CODE_EXECUTABLE; else process.env.BB_CLAUDE_CODE_EXECUTABLE = before.claude;
+    if (before.codex === undefined) delete process.env.BB_CODEX_BRIDGE_APP_SERVER_COMMAND; else process.env.BB_CODEX_BRIDGE_APP_SERVER_COMMAND = before.codex;
+  }
 });

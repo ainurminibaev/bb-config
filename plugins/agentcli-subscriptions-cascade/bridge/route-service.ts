@@ -395,8 +395,14 @@ export function createRouteService(deps: RouteDeps): RouteService {
       const local = bridgeHost !== null && decision.hostId === bridgeHost;
       const fromStage = prev ? stageLabel(config, prev) : null;
       const fromHealth = prev ? withObserved(deps.health(config, input.threadId), stored.observed, now)(prev.stepId, prev.modelId) : null;
-      const switchReason = skipped.length > 0 ? 'unavailable' : prev === null ? 'start' : decision.returning ? 'return' : fromHealth?.exhausted ? 'limit' : fromHealth && !fromHealth.available ? 'unavailable' : 'error';
-      if (decision.switched || prev === null && !local || skipped.length > 0) {
+      // Смена ступени считается и по прошлому ходу (lastRun): состояние движка могло не
+      // увидеть ход другого провайдера, а строка перехода нужна при любой смене —
+      // машины, провайдера (Codex → Claude) или аккаунта.
+      const order = (stepId: string) => config.steps.findIndex(s => s.id === stepId);
+      const changed = decision.switched || (prev !== null && prev.stepId !== decision.stepId);
+      const returning = decision.returning || (prev !== null && changed && order(decision.stepId) !== -1 && order(prev.stepId) !== -1 && order(decision.stepId) < order(prev.stepId));
+      const switchReason = skipped.length > 0 ? 'unavailable' : prev === null ? 'start' : returning ? 'return' : fromHealth?.exhausted ? 'limit' : fromHealth && !fromHealth.available ? 'unavailable' : 'error';
+      if (changed || prev === null && !local || skipped.length > 0) {
         notes.push({ kind: 'switch', reason: switchReason, from: fromStage, to, resetAt: fromHealth?.resetsAt ?? null, stepId: decision.stepId });
       }
 

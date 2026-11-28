@@ -28,12 +28,23 @@ export const stageShort = (stage: StageRef) => [stage.machine, stage.model].filt
 
 export const totalMs = (steps: readonly StepTiming[]) => steps.reduce((sum, s) => sum + s.ms, 0);
 
+/** Провайдер меняется (Claude ↔ Codex): в подписи нужен провайдер, машины мало. */
+const crossProvider = (p: SwitchPayload) => Boolean(p.from?.provider && p.to.provider && p.from.provider !== p.to.provider);
+
+/** Откуда при возврате: что отличается от цели — машина, провайдер или оба. */
+function returnSource(p: SwitchPayload): string {
+  if (!p.from) return '';
+  const machine = p.from.machine !== p.to.machine ? p.from.machine : null;
+  const provider = crossProvider(p) ? p.from.provider : null;
+  return [machine, provider].filter(Boolean).join(' · ') || p.from.account || p.from.machine;
+}
+
 /** Начало подписи перехода: откуда и почему. */
 function switchHead(p: SwitchPayload): string {
-  const from = p.from?.machine ?? '';
+  const from = p.from ? [p.from.machine, crossProvider(p) ? p.from.provider : null].filter(Boolean).join(' · ') : '';
   switch (p.reason) {
     case 'limit': return `${from} исчерпан`;
-    case 'return': return `${p.window ?? p.to.account ?? p.to.machine} свободен`;
+    case 'return': return p.window ? `Лимит ${p.window} сброшен` : 'Лимит сброшен';
     case 'unavailable': return `${from} не на связи`;
     case 'auth': return `Вход на ${from} истёк`;
     case 'error': return `Сбой на ${from}`;
@@ -42,8 +53,19 @@ function switchHead(p: SwitchPayload): string {
   }
 }
 
-/** Куда: при возврате — только машина («→ Tru»), иначе машина и модель. */
-const switchTarget = (p: SwitchPayload) => (p.reason === 'return' ? p.to.machine : stageShort(p.to));
+/**
+ * Куда: при возврате — машина (и провайдер, если он меняется) и откуда:
+ * «Лимит сброшен → Mac · Claude ← Codex», «Лимит Max сброшен → Tru ← Mac».
+ * Иначе — машина, провайдер при смене провайдера, модель.
+ */
+function switchTarget(p: SwitchPayload): string {
+  const to = [p.to.machine, crossProvider(p) ? p.to.provider : null].filter(Boolean).join(' · ');
+  if (p.reason === 'return') {
+    const source = returnSource(p);
+    return source ? `${to} ← ${source}` : to;
+  }
+  return [to, p.to.model].filter(Boolean).join(' · ');
+}
 
 export function routeLabel(payload: RoutePayload, ctx: PresentationContext): { pending: string; completed: string } {
   const at = (ms: number) => clock(ms, ctx.timeZone);
