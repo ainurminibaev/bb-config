@@ -10,14 +10,14 @@ import {
 
 const describe = (id: string, c = config()) => describeProfile(c, c.profiles.find(p => p.id === id)!, ACCOUNTS);
 
-test('подпись профиля: первая ступень и правило', () => {
-  assert.equal(describe('auto'), 'Старт: Opus · Tru — первая в приоритете моделей. Дальше любые модели по ступеням Tru → Mac → UA; Codex — с подтверждением');
-  assert.equal(describe('auto-no-codex'), 'Старт: Opus · Tru — первая в приоритете моделей. Дальше любые модели по ступеням Tru → Mac → UA, без Codex');
+test('подпись профиля (0.4.0): цепочка моделей, старт и правило', () => {
+  assert.equal(describe('auto'), 'Opus → Fable → Sonnet → Codex. Старт: Opus · Tru; внутри модели — ступени Tru → Mac → UA; Codex — с подтверждением');
+  assert.equal(describe('auto-no-codex'), 'Opus → Fable → Sonnet. Старт: Opus · Tru; внутри модели — ступени Tru → Mac → UA, без Codex');
   assert.equal(describe('fable-then-auto'), 'Старт: Fable · Tru. Сначала Fable на Tru → Mac, потом любые модели; Codex — с подтверждением');
   assert.equal(describe('only-opus-5.5'), 'Старт: Opus · Tru. Только Opus 5.5 на Tru → Mac → UA');
   const c = config();
   c.policies.modelPriority = ['fable-5.2'];
-  assert.match(describe('auto', c), /^Старт: Fable · Tru — первая в приоритете моделей/, '«Авто» стартует с первой модели приоритета');
+  assert.match(describe('auto', c), /^Fable → .*Старт: Fable · Tru/u, '«Лучшая модель» стартует с первой модели приоритета');
 });
 
 test('список моделей провайдера = включённые профили в порядке владельца', () => {
@@ -26,7 +26,7 @@ test('список моделей провайдера = включённые п
   const models = providerModels(c, ACCOUNTS).filter(m => !m.id.startsWith('pin:'));
   assert.deepEqual(models.map(m => [m.id, m.displayName]), c.profiles.map(p => [p.id, p.name]));
   assert.deepEqual(models.map(m => m.isDefault), [true, false, false, false, false, false, false]);
-  assert.ok(models.every(m => m.description.startsWith('Старт: ')));
+  assert.ok(models.every(m => m.description.includes('Старт: ')));
   assert.deepEqual(providerModels(c, ACCOUNTS).slice(0, models.length).map(m => m.id), models.map(m => m.id), 'профили — первыми');
   // «Авто» выключено — по умолчанию следующий профиль; профиль без ступеней не показывается.
   c.profiles = c.profiles.map(p => p.id === 'auto' ? { ...p, enabled: false } : p);
@@ -46,10 +46,10 @@ test('умолчания только для конфигурации без п�
 test('«+ Профиль»: заготовки и дублирование с уникальным ID', () => {
   const c = config();
   assert.deepEqual([presetProfile('only-model', c).id, presetProfile('only-model', c).policy], ['only-opus-5.5-2', 'only']);
-  assert.equal(presetProfile('model-then-auto', c).name, 'Opus → Авто');
+  assert.equal(presetProfile('model-then-auto', c).name, 'Opus, потом лучшая');
   assert.deepEqual(presetProfile('no-codex', c).excludedProviders, ['codex']);
   const copy = duplicateProfile(c.profiles[0]!, c);
-  assert.deepEqual([copy.id, copy.name], ['auto-copy', 'Авто (копия)']);
+  assert.deepEqual([copy.id, copy.name], ['auto-copy', 'Лучшая модель · любая машина (копия)']);
 });
 
 test('тестовый источник квоты: только в тестовых тредах; превью и схема его учитывают', () => {

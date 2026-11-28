@@ -86,7 +86,7 @@ test('профиль в списке моделей и в схеме «i»: по
   const c = config();
   const model = providerModels(c, ACCOUNTS).find(m => m.id === 'auto-codex-children');
   assert.ok(model, 'профиль виден в списке моделей');
-  assert.match(model.description, /^Старт: .*Потомки — только Codex на любой машине/u);
+  assert.match(model.description, /^Opus → .*Старт: .*Потомки — только Codex на любой машине/u);
   const p = c.profiles.find(x => x.id === 'auto-codex-children')!;
   assert.equal(describeProfile(c, p, ACCOUNTS), model.description);
   const preview = profilePreview(c, p.id, ACCOUNTS, previewLookup({ ...c, testQuota: { ...c.testQuota, enabled: true } }, {}), NOW);

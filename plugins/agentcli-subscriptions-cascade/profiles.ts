@@ -18,6 +18,23 @@ function profile(patch: Partial<Profile> & Pick<Profile, 'id' | 'name'>): Profil
   return { enabled: true, policy: 'any', modelKey: null, stepOrder: null, excludedSteps: [], excludedProviders: [], confirm: {}, ...patch };
 }
 
+/** 0.4.0: названия говорят о модели, а не о машине (ID профилей прежние). */
+export const AUTO_NAME = 'Лучшая модель · любая машина';
+export const thenBestName = (model: string) => `${model}, потом лучшая`;
+
+/**
+ * Прежние имена встроенных профилей → новые. Переименовываются только профили, чьё имя
+ * владелец не менял (совпадает с прежним умолчанием).
+ */
+export function renameLegacyProfile(p: Profile): Profile {
+  const legacy: Record<string, string> = {
+    'Авто': AUTO_NAME, 'Авто · без Codex': 'Лучшая модель · без Codex', 'Авто · подтреды на Codex': 'Лучшая модель · подтреды на Codex',
+  };
+  if (legacy[p.name]) return { ...p, name: legacy[p.name]! };
+  const then = /^(\S+) → Авто$/u.exec(p.name);
+  return then && p.policy === 'prefer-then-any' ? { ...p, name: thenBestName(then[1]!) } : p;
+}
+
 /** Короткое имя модели для цепочек: «Opus 5.5» → «Opus». */
 export function shortModel(displayName: string): string {
   return displayName.split(/\s+/)[0] || displayName;
@@ -31,13 +48,13 @@ export function shortModel(displayName: string): string {
 export function defaultProfiles(config: Pick<CascadeConfig, 'models'>): Profile[] {
   const row = (key: string) => config.models.find(r => r.key === key);
   const out: Profile[] = [
-    profile({ id: AUTO_MODEL_ID, name: 'Авто' }),
-    profile({ id: 'auto-no-codex', name: 'Авто · без Codex', excludedProviders: ['codex'] }),
+    profile({ id: AUTO_MODEL_ID, name: AUTO_NAME }),
+    profile({ id: 'auto-no-codex', name: 'Лучшая модель · без Codex', excludedProviders: ['codex'] }),
     autoCodexChildrenProfile(),
   ];
   for (const key of [OPUS, FABLE]) {
     const r = row(key);
-    if (r) out.push(profile({ id: `${shortModel(r.displayName).toLowerCase()}-then-auto`, name: `${shortModel(r.displayName)} → Авто`, policy: 'prefer-then-any', modelKey: key }));
+    if (r) out.push(profile({ id: `${shortModel(r.displayName).toLowerCase()}-then-auto`, name: thenBestName(shortModel(r.displayName)), policy: 'prefer-then-any', modelKey: key }));
   }
   for (const key of [OPUS, FABLE]) {
     const r = row(key);
@@ -49,7 +66,7 @@ export function defaultProfiles(config: Pick<CascadeConfig, 'models'>): Profile[
 export type PresetKind = 'only-model' | 'model-then-auto' | 'no-codex';
 export const PRESETS: readonly { kind: PresetKind; label: string }[] = [
   { kind: 'only-model', label: 'Только модель' },
-  { kind: 'model-then-auto', label: 'Модель → Авто' },
+  { kind: 'model-then-auto', label: 'Модель, потом лучшая' },
   { kind: 'no-codex', label: 'Без Codex' },
 ];
 
@@ -61,8 +78,8 @@ export function presetProfile(kind: PresetKind, config: CascadeConfig): Profile 
   const model = first ? shortModel(first.displayName) : 'Модель';
   switch (kind) {
     case 'only-model': return profile({ id: uniqueId(`only-${first?.key ?? 'model'}`, taken), name: `Только ${first?.displayName ?? 'модель'}`, policy: 'only', modelKey: first?.key ?? null });
-    case 'model-then-auto': return profile({ id: uniqueId(`${model.toLowerCase()}-then-auto`, taken), name: `${model} → Авто`, policy: 'prefer-then-any', modelKey: first?.key ?? null });
-    case 'no-codex': return profile({ id: uniqueId('auto-no-codex', taken), name: 'Авто · без Codex', excludedProviders: ['codex'] });
+    case 'model-then-auto': return profile({ id: uniqueId(`${model.toLowerCase()}-then-auto`, taken), name: thenBestName(model), policy: 'prefer-then-any', modelKey: first?.key ?? null });
+    case 'no-codex': return profile({ id: uniqueId('auto-no-codex', taken), name: 'Лучшая модель · без Codex', excludedProviders: ['codex'] });
   }
 }
 
@@ -95,6 +112,17 @@ export function attemptLabel(config: CascadeConfig, a: Pick<Attempt, 'stepId' | 
   return `${model} · ${gateway}${machineLabel(config, a.hostId)}`;
 }
 
+/** «Opus → Fable → Sonnet → Codex»: модели плана в порядке попыток, без повторов. */
+export function modelChain(config: CascadeConfig, live: readonly Attempt[]): string {
+  const names: string[] = [];
+  for (const a of live) {
+    const row = a.rowKey ? config.models.find(r => r.key === a.rowKey) : undefined;
+    const name = row ? shortModel(row.displayName) : providerShort(a.providerId);
+    if (!names.includes(name)) names.push(name);
+  }
+  return names.join(' → ');
+}
+
 /** «Codex — с подтверждением»: провайдер целиком, если все его ступени с подтверждением, иначе ступени. */
 function confirmPhrase(config: CascadeConfig, live: readonly Attempt[]): string | null {
   const steps = [...new Map(live.map(a => [a.stepId, a])).values()];
@@ -125,8 +153,10 @@ export function describeProfile(config: CascadeConfig, profile: Profile, account
   const row = profile.modelKey ? config.models.find(r => r.key === profile.modelKey) : undefined;
   const hostsOf = (items: readonly Attempt[]) => [...new Set(items.map(a => machineLabel(config, a.hostId)))].join(' → ');
   if (profile.policy === 'any') {
-    parts.push(`Старт: ${attemptLabel(config, first)}${first.rowKey ? ' — первая в приоритете моделей' : ''}`);
-    parts.push(`Дальше любые модели по ступеням ${hostsOf(live)}`);
+    // 0.4.0: подзаголовок — цепочка моделей («Opus → Fable → Sonnet»): только модели,
+    // которые может запустить хоть одна ступень профиля; модель CLI по умолчанию — именем CLI.
+    parts.push(modelChain(config, live));
+    parts.push(`Старт: ${attemptLabel(config, first)}; внутри модели — ступени ${hostsOf(live)}`);
   } else {
     const own = live.filter(a => a.phase !== 'any');
     const name = row ? shortModel(row.displayName) : profile.modelKey ?? '';

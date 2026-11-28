@@ -43,12 +43,12 @@ export interface SettingsViewProps {
 const PROVIDER_LABELS: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', 'gemini-cli': 'Gemini CLI' };
 const providerLabel = (id: string) => PROVIDER_LABELS[id] ?? id;
 const PROBLEM_CELL: Partial<Record<CellStatus, string>> = {
-  unmatched: 'не найдено', ambiguous: 'несколько вариантов', missing: 'нет в каталоге', blocked: 'недоступна на аккаунте',
+  unmatched: 'не найдено', ambiguous: 'несколько вариантов', missing: 'нет в каталоге', blocked: 'недоступна на этой ступени',
 };
 const CELL_TITLE: Record<CellStatus, string> = {
   auto: 'сопоставлено автоматически', manual: 'указано вручную', unmatched: 'не найдено — укажите ID',
   ambiguous: 'несколько вариантов — выберите', missing: 'ID нет в каталоге машины', 'no-cli': 'на машине нет этого CLI', unknown: 'каталог ещё не получен',
-  blocked: 'модель недоступна на аккаунте машины — ход идёт на следующую ступень',
+  blocked: 'модель недоступна на этой ступени (тариф) — ход идёт на ту же модель на другой ступени или на следующую модель; перепроверка раз в сутки',
 };
 const WIZARD_LABELS: Record<string, string> = { probe: 'Машина', folder: 'Папка', mutagen: 'Mutagen', ssh: 'SSH до опоры', verify: 'Проверка' };
 const RESET_CONFIRM = 'Настроить с нуля: снять сессии Mutagen каскада, убрать выданные каскадом ключи из authorized_keys опоры и сбросить шаги мастера. Файлы проектов и общий путь не трогаются. Продолжить?';

@@ -15,7 +15,7 @@ import type { Decision } from './engine.ts';
 
 export const CODEX_PROVIDER_ID = 'codex';
 export const SUBTHREAD_CODEX_NAME = 'Подтред · Codex';
-export const AUTO_CODEX_CHILDREN_NAME = 'Авто · подтреды на Codex';
+export const AUTO_CODEX_CHILDREN_NAME = 'Лучшая модель · подтреды на Codex';
 /** Сколько предков просматривается в поиске правила (защита от циклов и длинных цепочек). */
 export const MAX_ANCESTOR_DEPTH = 10;
 

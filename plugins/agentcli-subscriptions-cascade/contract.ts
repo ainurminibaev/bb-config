@@ -419,6 +419,11 @@ export const rpcContract = defineRpcContract({
 // ---- Хост-RPC: только чтение фактов о машине ----
 
 export const hostContract = defineRpcContract({
+  /** 0.4.0: квота Codex через app-server машины (`account/rateLimits/read`), форма usageLimits().codex. */
+  codexRateLimits: {
+    input: z.object({}).default({}),
+    output: z.object({ usage: z.record(z.string(), z.unknown()).nullable(), error: z.string().nullable() }),
+  },
   probe: {
     input: z.object({ sharedPath: z.string() }),
     output: z.object({

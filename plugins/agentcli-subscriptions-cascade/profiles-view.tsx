@@ -243,7 +243,8 @@ function DiagramFlow({ attempts: all, draft }: { attempts: readonly ExplainedAtt
           const phaseBreak = i > 0 && a.phase === 'any' && attempts[i - 1]!.phase === 'preferred';
           const tone = a.skip ? 'skip' : a.state;
           const notReady = a.state === 'unavailable' && a.reason?.startsWith('ступень не готова');
-          const note = a.skip === 'excluded' ? 'исключена' : a.skip === 'no-model' ? 'нет модели' : a.skip === 'subthread' ? 'чужая машина' : notReady ? 'не готова' : STATE_TEXT[a.state];
+          const modelOff = a.state === 'unavailable' && a.reason?.startsWith('недоступна на этой ступени');
+          const note = a.skip === 'excluded' ? 'исключена' : a.skip === 'no-model' ? 'нет модели' : a.skip === 'subthread' ? 'чужая машина' : notReady ? 'не готова' : modelOff ? 'недоступна на этой ступени' : STATE_TEXT[a.state];
           return (
             <Fragment key={`${a.stepId}|${a.modelId}|${a.skip}|${a.phase}`}>
               {phaseBreak ? <span className="asc-phase">потом Авто →</span> : i > 0 && <span className="asc-arrow" aria-hidden="true">→</span>}

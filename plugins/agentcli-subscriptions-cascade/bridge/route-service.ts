@@ -65,7 +65,7 @@ export interface StoredThreadState {
    */
   observed?: Record<string, { until: number; at: number }> | null;
   /** Модель недоступна на аккаунте ступени: `stepId|modelId` → до когда и почему. */
-  modelBlocks?: Record<string, { until: number; reason: string }> | null;
+  modelBlocks?: Record<string, { until: number; reason: string; kind?: 'plan' | 'quota' }> | null;
   /**
    * Согласие «на этот ход», которое должно пережить автоповтор того же хода
    * (смена провайдера внутри хода): ступень и срок; используется один раз.
@@ -197,6 +197,15 @@ export function recoverProfile(config: CascadeConfig, accounts: readonly Discove
   return { profileId: fallback, note: `Профиль «${requested}» не найден — ход по «${config.profiles.find(p => p.id === fallback)?.name ?? fallback}». Выберите профиль каскада в списке моделей.` };
 }
 
+/**
+ * 0.4.0: отказ модели (402 и родственные). `quota` — «лимит тарифа/пакета исчерпан», «limit
+ * reached/exceeded»: исчерпание с перепроверкой. `plan` — «только в тарифе …», «requires
+ * usage credits», нет доступа к модели: модель недоступна на этой ступени.
+ */
+export function modelRefusalKind(text: string): 'plan' | 'quota' {
+  return /лимит[^.]{0,40}исчерпан|исчерпан[^.]{0,20}лимит|(?:usage|rate|plan|quota)\s*limit[^.]{0,20}(?:reached|exhausted|exceeded)|quota (?:exceeded|exhausted)|limit (?:reached|exceeded)/iu.test(text) ? 'quota' : 'plan';
+}
+
 /** Профиль хода не разрешается в настройках (нет такого профиля и это не `pin:`/`m:`/синтетика). */
 function unknownProfile(config: CascadeConfig, id: string): boolean {
   const p = resolveProfile(config, id);
@@ -303,7 +312,12 @@ export function withObserved(base: HealthLookup, observed: StoredThreadState['ob
   if (!observed && !modelBlocks) return base;
   return (stepId, modelId) => {
     const blocked = modelBlocks?.[`${stepId}|${modelId}`];
-    if (blocked && now < blocked.until) return { available: false, exhausted: false, unknown: false, resetsAt: null, reason: `модель недоступна: ${blocked.reason}` };
+    if (blocked && now < blocked.until) {
+      // 0.4.0: «лимит тарифа исчерпан» — исчерпание модели на ступени со сроком перепроверки;
+      // «только в тарифе …» — модель недоступна на этой ступени.
+      if (blocked.kind === 'quota') return { available: true, exhausted: true, unknown: false, resetsAt: blocked.until, reason: `лимит модели на ступени исчерпан: ${blocked.reason}` };
+      return { available: false, exhausted: false, unknown: false, resetsAt: null, reason: `недоступна на этой ступени: ${blocked.reason}` };
+    }
     const mark = observed?.[stepId];
     if (mark && now < mark.until) return { available: true, exhausted: true, unknown: false, resetsAt: mark.until, reason: 'исчерпан в ходе' };
     return base(stepId, modelId);
@@ -933,11 +947,13 @@ export function createRouteService(deps: RouteDeps): RouteService {
       if (!stored) return { ok: false };
       const now = deps.now();
       const blocks = Object.fromEntries(Object.entries(stored.modelBlocks ?? {}).filter(([, b]) => b.until > now));
-      blocks[`${input.stepId}|${input.modelId}`] = { until: now + 24 * 3_600_000, reason: input.reason.slice(0, 200) };
+      const kind = modelRefusalKind(input.reason);
+      // Тариф: на сутки (суточная перепроверка) и в таблице моделей. Лимит: перепроверка через час, таблица не трогается.
+      blocks[`${input.stepId}|${input.modelId}`] = { until: now + (kind === 'quota' ? OBSERVED_UNKNOWN_RESET_MS : 24 * 3_600_000), reason: input.reason.slice(0, 200), kind };
       await deps.save(input.threadId, { ...stored, modelBlocks: blocks });
       const config = await deps.loadConfig();
       const step = config.steps.find(st => st.id === input.stepId);
-      if (step && input.modelId) await deps.blockModel?.(step.hostId, input.modelId, input.reason).catch(() => undefined);
+      if (kind === 'plan' && step && input.modelId) await deps.blockModel?.(step.hostId, input.modelId, input.reason).catch(() => undefined);
       return { ok: true };
     });
   }

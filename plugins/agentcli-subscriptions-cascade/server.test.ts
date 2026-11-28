@@ -67,7 +67,7 @@ test('сервер: состояние, провайдер с каталогом
   assert.deepEqual(ids.slice(0, 7), ids.filter(id => !id.startsWith('pin:')), 'профили — первыми, закреплённые ступени — за ними');
   assert.ok(ids.includes('pin:host_mac:claude-code:*:fable-5.2'), 'закреплённая ступень с моделью из таблицы');
   assert.ok(!ids.includes('pin:host_mac:claude-code:*:opus-5.5'), 'модели без ID на машине нет в меню');
-  assert.match(provider!.models!.fallback![0]!.description ?? '', /^Старт: Opus · Tru/);
+  assert.match(provider!.models!.fallback![0]!.description ?? '', /Старт: Opus · Tru/);
 });
 
 test('сервер: «Добавить найденное», сохранение и предпросмотр мастера', async () => {

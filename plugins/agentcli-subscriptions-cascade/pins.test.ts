@@ -202,7 +202,7 @@ test('resolve: «Codex 6.2 на Tru», «на аккаунте vclaude», «Opus
   assert.deepEqual(r('Codex на маке'), { match: { profileId: pinId(MAC_CODEX, null), label: 'Mac · Codex' } });
   const opus = r('Opus');
   assert.ok('candidates' in opus && opus.candidates?.length === 3, 'Opus есть на трёх машинах');
-  assert.deepEqual(r('Авто · без Codex'), { match: { profileId: 'auto-no-codex', label: 'Авто · без Codex' } });
+  assert.deepEqual(r('Лучшая модель · без Codex'), { match: { profileId: 'auto-no-codex', label: 'Лучшая модель · без Codex' } });
 });
 
 test('resolve: такой ступени нет — запасной путь со штатным провайдером и причиной', () => {
