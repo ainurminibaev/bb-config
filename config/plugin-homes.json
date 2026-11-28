@@ -24,6 +24,10 @@
     "home": "bb-config",
     "note": "own plugin: keeps context-mode in Claude Code and Codex on every BB machine"
   },
+  "image-gen": {
+    "home": "bb-config",
+    "note": "own plugin: picture generation for every agent; sources in plugins/image-gen, tags image-gen/vX.Y.Z"
+  },
   "knowledge-base": {
     "home": "project",
     "project": "ai_agents",

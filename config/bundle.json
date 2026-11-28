@@ -376,6 +376,19 @@
    "description": "Актуальный context-mode во всех агентах на всех машинах BB: setup для Claude Code, Codex и других, MCP для Antigravity и Cursor."
   },
   {
+   "id": "image-gen",
+   "kind": "local",
+   "name": "Image Gen",
+   "optional": true,
+   "description": "Генерация и правка картинок для любого агента: Codex-треды рисуют сами, остальные — через инструменты image_generate и image_edit. Ставится по выбору.",
+   "attention": [
+    {
+     "type": "auth",
+     "text": "На машине-исполнителе нужен Codex CLI с входом через ChatGPT (codex login); без него — платный OpenAI API по секретной настройке."
+    }
+   ]
+  },
+  {
    "id": "agentcli-subscriptions-cascade",
    "kind": "local",
    "name": "Каскад подписок",

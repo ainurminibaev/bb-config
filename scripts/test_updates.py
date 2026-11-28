@@ -165,7 +165,8 @@ class UpdatesTests(unittest.TestCase):
         marker = '{root}/.local/plugin-patches/demo.done'
         sha = self.repo.release('v1.0.0', [step('legacy', apply=MARK + [marker], verify=HAS + [marker])])
         checkout = Path(self.call('fetch', 'v1.0.0', '--commit', sha)[1]['checkout'])
-        self.assertEqual((checkout / '.local/config').resolve(), self.repo.root / '.local/config')
+        # macOS: /var is a link to /private/var, so both sides are compared resolved.
+        self.assertEqual((checkout / '.local/config').resolve(), (self.repo.root / '.local/config').resolve())
         self.call('begin', 'v1.0.0', '--commit', sha)
         self.assertEqual(self.call('run', 'v1.0.0/legacy', root=checkout)[1]['how'], 'applied')
         self.assertTrue((self.repo.root / '.local/plugin-patches/demo.done').is_file())

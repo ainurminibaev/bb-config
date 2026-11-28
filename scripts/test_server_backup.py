@@ -180,12 +180,13 @@ server.listen(0, '127.0.0.1', async () => {
         launcher = package / 'dist/bb.js'
         with patch.dict(os.environ, {'BB_CLI': str(launcher)}):
             cli = backup.Cli()
-            self.assertEqual(cli.path, str(native))
+            # macOS: /var is a link to /private/var; Cli resolves the real path.
+            self.assertEqual(cli.path, str(native.resolve()))
             with patch.object(backup.subprocess, 'run') as run:
                 run.return_value.returncode = 0
                 run.return_value.stdout = '{}'
                 cli.call('status', '--json')
-                self.assertEqual(run.call_args.kwargs['env']['BB_CLI'], str(native))
+                self.assertEqual(run.call_args.kwargs['env']['BB_CLI'], str(native.resolve()))
 
     def test_installed_shell_launcher_resolves_its_native_cli(self):
         package = self.root / 'bb-app'

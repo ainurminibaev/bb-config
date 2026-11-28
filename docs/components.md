@@ -46,6 +46,7 @@ KodaForge 0.7.100, ChatGPT Realtime 0.1.0; более новая даёт пре
 | `limit-guard` | свой плагин | `plugins/limit-guard` | режимы у порога лимита подписки | — |
 | `pr-issues` | свой плагин | `plugins/pr-issues` | страница PR и issue на GitHub | `gh` с входом на сервере BB |
 | `context-mode-rollout` | свой плагин | `plugins/context-mode-rollout` | context-mode во всех агентах на всех машинах | Node.js с npm на машинах (сейчас Node ≥ 24.15) |
+| `image-gen` | свой плагин, **необязательный** | `plugins/image-gen` | генерация и правка картинок для любого агента | Codex CLI с `codex login` на машине-исполнителе (или платный OpenAI API) |
 | `agentcli-subscriptions-cascade` | свой плагин, **необязательный** | `plugins/agentcli-subscriptions-cascade` | экспериментальный провайдер «Каскад подписок»; паспорт треда читают `limit-guard`, `thread-account-usage`, `codex-delegation-watch`, `file-local-open`, `project-open`, `git-thread-provenance` | мастер «Настроить»: Mutagen, `/opt/bbfs`, SSH-доступ машин к серверу BB; свой вход CLI на каждой машине-ступени |
 
 Вне плагинов: на каждой машине с Codex — `python3 scripts/codex_defaults.py --apply --verify`.
