@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "version": "v1.29.0",
+  "title": "Thread Account Usage 0.3.5: квота Codex видна там, где BB получает 403",
+  "steps": [
+    {
+      "id": "bundle",
+      "title": "Полный набор компонентов bb-config",
+      "component": "bb-config",
+      "where": "server",
+      "kind": "bundle",
+      "rerun": "Безопасно: установленное и актуальное только проверяется; повтор доделывает остаток после сбоя.",
+      "rollback": "Компонент, который не нужен, исключите командой python3 scripts/bundle.py exclude <id> и удалите штатно (bb plugin remove <id>); прежнюю версию собственного плагина ставит предыдущий релиз."
+    },
+    {
+      "id": "thread-account-usage-0-3-5",
+      "title": "Thread Account Usage 0.3.5 — квота Codex у самого Codex, когда usageLimits отвечает 403",
+      "component": "thread-account-usage",
+      "where": "server",
+      "kind": "command",
+      "applies": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "applicable",
+        "thread-account-usage",
+        "0.3.5"
+      ],
+      "apply": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "apply",
+        "thread-account-usage",
+        "0.3.5"
+      ],
+      "verify": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "check",
+        "thread-account-usage",
+        "0.3.5"
+      ],
+      "rerun": "Актуальная работающая версия проходит проверку без установки.",
+      "rollback": "Установите предыдущий тег thread-account-usage/v0.3.4."
+    }
+  ]
+}
