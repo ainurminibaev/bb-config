@@ -724,7 +724,7 @@ RouteNote `notice`: отдельная строка ленты (тип `problem`
   `pin:…`). Решает код каскада, не агент: `requestedModel` подтреда для выбора не важен.
   То же правило применяют `peekProvider` (какой мост берёт ход), `retryAvailability` и
   повтор после сбоя (`selectWithFallback`).
-- **Откат на Claude.** `codexFallbackReason`: `wait` exhausted/unknown, `ask-owner`,
+- **Откат на Claude.** (уточнено в 0.3.5) `codexFallbackReason`: `wait` exhausted/unknown, `ask-owner`,
   `unavailable` → ход по `auto`, в `notes` строка «Codex недоступен: <причина> — подтред
   на Claude». Строка пишется только при переходе (`StoredThreadState.codexFallback`).
   Родителю она уходит через `pushThreadNote` (kv `exec:notes:<тред>`) и показывается
@@ -753,6 +753,40 @@ RouteNote `notice`: отдельная строка ленты (тип `problem`
   них не читается. Сам тред на профиле во всех сочетаниях лимитов выбирает то же, что `auto`.
 - Тесты: `codex-subthreads.test.ts` (на 0.3.3 падают 8 проверок нового поведения, 6
   проверок «как в 0.3.3» проходят), `brief.test.ts` (на 0.3.3 нет модуля).
+
+## 0.3.5: Codex-подтред при неизвестной квоте и исчерпанной машине родителя
+
+Приёмка 0.3.4 на живом BB: родитель на Tru, Tru исчерпан на неделю, остальные
+ступени — «квота неизвестна», у всех `onUnknown: skip`, S11 включено. Подтред с
+полным заданием получил отказ «Все ступени исчерпаны, а ближайший сброс позже
+порога ожидания». Цепочка: Codex «неизвестен» + `skip` → `wait unknown` → откат на
+«Авто» → S11 держит подтред на Tru → Tru исчерпан → `ask-owner`.
+
+- **Неизвестная квота Codex — не откат.** У профиля появилось поле `onUnknown`
+  (`skip|try`, без поля — как у ступени), `selectStep` берёт его раньше
+  `step.onUnknown`. `subthread-codex` ставит `try`. Откат на «Авто» — только при
+  исчерпании (`wait exhausted`, `ask-owner`), выключенных ступенях (`unavailable
+  no-steps`) или когда подготовка всех ступеней Codex в этом ходе не удалась
+  (причина «вход на ступени Codex не удался»).
+- **Откат без S11.** `PlanInput.ignoreHome` снимает S11 в `buildPlan` (как у `pin:…`).
+  Маршрут Codex-подтреда передаёт его и для Codex, и для отката на «Авто»
+  (`routeOnce`, `selectWithFallback` — `peekProvider`/`retryAvailability`,
+  `explainNoSteps`, `threadScheme`). Строки «Машина родителя … не в каскаде» у
+  Codex-подтреда нет. В состоянии треда — `codexChild: true`: повтор и схема без
+  запроса родителя.
+- **Лимит Codex из хода.** До 0.3.5 реле app-server (`launcher/codex-relay.ts`) не
+  передавало `account/rateLimits/updated`, а `observeLimit` заворачивал всё в
+  `rate_limit_event` Claude. Квота Codex без опроса так и оставалась «неизвестной».
+  Теперь `limitFromCodexLine` → порт `limits` → `turnLimits` (окно ≥ 100 % —
+  `rejected` до его сброса, ступень исчерпана в треде сразу), а `observeLimit`
+  отдаёт уведомление адаптеру Codex как есть (`codexEventReading`, монитор).
+- **Опрос квоты Codex.** `refreshLimits` → `usageLimits({ hostId, refresh: true }).codex`.
+  На одной из машин BB отвечает `status: error` «Codex usage request failed (HTTP 403)» →
+  `unknown`. Это ответ Codex на чтение квоты аккаунта, а не дефект каскада. На UA и
+  Tru квота читается.
+- Тесты: `codex-fallback.test.ts` (на 0.3.4 падают 4 проверки нового поведения, 2
+  проверки «как раньше» проходят), `launcher/codex-limits.test.ts` (на 0.3.4 нет
+  `limitFromCodexLine`).
 
 ## Уборка реплик после тредов (0.2.12, `sync/gc.ts`)
 

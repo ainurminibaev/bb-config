@@ -86,11 +86,11 @@ test('профиль в списке моделей и в схеме «i»: по
   const c = config();
   const model = providerModels(c, ACCOUNTS).find(m => m.id === 'auto-codex-children');
   assert.ok(model, 'профиль виден в списке моделей');
-  assert.match(model.description, /^Старт: .*Подтреды — только Codex на любой машине/u);
+  assert.match(model.description, /^Старт: .*Потомки — только Codex на любой машине/u);
   const p = c.profiles.find(x => x.id === 'auto-codex-children')!;
   assert.equal(describeProfile(c, p, ACCOUNTS), model.description);
   const preview = profilePreview(c, p.id, ACCOUNTS, previewLookup({ ...c, testQuota: { ...c.testQuota, enabled: true } }, {}), NOW);
   assert.ok(preview.subthreads, 'вторая цепочка схемы');
-  assert.match(preview.subthreads.text, /^подтред: сейчас ход пошёл бы на: GPT-6\.2 Sol · MacBook|^подтред: сейчас ход пошёл бы на: .*Mac/u);
+  assert.match(preview.subthreads.text, /^потомок: сейчас ход пошёл бы на: GPT-6\.2 Sol · MacBook|^потомок: сейчас ход пошёл бы на: .*Mac/u);
   assert.equal(profilePreview(c, 'auto', ACCOUNTS, () => ok, NOW).subthreads, null, 'у других профилей второй цепочки нет');
 });

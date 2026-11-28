@@ -5,7 +5,8 @@ import { AUTO_MODEL_ID, SUBTHREAD_CODEX_ID, type CascadeConfig, type DiscoveredA
 import { buildPlan, explainProfile, profileSteps, stepConfirm, type Attempt, type Decision, type HealthLookup, type ThreadCascadeState } from './engine.ts';
 import type { StepHealth } from './limits.ts';
 import { pinnedEntries, type BlockedModel } from './pins.ts';
-import { autoCodexChildrenProfile } from './subthreads.ts';
+import { autoCodexChildrenProfile, descendantsOf, isSubthreadCodexId } from './subthreads.ts';
+import { profileName } from './pins.ts';
 
 const PROVIDER_SHORT: Record<string, string> = { 'claude-code': 'Claude', codex: 'Codex', 'gemini-cli': 'Gemini' };
 export const providerShort = (id: string) => PROVIDER_SHORT[id] ?? id;
@@ -14,7 +15,7 @@ const OPUS = 'opus-5.5';
 const FABLE = 'fable-5.2';
 
 function profile(patch: Partial<Profile> & Pick<Profile, 'id' | 'name'>): Profile {
-  return { enabled: true, policy: 'any', modelKey: null, stepOrder: null, excludedSteps: [], excludedProviders: [], confirm: {}, subthreads: 'same', ...patch };
+  return { enabled: true, policy: 'any', modelKey: null, stepOrder: null, excludedSteps: [], excludedProviders: [], confirm: {}, ...patch };
 }
 
 /** Короткое имя модели для цепочек: «Opus 5.5» → «Opus». */
@@ -138,12 +139,21 @@ export function describeProfile(config: CascadeConfig, profile: Profile, account
   let text = parts.join('. ');
   if (excluded.length > 0) text += `, без ${excluded.join(', ')}`;
   if (confirm) text += `; ${confirm}`;
-  if (profile.subthreads === 'codex') text += `. ${SUBTHREADS_CODEX_NOTE}`;
+  const note = descendantsNote(config, profile);
+  if (note) text += `. ${note}`;
   return text;
 }
 
-/** Подпись правила подтредов (карточка, список моделей, схема «i»). */
-export const SUBTHREADS_CODEX_NOTE = 'Подтреды — только Codex на любой машине, без подтверждения, задание из 4 частей; Codex недоступен — подтред на Авто';
+/** Подпись правила потомков (карточка, список моделей, схема «i»). */
+export const SUBTHREADS_CODEX_NOTE = 'Потомки — только Codex на любой машине, без подтверждения, задание из 4 частей';
+
+/** «Потомки — только Codex …; Codex исчерпан — ждут сброса» / «Потомки — по профилю «X»». null — правила нет. */
+export function descendantsNote(config: CascadeConfig, profile: Profile): string | null {
+  const target = descendantsOf(profile);
+  if (!target || target === profile.id) return null;
+  const exhausted = (profile.onDescendantsExhausted ?? 'wait') === 'fallback' ? 'исчерпан — потомок на Авто' : 'исчерпан — потомок ждёт сброса';
+  return isSubthreadCodexId(target) ? `${SUBTHREADS_CODEX_NOTE}; Codex ${exhausted}` : `Потомки — по профилю «${profileName(config, target)}»; он ${exhausted}`;
+}
 
 // ---- Список моделей провайдера = профили ----
 
@@ -275,10 +285,11 @@ export function profilePreview(config: CascadeConfig, profileId: string, account
  */
 export function subthreadsPreview(config: CascadeConfig, profileId: string, accounts: readonly DiscoveredAccount[], health: HealthLookup, now: number) {
   const p = config.profiles.find(x => x.id === profileId);
-  if (!p || p.subthreads !== 'codex') return null;
+  const target = p ? descendantsOf(p) : null;
+  if (!p || !target || target === p.id) return null;
   const thread = { ...previewThread(), isSubthread: true };
-  const explained = explainProfile({ config, requestedModel: SUBTHREAD_CODEX_ID, accounts, health, thread, now });
-  return { attempts: explained.attempts, text: `подтред: ${previewText(config, explained.decision, explained.attempts, now)}`, note: SUBTHREADS_CODEX_NOTE };
+  const explained = explainProfile({ config, requestedModel: target, accounts, health, thread, now, ignoreHome: isSubthreadCodexId(target) });
+  return { attempts: explained.attempts, text: `потомок: ${previewText(config, explained.decision, explained.attempts, now)}`, note: descendantsNote(config, p) ?? '' };
 }
 
 /** «сейчас ход пошёл бы на: Opus · vclaude Mac». */

@@ -272,6 +272,9 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     health: deps.health,
     refreshLimits: async (config, steps) => { await deps.ensureDiscovered(); await deps.refreshLimits(config, steps); },
     observeLimit: (config, step, observation: LimitObservation) => {
+      // 0.3.5: уведомление app-server Codex — адаптеру Codex как есть (codexEventReading).
+      const raw = observation.raw as { method?: unknown } | undefined;
+      if (step.providerId === 'codex' && raw && typeof raw === 'object' && raw.method === 'account/rateLimits/updated') { deps.observeLimit(config, step, raw); return; }
       deps.observeLimit(config, step, { type: 'rate_limit_event', rate_limit_info: observation.raw ?? { status: observation.status, resetsAt: observation.resetsAt ? observation.resetsAt / 1000 : undefined, rateLimitType: observation.windowType ?? undefined } });
     },
     threadInfo,

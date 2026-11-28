@@ -9,6 +9,7 @@
 //   Подготовка не удалась — мост получает ошибку на этот `turn/start`.
 // - Песочница и сеть: как у штатного треда Codex — параметры моста не меняются.
 import { createInterface } from 'node:readline';
+import type { LimitObservation } from '../bridge/route-contract.ts';
 
 type Json = Record<string, unknown>;
 
@@ -43,6 +44,12 @@ export interface CodexRelayPorts {
   prepare(): Promise<{ ok: boolean; message: string }>;
   /** Возврат файлов на опору после хода. */
   finish(): Promise<void>;
+  /**
+   * 0.3.5: лимит из хода (`account/rateLimits/updated` app-server) → монитор каскада.
+   * До 0.3.5 лимит Codex из хода в каскад не попадал: исчерпание узнавалось только
+   * опросом usageLimits, а квота без опроса оставалась «неизвестной».
+   */
+  limits?(observation: LimitObservation): void;
   log(line: string): void;
 }
 
@@ -79,6 +86,8 @@ export function startCodexRelay(ports: CodexRelayPorts): { onChildLine(line: str
     pump,
     onChildLine(line: string) {
       ports.toBridge(toBridge(line));
+      const limit = ports.limits ? limitFromCodexLine(line) : null;
+      if (limit) ports.limits!(limit);
       if (!line.includes('turn/completed')) return;
       try {
         if ((JSON.parse(line) as Json).method !== 'turn/completed') return;
@@ -86,5 +95,29 @@ export function startCodexRelay(ports: CodexRelayPorts): { onChildLine(line: str
       prepared = false;
       finishing = finishing.then(() => ports.finish()).catch(error => ports.log(`codex finish: ${String(error)}`));
     },
+  };
+}
+
+/**
+ * `account/rateLimits/updated` app-server Codex → наблюдение лимита (0.3.5).
+ * Окно с usedPercent ≥ 100 — `rejected` до самого позднего его сброса; иначе
+ * `allowed`. `raw` — само уведомление: сервер отдаёт его адаптеру Codex.
+ */
+export function limitFromCodexLine(line: string): LimitObservation | null {
+  if (!line.includes('account/rateLimits/updated')) return null;
+  let message: Json;
+  try { message = JSON.parse(line) as Json; } catch { return null; }
+  if (message.method !== 'account/rateLimits/updated') return null;
+  const params = (message.params ?? {}) as Json;
+  const limits = (params.rateLimits ?? {}) as Json;
+  const windows = ['primary', 'secondary'].map(slot => (limits[slot] ?? null) as Json | null).filter((w): w is Json => w !== null && typeof w.usedPercent === 'number');
+  if (windows.length === 0) return null;
+  const full = windows.filter(w => (w.usedPercent as number) >= 100);
+  const resets = full.map(w => (typeof w.resetsAt === 'number' ? w.resetsAt * 1000 : null)).filter((t): t is number => t !== null);
+  return {
+    status: full.length > 0 ? 'rejected' : 'allowed',
+    resetsAt: full.length > 0 && resets.length > 0 ? Math.max(...resets) : null,
+    windowType: full.length > 0 ? 'codex-rate-limits' : null,
+    raw: { method: 'account/rateLimits/updated', params: { rateLimits: limits } },
   };
 }

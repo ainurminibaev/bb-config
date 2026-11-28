@@ -31,6 +31,9 @@ const GOOD_BRIEF = [
 ].join('\n');
 
 /** Каскад из фикстур + профиль «подтреды на Codex» (на старом коде — вручную). */
+/** Режим «Codex исчерпан везде → на Авто» (0.3.5: по умолчанию — ждать). */
+const fallbackMode = (c: CascadeConfig): CascadeConfig => ({ ...c, profiles: c.profiles.map(p => (p.id === PROFILE ? { ...p, onDescendantsExhausted: 'fallback' as const } : p)) });
+
 function cfg(patch: (c: CascadeConfig) => CascadeConfig = c => c): CascadeConfig {
   const c = config();
   if (!c.profiles.some(p => p.id === PROFILE)) {
@@ -127,7 +130,7 @@ test('исправленное задание тем же подтредом (bb
 });
 
 test('Codex исчерпан — подтред на Claude («Авто»), строка в ленте подтреда и в следующем ходе родителя', async () => {
-  const h = harness({ parentProfile: PROFILE, health: { [MAC_CODEX]: exhausted(NOW + 3_600_000), [UA_CODEX]: exhausted(NOW + 7_200_000) } });
+  const h = harness({ parentProfile: PROFILE, config: cfg(fallbackMode), health: { [MAC_CODEX]: exhausted(NOW + 3_600_000), [UA_CODEX]: exhausted(NOW + 7_200_000) } });
   const r = await turn(h, CHILD, PROFILE);
   assert.equal(r.action, 'run', JSON.stringify(r));
   if (r.action !== 'run') return;
@@ -147,14 +150,13 @@ test('Codex исчерпан — подтред на Claude («Авто»), ст
   assert.ok(parent2.action === 'run' && !parent2.notes.some(n => n.kind === 'notice' && /Подтред/u.test(n.message)));
 });
 
-test('ступени Codex выключены — причина «выключены»; квота Codex неизвестна — тоже на Claude', async () => {
-  const off = cfg(c => ({ ...c, steps: c.steps.map(s => (s.providerId === 'codex' ? { ...s, enabled: false } : s)) }));
+test('ступени Codex выключены — причина «выключены», подтред на Claude', async () => {
+  const off = cfg(c => fallbackMode({ ...c, steps: c.steps.map(s => (s.providerId === 'codex' ? { ...s, enabled: false } : s)) }));
   const r = await turn(harness({ parentProfile: PROFILE, config: off }), CHILD, PROFILE);
   assert.ok(r.action === 'run' && r.providerId === 'claude-code', JSON.stringify(r));
   assert.ok(r.action === 'run' && r.notes.some(n => n.kind === 'notice' && /Codex недоступен: ступени Codex выключены/u.test(n.message)));
-  const unk = cfg(c => ({ ...c, steps: c.steps.map(s => (s.providerId === 'codex' ? { ...s, onUnknown: 'skip' as const } : s)) }));
-  const u = await turn(harness({ parentProfile: PROFILE, config: unk, health: { [MAC_CODEX]: unknown, [UA_CODEX]: unknown } }), CHILD, PROFILE);
-  assert.ok(u.action === 'run' && u.providerId === 'claude-code', JSON.stringify(u));
+  // Неизвестная квота Codex с 0.3.5 — не откат: см. codex-fallback.test.ts.
+  assert.ok(unknown);
 });
 
 test('общие ресурсы: Codex-подтред подчиняется maxConcurrent ступени — ждёт места, а не уходит на Claude', () => {
@@ -211,14 +213,15 @@ test('сам тред на «подтреды на Codex» ходит как «�
   assert.deepEqual(h.eventsRead, []);
 });
 
-test('правило не идёт вглубь: подтред Codex-подтреда ходит по своему профилю, без проверки задания', async () => {
+test('0.3.5: правило идёт вглубь — внук Codex-подтреда тоже на Codex и с проверкой задания', async () => {
   const GRAND = 'thr_grand';
   const parentOf = { [GRAND]: CHILD, [CHILD]: PARENT, [PARENT]: null };
   const h = harness({ parentProfile: PROFILE, parentOf, brief: 'без goal' });
   h.store.set(CHILD, { ...parentState(CHILD_PROFILE), engine: thread({ threadId: CHILD, isSubthread: true }) });
-  const r = await turn(h, GRAND, 'auto');
-  assert.ok(r.action === 'run' && r.stepId === TRU_MAX && r.env.BB_CASCADE_PROFILE === 'auto', JSON.stringify(r));
-  assert.deepEqual(h.eventsRead, []);
+  // Внук запущен с BB_CASCADE_PROFILE родителя (subthread-codex): наследует правило корня.
+  const r = await turn(h, GRAND, CHILD_PROFILE);
+  assert.equal(r.action, 'refuse', 'задание без 4 частей');
+  assert.deepEqual(h.eventsRead, [GRAND]);
 });
 
 // ---- Настройки ----

@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-agentcli-subscriptions-cascade",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "type": "module",
   "engines": {
     "bb": ">=0.50",
@@ -26,7 +26,7 @@
     ]
   },
   "scripts": {
-    "test": "node --test --test-timeout=20000 engine.test.ts test-quota.test.ts bridge/prep.test.ts bridge/s4.test.ts sync/ssh.test.ts sync/gc.test.ts launcher/retry.test.ts launcher/codex-relay.test.ts launcher/s4-hang.test.ts launcher/background.test.ts profiles.test.ts models.test.ts limits.test.ts misc.test.ts server.test.ts settings-summary.test.ts pins.test.ts busy.test.ts subthread-home.test.ts brief.test.ts codex-subthreads.test.ts bridge/adopt-native.test.ts bridge/route-jobs.test.ts timeline/timeline.test.ts sync/sync.test.ts bridge/bridge.test.ts launcher/launcher.test.ts bridge/cross.test.ts",
+    "test": "node --test --test-timeout=20000 engine.test.ts test-quota.test.ts bridge/prep.test.ts bridge/s4.test.ts sync/ssh.test.ts sync/gc.test.ts launcher/retry.test.ts launcher/codex-relay.test.ts launcher/s4-hang.test.ts launcher/background.test.ts profiles.test.ts models.test.ts limits.test.ts misc.test.ts server.test.ts settings-summary.test.ts pins.test.ts busy.test.ts subthread-home.test.ts brief.test.ts codex-subthreads.test.ts codex-fallback.test.ts tree.test.ts launcher/codex-limits.test.ts bridge/adopt-native.test.ts bridge/route-jobs.test.ts timeline/timeline.test.ts sync/sync.test.ts bridge/bridge.test.ts launcher/launcher.test.ts bridge/cross.test.ts",
     "typecheck": "tsc -p tsconfig.json --skipLibCheck"
   },
   "dependencies": {
