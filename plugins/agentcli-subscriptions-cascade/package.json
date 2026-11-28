@@ -1,0 +1,46 @@
+{
+  "name": "bb-plugin-agentcli-subscriptions-cascade",
+  "version": "0.2.9",
+  "type": "module",
+  "engines": {
+    "bb": ">=0.50",
+    "bbPluginSdk": ">=0.6.132"
+  },
+  "bb": {
+    "name": "Каскад подписок [Experimental]",
+    "description": "Один провайдер «Каскад»: ход идёт на первом аккаунте с лимитом (Claude Max на Tru → Claude на Mac → Codex), общий путь файлов синхронизируется Mutagen.",
+    "branding": {
+      "icon": "./assets/icon.svg",
+      "experimental_icons": {
+        "route-switch": "./timeline/icons/switch.svg",
+        "route-wait": "./timeline/icons/wait.svg",
+        "route-error": "./timeline/icons/error.svg",
+        "route-confirm": "./timeline/icons/confirm.svg"
+      }
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx",
+    "host": "./host.ts",
+    "skills": [
+      "skills"
+    ]
+  },
+  "scripts": {
+    "test": "node --test --test-timeout=20000 engine.test.ts test-quota.test.ts bridge/prep.test.ts bridge/s4.test.ts sync/ssh.test.ts launcher/retry.test.ts launcher/codex-relay.test.ts profiles.test.ts models.test.ts limits.test.ts misc.test.ts server.test.ts settings-summary.test.ts timeline/timeline.test.ts sync/sync.test.ts bridge/bridge.test.ts launcher/launcher.test.ts bridge/cross.test.ts",
+    "typecheck": "tsc -p tsconfig.json --skipLibCheck"
+  },
+  "dependencies": {
+    "@get-bb/plugin-sdk": "0.6.157",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "better-sqlite3": "^12.11.1",
+    "cron-parser": "^5.10.7",
+    "hono": "^4.13.23",
+    "typescript": "^5.7.0"
+  }
+}

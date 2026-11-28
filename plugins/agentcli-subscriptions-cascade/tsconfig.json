@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "@/*": [
+        "./*"
+      ]
+    },
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "skipLibCheck": false
+  },
+  "include": [
+    "*.ts",
+    "*.tsx",
+    "bridge/*.ts",
+    "launcher/*.ts",
+    "sync/*.ts",
+    "timeline/*.ts",
+    "timeline/*.tsx"
+  ]
+}

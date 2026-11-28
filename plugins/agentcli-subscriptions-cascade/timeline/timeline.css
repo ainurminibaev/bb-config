@@ -1,0 +1,65 @@
+/* Лента треда «Каскада». Только токены темы BB: строки и тела — того же веса,
+   что штатные «Thought» и команды (13px, muted-foreground); карточки — тело внутри
+   хостовой рамки PendingInteractionShell (12px). Своих цветов нет, кроме
+   destructive-text для сбоя. */
+
+/* ---- Тело раскрытой строки ---- */
+.asc-tl-body { display: flex; flex-direction: column; gap: 4px; padding: 2px 0 6px; font-size: 12px; line-height: 1.5; color: var(--muted-foreground); }
+.asc-tl-line { margin: 0; }
+.asc-tl-line code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; }
+.asc-tl-strong { color: var(--foreground); }
+.asc-tl-arrow { opacity: .7; }
+.asc-tl-bad { color: var(--destructive-text, var(--destructive)); }
+
+.asc-tl-steps { display: grid; grid-template-columns: max-content minmax(48px, 160px) max-content; gap: 2px 10px; align-items: center; margin-top: 2px; width: max-content; max-width: 100%; }
+.asc-tl-step { display: contents; }
+.asc-tl-num { font-variant-numeric: tabular-nums; text-align: right; }
+.asc-tl-bar { height: 3px; border-radius: 2px; background: color-mix(in oklch, var(--muted-foreground) 16%, transparent); overflow: hidden; }
+.asc-tl-bar > span { display: block; height: 100%; border-radius: 2px; background: color-mix(in oklch, var(--muted-foreground) 70%, transparent); }
+.asc-tl-step-failed > span:first-child, .asc-tl-step-failed .asc-tl-num { color: var(--destructive-text, var(--destructive)); }
+.asc-tl-step-total > span { color: var(--foreground); }
+
+.asc-tl-progress { height: 3px; border-radius: 2px; background: color-mix(in oklch, var(--muted-foreground) 16%, transparent); overflow: hidden; max-width: 320px; }
+.asc-tl-progress > span { display: block; height: 100%; background: var(--foreground); transition: width .3s ease-out; }
+@media (prefers-reduced-motion: reduce) { .asc-tl-progress > span { transition: none; } }
+
+.asc-tl-toggle { all: unset; align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; margin-top: 2px; padding: 1px 4px 1px 0; border-radius: 4px; cursor: pointer; color: var(--muted-foreground); font-size: 12px; }
+.asc-tl-toggle:hover, .asc-tl-toggle[aria-expanded="true"] { color: var(--foreground); }
+.asc-tl-toggle:focus-visible { outline: 1px solid var(--ring, var(--foreground)); outline-offset: 1px; }
+.asc-tl-i { display: inline-grid; place-items: center; width: 13px; height: 13px; border-radius: 50%; border: 1px solid currentColor; font: italic 600 9px/1 Georgia, serif; }
+.asc-tl-scheme { margin-top: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; overflow-x: auto; }
+
+/* ---- Метка ступени в контексте треда ---- */
+.asc-tl-stage { all: unset; display: inline-flex; align-items: center; gap: 5px; padding: 0 4px; border-radius: 4px; color: var(--muted-foreground); font-size: 12px; line-height: 20px; cursor: pointer; white-space: nowrap; }
+.asc-tl-stage:hover, .asc-tl-stage[aria-expanded="true"] { color: var(--foreground); }
+.asc-tl-stage:focus-visible { outline: 1px solid var(--ring, var(--foreground)); }
+.asc-tl-stage-icon { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.asc-tl-stage-live .asc-tl-stage-icon { animation: asc-tl-pulse 1.6s ease-in-out infinite; }
+@keyframes asc-tl-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .asc-tl-stage-live .asc-tl-stage-icon { animation: none; } }
+.asc-tl-stage-details { padding: 6px 0 2px; font-size: 12px; color: var(--muted-foreground); }
+
+/* ---- Тела карточек (внутри рамки хоста) ---- */
+.asc-tl-form { display: flex; flex-direction: column; gap: 8px; font-size: 12px; line-height: 1.5; color: var(--muted-foreground); }
+.asc-tl-form-text { margin: 0; color: var(--foreground); }
+.asc-tl-form-muted { margin: -4px 0 0; }
+.asc-tl-form-error { margin: 0; color: var(--destructive-text, var(--destructive)); }
+
+.asc-tl-seg { display: inline-flex; align-self: flex-start; flex-wrap: wrap; padding: 2px; gap: 2px; border-radius: 7px; background: color-mix(in oklch, var(--muted-foreground) 12%, transparent); }
+.asc-tl-seg button { all: unset; padding: 2px 10px; border-radius: 5px; font-size: 12px; line-height: 20px; color: var(--muted-foreground); cursor: pointer; }
+.asc-tl-seg button:hover:not(:disabled) { color: var(--foreground); }
+.asc-tl-seg button:focus-visible { outline: 1px solid var(--ring, var(--foreground)); }
+.asc-tl-seg button:disabled { opacity: .45; cursor: default; }
+.asc-tl-seg .asc-tl-seg-on { background: var(--background); color: var(--foreground); box-shadow: 0 0 0 1px var(--border); }
+
+.asc-tl-form-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.asc-tl-spacer { flex: 1; }
+.asc-tl-btn { all: unset; box-sizing: border-box; display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--background); color: var(--foreground); font-size: 12px; font-weight: 500; cursor: pointer; }
+.asc-tl-btn:hover:not(:disabled) { background: var(--accent); }
+.asc-tl-btn:focus-visible { outline: 2px solid var(--ring, var(--foreground)); outline-offset: 1px; }
+.asc-tl-btn:disabled { opacity: .5; cursor: default; }
+.asc-tl-btn-primary { min-width: 56px; justify-content: center; background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); }
+.asc-tl-btn-primary:hover:not(:disabled) { background: var(--primary); opacity: .88; }
+.asc-tl-btn-ghost { border-color: transparent; background: transparent; color: var(--muted-foreground); font-weight: 400; padding: 0 8px; }
+.asc-tl-btn-ghost:hover:not(:disabled) { color: var(--foreground); background: var(--accent); }
+.asc-tl-scheme .asc-diagram { margin: 0; border: 0; padding: 0; gap: 8px; }

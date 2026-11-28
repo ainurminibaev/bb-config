@@ -3722,3 +3722,159 @@ proxy-manager 0.3.6: свой значок «Прокси».
   `bb plugin install <checkout>/plugins/thread-description`; удаление —
   `bb plugin remove thread-description`.
 - **Обновление для установивших:** шаг `plugin-thread-description` в релизе v1.20.0.
+
+## Каскад подписок 0.1.1–0.1.9 — исправления живой приёмки (28 ноября 2026)
+
+Плагин ставится тредом приёмки на сервер BB из коммитов ветки плагина;
+`config/plugins.json` по-прежнему `enabled: false`,
+в `config/bundle.json` не входит. Изменения поверх каркаса 0.1.0:
+
+- **Список моделей не пустой** (0.1.1). `model/list` получает каталог в
+  `params.providerOptions` — это `experimental_bridgeOptions` регистрации
+  (проверено по демону BB 0.50.1: sessionless-запросы несут
+  `staticProviderOptions`). Сервер регистрирует провайдера сразу при запуске,
+  машины для каскада по умолчанию берёт лёгким `hosts.list`, после фонового
+  обнаружения перерегистрирует каталог. Мост без каталога отдаёт профили по
+  умолчанию (`bridge/static-catalog.ts`). `executionMode` по умолчанию —
+  `provider`, «Выключено» — явный выбор.
+- **Сессия Claude** (0.1.2): `--resume` только если файл сессии записан;
+  иначе тот же ID как новая сессия.
+- **SSH к опоре** (0.1.2): поле `machines[].anchorSsh` в секции «Машины»
+  (раньше только RPC `syncSetAnchorSsh` и kv `sync:anchor-ssh:<hostId>`, оно
+  читается как запасное). Возврат на приоритетную ступень (S4) — только по
+  подтверждённой квоте.
+- **Mutagen** (0.1.3): все машины POSIX — `--symlink-mode=posix-raw`
+  (абсолютные ссылки как есть), нативный Windows — `portable` с
+  предупреждением. Режим входит в отпечаток сессии `bbc-cfg`: сессии 0.1.0–0.1.2
+  пересоздаются сами. Ошибки сканирования отдельных путей ход не блокируют.
+  Правило: синхронизируется всё, кроме исключений из настроек; `.gitignore` —
+  не правило синхронизации.
+- **Тестовая квота треда** (0.1.4): `bb subscriptions-cascade test-quota
+  --thread <id> --set '<ступень>=exhausted|ok|unknown|unavailable[,<сброс>]'`,
+  RPC `testQuota`; хранится в `testQuota.threads` настройки `config`. RPC
+  исполнителя и синхронизации discoverable.
+- **Без тихого fallback** (0.1.5): сервер каскада не ответил — ход не
+  запускается (раньше запускатель уходил в штатный `claude` машины моста и
+  упирался в исчерпанный лимит). Таймер проверки мостов снимается в
+  `bb.onDispose`: после переустановки прежний экземпляр не зовёт устаревший handle.
+- **Рабочая папка треда** (0.1.7, 0.1.9): единица синхронизации и блокировка
+  «один писатель» — cwd треда на опоре, worktree получает `/opt/bbfs/<проект>-w<хеш>`;
+  окружение треда читается `threads.get({ include: 'environment' })`. Брошенные
+  блокировки снимаются по статусу треда. Тестовый переключатель S13:
+  `bb subscriptions-cascade test-bridge --incompatible` (`testQuota.bridgeIncompatible`).
+- **Прогресс подготовки** (0.1.8): RPC `turnProgress`, строка перехода
+  обновляется на месте; повтор шага и переход на следующую ступень.
+- **Сбои и штатные механизмы** (0.1.6): встроенный `provider-retry` 0.1.0
+  повторяет по `errorInfo` штатного моста без фильтра по провайдеру — 529/5xx
+  повторяются как у Claude. Каскад отвечает на его discoverable-метод
+  `provider-retry.v1.availability` (ready / blocked / unavailable / not-routed),
+  оригинал не правится. Остановка хода гасит CLI и на чужой машине.
+
+**Опирается дополнительно на** (BB 0.50.1): `bb.onDispose`, опции
+`experimental_discoverable` у `bb.rpc.register`, контракт
+`provider-retry.v1.availability` (input `{threadId, requestId}`, output
+`not-routed | ready | blocked{retryAt} | unavailable{reason}`), разбор
+`result.api_error_status` в `errorInfo` штатным мостом Claude. Проверка после
+обновления BB — `npm test` плагина (тесты S14 и перезагрузки) и строка
+`provider-retry` в `bb plugin list`.
+
+Тесты: 158 (`npm test --prefix plugins/agentcli-subscriptions-cascade`).
+Сценарии S1–S17 проходят на стенде с фейками (движок, мост, запускатель,
+фейковый терминал BB и Mutagen); живой прогон в BB ведёт тред приёмки.
+
+## Каскад подписок 0.1.0 — каркас (27 ноября 2026)
+
+Собственный плагин `agentcli-subscriptions-cascade` (`plugins/agentcli-subscriptions-cascade/`,
+пакет `bb-plugin-agentcli-subscriptions-cascade`). Идея: один тред ведётся
+по ступеням «машина × провайдер (CLI) × аккаунт», ход идёт на первой ступени
+с лимитом. Порядок ступеней владелец задаёт свободно, файлы проекта лежат по
+общему пути `/opt/bbfs` под Mutagen.
+
+**Состояние.** Каркас **не установлен и не включён** в работающем BB:
+установку решает владелец. В `config/plugins.json` плагин записан с
+`enabled: false`. В набор `config/bundle.json` он не входит.
+
+Что готово:
+
+- экран настроек (`settingsSection`): машины, каскад, профили, тестовый
+  источник квоты, таблица моделей с подсветкой несопоставленных ячеек, файлы,
+  мастер «Настроить»;
+- регистрация провайдера «Каскад подписок» с логотипом; список моделей —
+  профили каскада (ниже);
+- движок выбора ступени по профилю, схема «i» из того же движка, модуль
+  лимитов и согласия;
+- единый контракт адаптера провайдера; адаптеры `claude-code` и `codex`
+  (разбор событий и лимиты).
+
+Чего нет: исполнителя хода (`executionMode: off`), передачи контекста и
+сессий Mutagen. Архитектура, этапы A (relay через `contributeEnv` под штатными
+провайдерами) и B (свой провайдер и мост) и места под их реализацию — в
+`plugins/agentcli-subscriptions-cascade/ARCHITECTURE.md`.
+
+**Настройки.** Вся конфигурация — одна строковая настройка плагина `config`
+(JSON по `configSchema`). Пустое значение означает каскад по умолчанию:
+
+1. Claude Max на машине с именем Tru (опора);
+2. Claude на Mac через шлюз vclaude;
+3. Claude Pro на машине с именем UA (вторая подписка claude.ai);
+4. Codex на Mac и на UA — с подтверждением.
+
+Машины находятся по имени и платформе, ID в код не вшиты; новые машины
+обнаружение добавляет выключенными («Добавить найденное»).
+
+**Профили каскада.** Профиль — именованная настройка, которая видна пунктом в
+списке моделей провайдера (`model/list` = включённые профили, первый — по
+умолчанию). Поля: политика `only` / `prefer-then-any` / `any`, модель из
+таблицы, свой порядок ступеней или общий, исключённые ступени и провайдеры,
+переопределение «спрашивать при входе». Приоритет моделей для `any` —
+общий (`policies.modelPriority`). Из коробки: «Авто», «Авто · без Codex»,
+«Opus → Авто», «Fable → Авто», «Только Opus 5.5», «Только Fable 5.2».
+Подпись пункта — «Старт: <модель · машина>» и правило. Старое поле
+`policies.autoEnabled` и поля ступени `inAuto`/`autoModel` убраны (каркас
+нигде не установлен, миграции нет); конфигурация без поля `profiles` получает
+профили из коробки, устаревший ID модели `m:<ключ>` читается как «только X».
+Кнопка «i» есть только на карточке: у пункта модели в SDK нет поля под
+кнопку или ссылку (`availableModelSchema`: только `description`).
+
+**Тестовый источник квоты** (`testQuota`): флаг, список тестовых тредов и
+лимит каждой ступени вручную для приёмки S1–S13
+(`.local/docs/research/seamless-execution/tasks.md`). Движок подменяет
+лимиты только в тестовых тредах; превью и схемы экрана считаются по нему,
+пока флаг включён. Состояние мастера
+хранится в `bb.storage.kv` (`wizard:<hostId>`). Снимок настроек
+(`snapshot.py --settings-only`) подхватит `config` после установки.
+
+**Опирается на** (SDK 0.6.157, BB 0.50.1):
+
+- `bb.providers.register` (models.fallback, experimental_bridgeOptions,
+  deriveProviderOptions);
+- `bb.sdk.system.usageLimits` (поля `status`, `windows[].kind/label/usedPercent/resetsAt`,
+  `accountKey`/`accountEmail`);
+- `bb.sdk.providers.models`, `bb.sdk.hosts.providerCliStatus`;
+- `bb.sdk.terminals.create/output/close` (argv, `host_path`), `bb.sdk.files.write/remove`;
+- RPC `thread-account-usage.vclaude` (`usage.limitUnits/remainingUnits/endsAt/fetchedAt`)
+  — остаток пакета в единицах; ключи и адрес кабинета остаются в
+  thread-account-usage.
+
+Неизвестные поля, ошибки и отсутствие плагина-источника дают «квота
+неизвестна», а не сбой.
+
+Тесты: `npm test --prefix plugins/agentcli-subscriptions-cascade` (58: движок
+и три политики профилей, сценарии S1, S3, S4, S6, S8, S10, S11, профили и
+подписи, тестовая квота, совпадение схемы «i» с `selectStep`, модели, лимиты,
+согласия, мастер, мост, события, сервер на фейковом хосте SDK с тремя машинами),
+`npm run typecheck --prefix plugins/agentcli-subscriptions-cascade`.
+
+**Установка вручную (на сервере BB).**
+
+```sh
+npm ci --prefix plugins/agentcli-subscriptions-cascade
+bb plugin build plugins/agentcli-subscriptions-cascade
+bb plugin install ./plugins/agentcli-subscriptions-cascade --yes
+```
+
+Проверка: Настройки → Плагины → «Каскад подписок»; в выборе провайдера
+появляется «Каскад подписок». Ожидающий шаг релиза
+`docs/releases/next/subscriptions-cascade-scaffold` ручной: плагин ничего не
+ставит сам. Откат: `bb plugin disable agentcli-subscriptions-cascade`, затем
+`bb plugin remove agentcli-subscriptions-cascade`.
