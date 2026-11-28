@@ -12,6 +12,7 @@ import {
 import { toDiscoveredAccount } from './discovery.ts';
 import { registerExecutor } from './bridge/server-register.ts';
 import { describeReading, healthFromReading, LimitMonitor, readingFromUsageLimits } from './limits.ts';
+import { RETIRED } from './bridge/route-service.ts';
 import { checkStep, limitsReport, tauStateOf, withReadiness, type StepCheck } from './readiness.ts';
 import { applyAutoMatches, resolveCell, suggestRows } from './models.ts';
 import { providerModels, quotaLookupFor } from './profiles.ts';
@@ -33,13 +34,27 @@ export default function plugin(bb: BbPluginApi) {
   // Лента треда: RPC действий из строк; исполнитель подписывается через timeline.onAction.
   const timeline = registerTimelineServer(bb);
   const hostClient = bb.hosts.experimental_client({ contract: hostContract });
+  // 0.3.7: жизнь экземпляра. После dispose или отзыва handle («stale API handle» после
+  // переустановки) регистрация провайдера снимается, фоновые опросы не идут: ходы
+  // обслуживает новый экземпляр со свежими данными.
+  let alive = true;
+  function retire(): void {
+    if (!alive) return;
+    alive = false;
+    try { registration?.dispose(); } catch { /* уже снята */ }
+    registration = null;
+    bb.log.info('экземпляр «Каскада подписок» отозван: регистрация провайдера и фоновые опросы остановлены');
+  }
+  bb.onDispose(() => retire());
   const connected = new Set<string>();
   // Один запрос usageLimits на машину отдаёт все провайдеры: объединяем параллельные вызовы.
   const usageInFlight = new Map<string, Promise<Record<string, unknown>>>();
   const usageLimits = (hostId: string, signal: AbortSignal): Promise<Record<string, unknown>> => {
+    if (!alive) return Promise.reject(new Error('экземпляр плагина отозван'));
     const running = usageInFlight.get(hostId);
     if (running) return running;
     const job = bb.sdk.system.usageLimits({ hostId, refresh: true, signal }).then(r => r as Record<string, unknown>)
+      .catch(error => { if (RETIRED.test(String(error))) retire(); throw error; })
       .finally(() => usageInFlight.delete(hostId));
     usageInFlight.set(hostId, job);
     return job;
@@ -58,6 +73,8 @@ export default function plugin(bb: BbPluginApi) {
   const executor = registerExecutor(bb, {
     providerId: PROVIDER_ID,
     loadConfig: async () => (await loadConfig()).config,
+    configSeeded: async () => (await loadConfig()).seeded,
+    onRetired: () => retire(),
     setup: input => setup(input),
     gc: options => fileSync.gc(options),
     blockModel: async (hostId, modelId, reason) => {
@@ -89,11 +106,12 @@ export default function plugin(bb: BbPluginApi) {
       for (const s of steps) if (monitor.current(stageOf(s))) void monitor.refresh(stageOf(s), 20_000).catch(() => undefined);
       await Promise.all(first.map(s => monitor.refresh(stageOf(s), config.policies.preTurnBudgetMs).catch(() => undefined)));
     },
-    limits: async () => {
-      await discover(false).catch(() => undefined);
+    // 0.3.7: по умолчанию — последние показания монитора, без опроса и обнаружения (ответ
+    // за доли секунды). `--refresh` — свежий опрос каждой ступени параллельно, не дольше 10 с.
+    limits: async (options = {}) => {
       const { config } = await loadConfig();
       const lines = await Promise.all(config.steps.filter(s => s.enabled).map(async step => {
-        const reading = await monitor.refresh(stageOf(step), 20_000).catch(() => monitor.current(stageOf(step)));
+        const reading = options.refresh ? await monitor.refresh(stageOf(step), 10_000).catch(() => monitor.current(stageOf(step))) : monitor.current(stageOf(step));
         const health = healthFromReading(reading, null, { connected: connected.has(step.hostId), now: Date.now(), policies: config.policies });
         return { step, health, text: describeReading(reading, health).text };
       }));
@@ -134,7 +152,7 @@ export default function plugin(bb: BbPluginApi) {
 
   /** Проверка готовности ступеней: пробы машин, обнаружение, мастер, лимиты, сверка с TAU. */
   async function checkSteps(filter: { stepIds?: string[]; hostIds?: string[] }): Promise<StepCheck[]> {
-    await discover(false).catch(() => undefined);
+    if (accounts.length === 0) await discover(false).catch(() => undefined); else void discover(false).catch(() => undefined);
     const { config } = await loadConfig();
     const steps = config.steps.filter(s => (!filter.stepIds || filter.stepIds.includes(s.id)) && (!filter.hostIds || filter.hostIds.includes(s.hostId)));
     const hostIds = [...new Set(steps.map(s => s.hostId))];
@@ -147,7 +165,7 @@ export default function plugin(bb: BbPluginApi) {
     const threshold = 100 - config.policies.minRemainingPercent;
     const checks = await Promise.all(steps.map(async step => {
       const stage = stageOf(step);
-      const reading = await monitor.refresh(stage, 20_000).catch(() => monitor.current(stage));
+      const reading = await monitor.refresh(stage, 10_000).catch(() => monitor.current(stage));
       const health = healthFromReading(reading, null, { connected: connected.has(step.hostId), now: Date.now(), policies: config.policies });
       const percents = reading?.kind === 'sample' ? reading.windows.map(w => w.usedPercent).filter((x): x is number => x !== null) : [];
       const steps = wizard.get(step.hostId)?.steps as Record<string, { status: string; message?: string | null }> | undefined;
@@ -165,10 +183,22 @@ export default function plugin(bb: BbPluginApi) {
     return checks;
   }
 
-  async function loadConfig(): Promise<{ config: CascadeConfig; seeded: boolean }> {
+  // 0.3.7: последняя рабочая конфигурация — в хранилище плагина. Настройки пусты или битые
+  // (переустановка: remove → install → config set) — ход идёт по ней, а не по умолчанию.
+  const LAST_CONFIG_KEY = 'config:last';
+  let lastSavedRaw: string | null = null;
+  async function loadConfig(): Promise<{ config: CascadeConfig; seeded: boolean; restored?: boolean }> {
     const raw = (await settings.get()).config.trim();
     if (raw) {
-      try { return { config: normalizeConfig(JSON.parse(raw)), seeded: false }; } catch { /* битый JSON — показываем умолчание и issue */ }
+      try {
+        const config = normalizeConfig(JSON.parse(raw));
+        if (raw !== lastSavedRaw) { lastSavedRaw = raw; void bb.storage.kv.set(LAST_CONFIG_KEY, raw).catch(() => undefined); }
+        return { config, seeded: false };
+      } catch { /* битый JSON — сохранённая копия или умолчание и issue */ }
+    }
+    const last = await bb.storage.kv.get<string>(LAST_CONFIG_KEY).catch(() => undefined);
+    if (typeof last === 'string' && last.trim()) {
+      try { return { config: normalizeConfig(JSON.parse(last)), seeded: false, restored: true }; } catch { /* копия битая — умолчание */ }
     }
     // Пустые настройки: каскад по умолчанию строится по машинам BB. До первого
     // обнаружения берём лёгкий список машин (без проб), иначе каскад без машин
@@ -195,6 +225,7 @@ export default function plugin(bb: BbPluginApi) {
   // Одно обнаружение за раз: параллельные ходы и экран ждут общий проход.
   let discovering: Promise<void> | null = null;
   function discover(refresh: boolean): Promise<void> {
+    if (!alive) return Promise.resolve();
     if (!refresh && Date.now() - discoveredAt < 120_000 && hosts.length > 0) return Promise.resolve();
     if (discovering) return discovering;
     discovering = discoverOnce(refresh).finally(() => { discovering = null; });
@@ -239,6 +270,7 @@ export default function plugin(bb: BbPluginApi) {
   let registration: { dispose(): void } | null = null;
   let catalogKey = '';
   async function syncProvider(config: CascadeConfig): Promise<void> {
+    if (!alive) return;
     const models = providerModels(config, accounts, (hostId, modelId) => blockedModel(hostId, modelId) !== null);
     const key = JSON.stringify(models);
     if (key === catalogKey && registration) return;
@@ -271,9 +303,10 @@ export default function plugin(bb: BbPluginApi) {
 
   async function state(refresh: boolean): Promise<CascadeState> {
     await discover(refresh).catch(error => bb.log.warn(`обнаружение: ${error instanceof Error ? error.message : String(error)}`));
-    const { config, seeded } = await loadConfig();
+    const { config, seeded, restored } = await loadConfig();
     const raw = (await settings.get()).config.trim();
     const issues: string[] = [];
+    if (restored) issues.push('Настройки каскада пусты или не читаются — работает последняя сохранённая копия. Сохраните настройки, чтобы закрепить их.');
     if (seeded && raw) issues.push('Сохранённая конфигурация не читается — показан каскад по умолчанию. Сохраните заново.');
     else if (seeded) issues.push('Показан каскад по умолчанию; он ещё не сохранён.');
     const cells: CascadeState['cells'] = {};

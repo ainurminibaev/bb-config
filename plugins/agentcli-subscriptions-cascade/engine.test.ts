@@ -171,9 +171,11 @@ test('всё исчерпано: ждать сброса до 6 часов, да
   assert.equal(selectStep(input(all(NOW + 2 * 3_600_000), { thread: thread({ waitingSince: NOW - 5 * 3_600_000 }) })).kind, 'ask-owner', 'ожидание дольше 6 часов');
 });
 
-test('всё неизвестно: ожидание с перепроверкой через recheckMinutes', () => {
+test('0.3.7: всё неизвестно — пробуется первая ступень по порядку (ожидание и вопрос — только при исчерпании)', () => {
   const d = selectStep(input({ [TRU_MAX]: unknown, [MAC_GW]: unknown, [UA_PRO]: unknown, [MAC_CODEX]: unknown, [UA_CODEX]: unknown }));
-  assert.deepEqual(d, { kind: 'wait', until: NOW + 5 * 60_000, stepId: null, waitingSince: NOW, reason: 'unknown' });
+  assert.deepEqual(pick(d), ['run', TRU_MAX, 'claude-opus-5-5']);
+  // Известная готовая ступень главнее неизвестной.
+  assert.deepEqual(pick(selectStep(input({ [TRU_MAX]: unknown, [MAC_GW]: unknown }))), ['run', UA_PRO, 'claude-opus-5-5']);
 });
 
 test('S8: машина не на связи пропускается; выключенная машина и профиль не участвуют', () => {

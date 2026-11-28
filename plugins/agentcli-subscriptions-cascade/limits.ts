@@ -42,6 +42,9 @@ export function readingFromUsageLimits(raw: unknown, stage: Stage, receivedAt: I
   if (raw === undefined || raw === null) return { kind: 'unknown', reason: 'empty', checkedAt: receivedAt };
   if (status === 'unauthenticated' || status === 'expired') return { kind: 'unknown', reason: 'auth', checkedAt: receivedAt };
   if (status === 'rate_limited' || status === 'throttled') return { kind: 'unknown', reason: 'throttled', checkedAt: receivedAt };
+  // 0.3.7: `error` — источник ответил ошибкой (у Codex — «usage request failed (HTTP 403)»),
+  // а не «не поддерживается (шлюз?)»: подписка ChatGPT, просто квоту не отдали.
+  if (status === 'error') return { kind: 'unknown', reason: 'source-error', checkedAt: receivedAt, ...(str(data.message) ? { detail: str(data.message)!.slice(0, 160) } : {}) };
   if (status !== 'ok') return { kind: 'unknown', reason: status ? 'unsupported' : 'malformed', checkedAt: receivedAt };
   const list = Array.isArray(data.windows) ? data.windows : [];
   const windows: WindowSample[] = list.flatMap(item => {
@@ -151,9 +154,9 @@ export function healthFromReading(reading: Reading | undefined, modelId: string 
     const why: Record<typeof reading.reason, string> = {
       unsupported: 'источник лимитов не поддерживается (шлюз?)', auth: 'нет входа или нет доступа к квоте', identity: 'аккаунт не подтверждён',
       offline: 'машина не на связи', throttled: 'источник ограничил запросы', timeout: 'чтение не уложилось в срок',
-      malformed: 'непонятный ответ', empty: 'окон нет', stale: 'данные устарели',
+      malformed: 'непонятный ответ', empty: 'окон нет', stale: 'данные устарели', 'source-error': 'источник квоты ответил ошибкой',
     };
-    return { available: reading.reason !== 'offline', exhausted: false, unknown: true, resetsAt: reading.retryAt ?? null, reason: `квота неизвестна: ${why[reading.reason]}` };
+    return { available: reading.reason !== 'offline', exhausted: false, unknown: true, resetsAt: reading.retryAt ?? null, reason: `квота неизвестна: ${why[reading.reason]}${reading.detail ? ` (${reading.detail})` : ''}` };
   }
   const threshold = 100 - args.policies.minRemainingPercent;
   if (reading.admission?.state === 'rejected' && (reading.admission.retryAt === undefined || reading.admission.retryAt > now)) {

@@ -5,7 +5,7 @@ import { profileName } from '../pins.ts';
 import { bindingEpoch } from '../config.ts';
 import { grant, pruneConsents, type Consent } from '../consent.ts';
 import type { CascadeConfig, DiscoveredAccount, Step } from '../contract.ts';
-import { BUSY_RECHECK_MS, explainNoSteps, explainProfile, parentHomeMissing, nextThreadState, selectStep, type Decision, type HealthLookup, type ThreadCascadeState } from '../engine.ts';
+import { BUSY_RECHECK_MS, explainNoSteps, resolveProfile, explainProfile, parentHomeMissing, nextThreadState, selectStep, type Decision, type HealthLookup, type ThreadCascadeState } from '../engine.ts';
 import { previewText, usesTestQuota } from '../profiles.ts';
 import { buildHandoff, type ThreadEventRow } from './handoff.ts';
 import { briefRefusalText, briefTextFromEvents, checkBrief, BRIEF_PART_TITLES } from '../brief.ts';
@@ -136,6 +136,16 @@ export interface RouteDeps {
   threadTitle?(threadId: string): Promise<string | null>;
   /** Посев `adopt --native` для нового треда (одноразовый ключ в метаданных треда → хранилище плагина). */
   adoptSeed?(threadId: string): Promise<{ sourceSessionId: string; sourceThreadId: string } | null>;
+  /**
+   * 0.3.7: профиль треда из выбора модели BB (deriveProviderOptions → ctx.model). Нужен,
+   * когда CLI запускается без `--model` (app-server Codex на открытии сессии): иначе
+   * свежий тред на `pin:<Codex>` шёл по «Авто» и сессия не открывалась.
+   */
+  profileHint?(threadId: string): string | null;
+  /** 0.3.7: настроек ещё нет (переустановка) — профиль ждёт их появления, а не отказывает. */
+  configSeeded?(): Promise<boolean>;
+  /** Сколько ждать появления настроек с профилем хода, мс. По умолчанию 30 с. */
+  settingsWaitMs?: number;
   /** 0.3.6: строка журнала с замером шагов маршрута до подготовки («ход thr: config 0,01 с …»). */
   trace?(line: string): void;
   /**
@@ -156,6 +166,12 @@ export const REFUSAL_ACTIONS = 'Что сделать: повторите ход
  */
 export function cascadeEnv(profileId: string, stepId: string): Record<string, string> {
   return { BB_CASCADE_PROFILE: profileId, BB_CASCADE_STEP: stepId };
+}
+
+/** Профиль хода не разрешается в настройках (нет такого профиля и это не `pin:`/`m:`/синтетика). */
+function unknownProfile(config: CascadeConfig, id: string): boolean {
+  const p = resolveProfile(config, id);
+  return 'kind' in p && p.kind === 'unavailable' && p.reason === 'unknown-profile';
 }
 
 /** 0.3.5: строка ленты родителя о подтреде, запущенном штатным провайдером. */
@@ -455,9 +471,27 @@ export function createRouteService(deps: RouteDeps): RouteService {
 
   async function routeOnce(input: ReturnType<typeof routeTurnInputSchema.parse>, skipped: string[]): Promise<RouteTurnOutput> {
     {
-      const config = await deps.loadConfig();
-      lastConfig = config;
+      let config = await deps.loadConfig();
       const info = await deps.threadInfo(input.threadId).catch(() => null);
+      // 0.3.7: профиль хода не найден, а настроек нет (каскад по умолчанию после
+      // переустановки) — ждём появления настроек до settingsWaitMs, затем «Авто» со строкой.
+      let settingsNote: string | null = null;
+      if (input.requestedModel && !input.probe && unknownProfile(config, input.requestedModel) && deps.configSeeded && await deps.configSeeded().catch(() => false)) {
+        const sleep = deps.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
+        const started = deps.now();
+        prep.attempt(input.threadId, 'Жду настройки каскада (плагин переустановлен?)');
+        while (deps.now() - started < (deps.settingsWaitMs ?? 30_000)) {
+          await sleep(1_000);
+          config = await deps.loadConfig();
+          if (!unknownProfile(config, input.requestedModel) || !(await deps.configSeeded().catch(() => false))) break;
+        }
+        prep.attempt(input.threadId, null);
+        if (unknownProfile(config, input.requestedModel) && await deps.configSeeded().catch(() => false)) {
+          settingsNote = `Настроек каскада нет — профиль «${input.requestedModel}» не найден, ход по «Авто» каскада по умолчанию.`;
+          input = { ...input, requestedModel: null };
+        }
+      }
+      lastConfig = config;
       let stored = (await deps.load(input.threadId).catch(() => undefined)) ?? freshState(input.threadId, info);
       const now = deps.now();
       // 0.3.6: замер шагов до подготовки — в журнал сервера, если всё вместе дольше 1 с.
@@ -467,7 +501,7 @@ export function createRouteService(deps: RouteDeps): RouteService {
       const mark = (label: string) => { const t = performance.now(); marks.push(`${label} ${((t - lastMark) / 1000).toFixed(2)} с`); lastMark = t; };
       const flushMarks = (to: string) => { if (performance.now() - startMark > 1_000) deps.trace?.(`ход ${input.threadId} до подготовки (${to}): ${marks.join(', ')}`); };
       mark('состояние');
-      const requestedProfileId = input.requestedModel ?? stored.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto';
+      const requestedProfileId = input.requestedModel ?? stored.profileId ?? deps.profileHint?.(input.threadId) ?? config.profiles.find(p => p.enabled)?.id ?? 'auto';
       const projectId = input.projectId ?? info?.projectId ?? stored.engine.projectId;
       const bridgeHost = info?.hostId ?? stored.engine.homeHostId;
 
@@ -535,6 +569,7 @@ export function createRouteService(deps: RouteDeps): RouteService {
       const engine: ThreadCascadeState = {
         ...stored.engine, projectId, isSubthread: Boolean(info?.parentThreadId) || stored.engine.isSubthread, homeHostId: home.hostId,
         turnId: input.turnKey ?? `turn-${now}`, skippedStepIds: cardSkipped,
+        lastRunAt: stored.lastRun && stored.lastRun.stepId === stored.engine.currentStepId ? stored.lastRun.at : null,
       };
       const forever = await projectConsentsOf(projectId);
       // Согласие «на ход», данное до автоповтора (смена провайдера внутри хода), — и на повтор.
@@ -692,7 +727,7 @@ export function createRouteService(deps: RouteDeps): RouteService {
       const returning = decision.returning || (prev !== null && changed && order(decision.stepId) !== -1 && order(prev.stepId) !== -1 && order(decision.stepId) < order(prev.stepId));
       // Прошлой ступени или её машины больше нет в настройках — это не сбой и не «не на связи» (0.3.3).
       const prevRemoved = prev !== null && (order(prev.stepId) === -1 || !config.machines.some(m => m.hostId === prev.hostId && m.enabled));
-      const switchReason = prevRemoved && changed ? 'removed' : skipped.length > 0 ? 'unavailable' : prev === null ? 'start' : returning ? 'return' : fromHealth?.exhausted ? 'limit' : fromHealth && !fromHealth.available ? 'unavailable' : 'error';
+      const switchReason = prevRemoved && changed ? 'removed' : skipped.length > 0 ? 'unavailable' : prev === null ? 'start' : returning ? 'return' : fromHealth?.exhausted ? 'limit' : fromHealth && (!fromHealth.available || fromHealth.unknown) ? 'unavailable' : 'error';
       if (changed || prev === null && !local || skipped.length > 0) {
         notes.push({ kind: 'switch', reason: switchReason, from: fromStage, to, resetAt: fromHealth?.resetsAt ?? null, stepId: decision.stepId });
       }
@@ -800,6 +835,7 @@ export function createRouteService(deps: RouteDeps): RouteService {
         return { action: 'refuse', retryable: false, message, notes };
       }
       notes.unshift(...busyNotes);
+      if (settingsNote) notes.unshift({ kind: 'notice', message: settingsNote.slice(0, 300) });
       // Строки, оставленные этому треду другими (0.3.4: «подтред на Claude» от подтреда).
       const inbox = await takeThreadNotes(input.threadId);
       notes.unshift(...inbox.map((message): RouteNote => ({ kind: 'notice', message: message.slice(0, 300) })));
@@ -1013,7 +1049,7 @@ export function createRouteService(deps: RouteDeps): RouteService {
       // «Подтред · Codex» без Codex идёт на «Авто» (0.3.4) — повтор готов, если готово «Авто».
       const { decision } = selectWithFallback({
         config, accounts: deps.accounts(),
-        thread: { ...stored.engine, turnId: `retry-${now}` }, health: withObserved(deps.health(config, threadId), stored.observed, now, stored.modelBlocks), now,
+        thread: { ...stored.engine, turnId: `retry-${now}`, lastRunAt: stored.lastRun?.at ?? null }, health: withObserved(deps.health(config, threadId), stored.observed, now, stored.modelBlocks), now,
       }, stored.inherited ? stored.inherited.profileId : stored.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto', stored.inherited ?? null);
       switch (decision.kind) {
         case 'run':
@@ -1094,7 +1130,7 @@ export function createRouteService(deps: RouteDeps): RouteService {
     const [info, stored] = await Promise.all([deps.threadInfo(input.threadId).catch(() => null), deps.load(input.threadId).catch(() => undefined)]);
     const state = stored ?? freshState(input.threadId, info);
     const projectId = input.projectId ?? info?.projectId ?? state.engine.projectId;
-    const requested = input.requestedModel ?? state.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto';
+    const requested = input.requestedModel ?? state.profileId ?? deps.profileHint?.(input.threadId) ?? config.profiles.find(p => p.enabled)?.id ?? 'auto';
     // Правило потомков предка (0.3.5) — тот же выбор, что у routeTurn.
     const rule = await inheritedRule(config, input.threadId, info, input.requestedModel ?? null);
     const profileId = rule ? rule.profileId : requested;
@@ -1106,7 +1142,7 @@ export function createRouteService(deps: RouteDeps): RouteService {
     if (carry) forever.push(grant('turn', { stepId: carry.id, bindingEpoch: bindingEpoch(carry), threadId: input.threadId, turnId, projectId, now }, null));
     const { decision } = selectWithFallback({
       config, accounts: deps.accounts(), health: withObserved(deps.health(config, input.threadId), state.observed, now, state.modelBlocks), now,
-      thread: { ...state.engine, projectId, homeHostId: state.engine.homeHostId ?? info?.hostId ?? null, turnId, skippedStepIds: [], consents: [...state.engine.consents, ...forever] },
+      thread: { ...state.engine, projectId, homeHostId: state.engine.homeHostId ?? info?.hostId ?? null, turnId, skippedStepIds: [], consents: [...state.engine.consents, ...forever], lastRunAt: state.lastRun && state.lastRun.stepId === state.engine.currentStepId ? state.lastRun.at : null },
     }, profileId, rule);
     // Только решённый ход: при «нужно подтверждение» мост остаётся на текущем провайдере,
     // карточку покажет его ход, а сессия другого провайдера откроется уже после «Да».

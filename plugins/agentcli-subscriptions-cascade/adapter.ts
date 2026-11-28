@@ -132,8 +132,10 @@ export type Reading =
   | { kind: 'sample'; windows: WindowSample[]; coverage: 'snapshot' | 'partial';
       bindingEpoch: string; subjectRef?: string; receivedAt: Instant;
       admission?: { state: 'allowed' | 'rejected'; meter?: string; model?: string; observedAt: Instant | null; retryAt?: Instant } }
-  | { kind: 'unknown'; reason: 'unsupported' | 'auth' | 'identity' | 'offline' | 'throttled' | 'timeout' | 'malformed' | 'empty' | 'stale';
-      checkedAt: Instant; retryAt?: Instant };
+  | { kind: 'unknown'; reason: 'unsupported' | 'auth' | 'identity' | 'offline' | 'throttled' | 'timeout' | 'malformed' | 'empty' | 'stale' | 'source-error';
+      checkedAt: Instant; retryAt?: Instant;
+      /** 0.3.7: текст ошибки источника («Codex usage request failed (HTTP 403)»). */
+      detail?: string };
 
 export interface LimitsAdapter {
   readonly provider: string;
