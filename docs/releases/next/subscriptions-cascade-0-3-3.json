@@ -1,0 +1,30 @@
+{
+  "id": "subscriptions-cascade-0-3-3",
+  "title": "Каскад подписок 0.3.3 — «Открыть папку», файлы и код треда каскада ведут в папку проекта, а не в общий корень /opt/bbfs",
+  "component": "agentcli-subscriptions-cascade",
+  "where": "server",
+  "kind": "command",
+  "applies": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "applicable",
+    "agentcli-subscriptions-cascade",
+    "0.3.3"
+  ],
+  "apply": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "apply",
+    "agentcli-subscriptions-cascade",
+    "0.3.3"
+  ],
+  "verify": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "check",
+    "agentcli-subscriptions-cascade",
+    "0.3.3"
+  ],
+  "rerun": "Актуальная работающая версия проходит проверку без установки.",
+  "rollback": "Установите предыдущий тег agentcli-subscriptions-cascade/v0.3.2."
+}

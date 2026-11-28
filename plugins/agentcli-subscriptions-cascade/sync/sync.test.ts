@@ -11,7 +11,7 @@ import { chmodFiles, ensureBindMount, envModes, gitLocks, ignoreMatcher, parseMo
 import { createArgs, evaluateHealth, labelValue, onlyGitIndexConflict, parseSessionList, sessionName } from './mutagen.ts';
 import { projectSlug, SyncOrchestrator, type ProjectSyncState, type SyncProjectContext } from './orchestrator.ts';
 import { mutagenInstallScript, setupPlan } from './setup.ts';
-import { buildContext, projectSourceOn, syncModeOf } from './service.ts';
+import { buildContext, folderIn, projectSourceOn, syncModeOf } from './service.ts';
 import { summaryLine, timingLines } from './lines.ts';
 import { configSchema } from '../contract.ts';
 
@@ -596,6 +596,15 @@ test('контекст проекта: папка на опоре из sources, 
   assert.throws(() => buildContext({ config, projectId: 'p3', projectName: 'x', anchorSource: null, ssh: new Map() }), /нет папки на опорной машине Tru/);
   assert.equal(syncModeOf({ ...config, files: { ...config.files, projectSyncModes: { p: 'off' as never } } }, 'p'), 'off');
   assert.equal(syncModeOf({ ...config, files: { ...config.files, projectSyncModes: { p: 'future' as never } } }, 'p'), 'lazy');
+  // 0.3.3: папка рабочей копии на машине — для паспорта (открыть папку, файлы, код).
+  const macShared = ctx.executors.find(m => m.hostId === MAC)!.sharedPath.replace(/\/+$/u, '');
+  assert.equal(folderIn(ctx, TRU), '/srv/projects/my-app');
+  assert.equal(folderIn(ctx, MAC), `${macShared}/my-app`);
+  assert.equal(folderIn(ctx, 'host_unknown'), null);
+  const wt = buildContext({ config, projectId: 'proj_1', projectName: 'x', anchorSource: '/data/worktrees/thr_1-1/my-app', ssh: new Map(), unitId: 'proj_1~wabc12345', unitSuffix: 'abc12345' });
+  assert.equal(folderIn(wt, TRU), '/data/worktrees/thr_1-1/my-app');
+  assert.equal(folderIn(wt, MAC), `${macShared}/my-app-wabc12345`);
+  assert.equal(folderIn({ ...ctx, executors: ctx.executors.map(m => ({ ...m, pathTranslation: true })) }, MAC), null);
 });
 
 test('строки ленты: flush и выравнивание с направлением, отказ с причиной', async () => {

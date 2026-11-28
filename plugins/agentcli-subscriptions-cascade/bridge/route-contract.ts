@@ -239,7 +239,11 @@ export const threadStatusSchema = z.union([
     }).nullable(),
     anchorHostId: z.string().nullable(),
     syncMode: z.string(),
-    /** Общий путь проекта на машинах каскада (основная копия — на опоре). */
+    /**
+     * Папка актуальной копии файлов треда на машине freshCopyHostId (0.3.3): на опоре —
+     * checkout или worktree треда, на исполнителе — реплика `<общий путь>/<slug>`.
+     * Неизвестна — null (не общий корень реплик).
+     */
     path: z.string().nullable(),
     /** Где актуальная копия файлов прямо сейчас: машина хода или опора после flush. */
     freshCopyHostId: z.string().nullable(),

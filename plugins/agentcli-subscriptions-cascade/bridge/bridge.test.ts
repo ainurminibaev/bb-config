@@ -242,6 +242,7 @@ function routeFixture(options: { health?: Record<string, ReturnType<typeof exhau
       prepareTurn: async (_t, s) => { syncCalls.push(`prepare:${s.hostId}`); return options.sync?.prepare ?? okSync(s.hostId); },
       finishTurn: async (_t, s) => { syncCalls.push(`finish:${s.hostId}`); return options.sync?.finish ?? okSync(s.hostId); },
       modeOf: () => 'lazy',
+      folderOn: async (t, hostId) => (hostId === TRU ? t.workspace ?? '/srv/projects/proj' : '/opt/bbfs/proj'),
     },
     now: () => Date.parse('2026-11-27T12:00:00Z'),
   };
@@ -293,6 +294,12 @@ test('маршрут S1: Tru исчерпан — ход на Mac, строка 
   assert.equal(status.anchorHostId, TRU);
   assert.equal(status.freshCopyHostId, TRU);
   assert.equal(status.syncMode, 'lazy');
+  // 0.3.3: папка свежей копии — папка проекта на опоре, а не общий корень реплик.
+  assert.equal(status.path, '/srv/projects/proj');
+  // Копия ещё на исполнителе (flush не прошёл) — его реплика.
+  fx.store.set('thr_1', { ...fx.store.get('thr_1')!, pendingFlushHostId: MAC });
+  const pending = await fx.routes.threadStatus('thr_1');
+  assert.ok(pending.cascade && pending.freshCopyHostId === MAC && pending.path === '/opt/bbfs/proj');
 });
 
 test('маршрут S9: конфликт файлов — ход не передан, ступень не меняется', async () => {

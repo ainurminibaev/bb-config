@@ -315,6 +315,10 @@ BB runtime ──stdin/stdout──► мост «Каскада» (bridge/wrapp
 - **Паспорт треда** для других плагинов: RPC `threadStatus` и
   `bb subscriptions-cascade status --thread <id> --json` →
   `{cascade, profileId, step{hostId, providerId, model, accountKey, kind}, anchorHostId, syncMode, path, freshCopyHostId}`.
+  `path` (0.3.3) — папка актуальной копии файлов треда на машине `freshCopyHostId`:
+  на опоре — checkout проекта или worktree треда, на исполнителе — реплика
+  `<общий путь>/<папка проекта>[-w<хеш>]` (`SyncService.folderOn`). До 0.3.3 там был общий
+  корень реплик, и «Открыть папку» и открытие файлов вели не в проект.
 - **Перевод тредов**: `bb subscriptions-cascade adopt --stuck|--thread <id>|--project <id> [--dry-run] [--model <профиль>]`
   — штатный Handoff (`--to subscriptions-cascade`) и `provider-retry cancel` у исходного;
   `adopt --native --thread <id>` — та же сессия Claude (раздел «0.3.0»).

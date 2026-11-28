@@ -29,6 +29,8 @@ export interface SyncPort {
   modeOf?(config: CascadeConfig, projectId: string): string;
   /** Кто пишет рабочую папку на исполнителе (0.3.0): второй тред идёт на ту же машину. */
   writerOf?(thread: { threadId: string; projectId: string; workspace?: string | null }): Promise<{ hostId: string; threadIds: string[] } | null>;
+  /** Папка рабочей копии треда на машине (0.3.3) — для паспорта: открыть папку, файлы, код. */
+  folderOn?(thread: { threadId: string; projectId: string; workspace?: string | null }, hostId: string): Promise<string | null>;
 }
 
 export interface ThreadInfo {
@@ -757,7 +759,16 @@ export function createRouteService(deps: RouteDeps): RouteService {
     const step = last ? config.steps.find(s => s.id === last.stepId) : undefined;
     const anchor = anchorHostId(config);
     const projectId = info?.projectId ?? stored?.engine.projectId ?? '';
-    const machine = config.machines.find(m => m.hostId === (anchor ?? ''));
+    // Папка свежей копии (0.3.3). Раньше здесь был общий путь опоры (`/opt/bbfs`) —
+    // корень реплик, а не папка проекта: «Открыть папку» и файлы вели не туда.
+    const freshCopyHostId = stored?.pendingFlushHostId ?? anchor;
+    const workspace = stored?.workspace ?? null;
+    let path: string | null = null;
+    if (freshCopyHostId && projectId && deps.sync?.folderOn) {
+      path = await deps.sync.folderOn({ threadId, projectId, workspace }, freshCopyHostId).catch(() => null);
+    }
+    // Без сервиса синхронизации на опоре известна хотя бы рабочая папка последнего хода.
+    if (path === null && freshCopyHostId === anchor && workspace) path = workspace;
     return {
       cascade: true,
       profileId: stored?.profileId ?? null,
@@ -769,8 +780,8 @@ export function createRouteService(deps: RouteDeps): RouteService {
       } : null,
       anchorHostId: anchor,
       syncMode: deps.sync?.modeOf?.(config, projectId) ?? config.files.projectSyncModes[projectId] ?? config.files.defaultSyncMode,
-      path: machine ? machine.sharedPath : null,
-      freshCopyHostId: stored?.pendingFlushHostId ?? anchor,
+      path,
+      freshCopyHostId,
     };
   }
 

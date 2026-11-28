@@ -26,6 +26,12 @@ export interface SyncService {
   finishTurn(thread: SyncThreadInput, step: SyncStepRef): Promise<SyncResult>;
   /** Кто сейчас пишет рабочую папку треда на исполнителе: машина и треды (0.3.0). */
   writerOf(thread: SyncThreadInput): Promise<{ hostId: string; threadIds: string[] } | null>;
+  /**
+   * Папка рабочей копии треда на машине (0.3.3): на опоре — настоящая папка
+   * (checkout или worktree), на исполнителе — его реплика `<общий путь>/<slug>`.
+   * Машина не в каскаде или с трансляцией путей — null.
+   */
+  folderOn(thread: SyncThreadInput, hostId: string): Promise<string | null>;
   applyMode(projectId: string): Promise<SyncResult>;
   teardown(projectId: string, options?: { removeMount?: boolean }): Promise<SyncResult>;
   status(projectId: string): Promise<ProjectSyncState & { mode: SyncModeExt }>;
@@ -120,6 +126,18 @@ export function buildContext(args: { config: CascadeConfig; projectId: string; p
     symlinkMode: symlinkModeFor([anchor, ...config.machines.filter(m => m.enabled && !m.anchor)]),
     anchorSsh: hostId => args.ssh.get(hostId) ?? null,
   };
+}
+
+/**
+ * Папка единицы на машине: опора — настоящая папка; исполнитель (в том числе
+ * выбывший) — `<его общий путь>/<slug>`. Неизвестная машина или машина с
+ * трансляцией путей (нативный Windows) — null: путь там другой, не угадываем.
+ */
+export function folderIn(ctx: Pick<SyncProjectContext, 'anchor' | 'anchorRealPath' | 'executors' | 'retired' | 'slug'>, hostId: string): string | null {
+  if (hostId === ctx.anchor.hostId) return ctx.anchorRealPath;
+  const machine = [...ctx.executors, ...(ctx.retired ?? [])].find(m => m.hostId === hostId);
+  if (!machine || machine.pathTranslation) return null;
+  return posix.join(machine.sharedPath.replace(/\/+$/u, ''), ctx.slug);
 }
 
 /** Статусы треда, при которых его ход ещё может идти. */
@@ -278,6 +296,7 @@ export function createSyncService(bb: BbPluginApi, loadConfig: () => Promise<{ c
     },
     finishTurn: async (thread, step) => orchestrator.finishTurn(await unitOf(thread), step),
     writerOf: async thread => orchestrator.writerOf((await unitOf(thread)).projectId),
+    folderOn: async (thread, hostId) => folderIn(await context((await unitOf(thread)).projectId), hostId),
     applyMode: projectId => orchestrator.applyMode(projectId),
     teardown: (projectId, options) => orchestrator.teardown(projectId, options),
     async status(projectId) {
