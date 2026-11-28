@@ -91,9 +91,10 @@ test('настроек нет (переустановка): ход ждёт их
   const never = deps(empty, {}, { configSeeded: async () => true, settingsWaitMs: 3_000 });
   const r2 = await turn(never.routes, 'opus-then-auto');
   assert.ok(r2.action === 'run' && r2.notes.some(n => n.kind === 'notice' && /Настроек каскада нет/u.test(n.message)), JSON.stringify(r2));
-  // Настройки есть, профиля нет — отказ, как раньше.
+  // Настройки есть, профиля нет — с 0.3.9 не отказ, а «Авто» со строкой (model-as-profile.test.ts).
   const real = deps(full, {}, { configSeeded: async () => false });
-  assert.equal((await turn(real.routes, 'no-such-profile')).action, 'refuse');
+  const r3 = await turn(real.routes, 'no-such-profile');
+  assert.ok(r3.action === 'run' && r3.notes.some(n => n.kind === 'notice' && /«no-such-profile» не найден/u.test(n.message)), JSON.stringify(r3));
 });
 
 test('Codex «usage request failed (HTTP 403)» — «источник квоты ответил ошибкой», а не «шлюз»', () => {
