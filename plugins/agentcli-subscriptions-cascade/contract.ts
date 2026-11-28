@@ -166,6 +166,11 @@ export const policiesSchema = z.object({
    * квота известна, даже если оно старше positiveFreshSeconds. 0 — выключено.
    */
   staleOkMinutes: z.number().int().min(0).max(120).default(15),
+  /**
+   * 0.3.6: тёплый хвост ленивого режима, минут. После хода на исполнителе W работает
+   * ещё столько; повторный ход на той же машине готовится одним flush (~1–2 с). 0 — выключено.
+   */
+  warmTailMinutes: z.number().int().min(0).max(240).default(30),
   /** Фоновая перепроверка приоритетной ступени при спросе. */
   recheckMinutes: z.number().int().min(1).max(120).default(5),
 });

@@ -83,7 +83,11 @@ export default function plugin(bb: BbPluginApi) {
       // Неготовые ступени перепроверяются в фоне не чаще раза в 10 минут: починили — ступень вернётся сама.
       const stale = steps.filter(s => readiness[s.id] && !readiness[s.id]!.ready && Date.now() - readiness[s.id]!.at > 10 * 60_000).map(s => s.id);
       if (stale.length > 0) void checkSteps({ stepIds: stale }).catch(() => undefined);
-      await Promise.all(steps.map(s => monitor.refresh(stageOf(s), config.policies.preTurnBudgetMs).catch(() => undefined)));
+      // 0.3.6: опрос квоты не держит ход. Есть показание — ход идёт по нему, опрос в фоне;
+      // нет показания (первый ход ступени) — ждём не дольше preTurnBudgetMs.
+      const first = steps.filter(s => !monitor.current(stageOf(s)));
+      for (const s of steps) if (monitor.current(stageOf(s))) void monitor.refresh(stageOf(s), 20_000).catch(() => undefined);
+      await Promise.all(first.map(s => monitor.refresh(stageOf(s), config.policies.preTurnBudgetMs).catch(() => undefined)));
     },
     limits: async () => {
       await discover(false).catch(() => undefined);
@@ -188,8 +192,15 @@ export default function plugin(bb: BbPluginApi) {
   }
 
   // Обнаружение: один проход по машинам, на машину — usageLimits, providerCliStatus, probe и models по адаптерам.
-  async function discover(refresh: boolean): Promise<void> {
-    if (!refresh && Date.now() - discoveredAt < 120_000 && hosts.length > 0) return;
+  // Одно обнаружение за раз: параллельные ходы и экран ждут общий проход.
+  let discovering: Promise<void> | null = null;
+  function discover(refresh: boolean): Promise<void> {
+    if (!refresh && Date.now() - discoveredAt < 120_000 && hosts.length > 0) return Promise.resolve();
+    if (discovering) return discovering;
+    discovering = discoverOnce(refresh).finally(() => { discovering = null; });
+    return discovering;
+  }
+  async function discoverOnce(refresh: boolean): Promise<void> {
     const list = await bb.sdk.hosts.list({ signal: AbortSignal.timeout(10_000) });
     connected.clear();
     for (const h of list) if (h.status === 'connected') connected.add(h.id);

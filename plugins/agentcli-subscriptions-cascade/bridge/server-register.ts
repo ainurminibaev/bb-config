@@ -292,7 +292,14 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     loadConfig: deps.loadConfig,
     accounts: deps.accounts,
     health: deps.health,
-    refreshLimits: async (config, steps) => { await deps.ensureDiscovered(); await deps.refreshLimits(config, steps); },
+    // 0.3.6: обнаружение машин (до ~20 с раз в 2 мин) — в фоне, если машины уже известны;
+    // ждём его только до первого обнаружения.
+    refreshLimits: async (config, steps) => {
+      const discovery = deps.ensureDiscovered();
+      if (deps.accounts().length === 0) await discovery; else void discovery.catch(() => undefined);
+      await deps.refreshLimits(config, steps);
+    },
+    trace: line => bb.log.info(line),
     observeLimit: (config, step, observation: LimitObservation) => {
       // 0.3.5: уведомление app-server Codex — адаптеру Codex как есть (codexEventReading).
       const raw = observation.raw as { method?: unknown } | undefined;

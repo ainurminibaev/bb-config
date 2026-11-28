@@ -136,6 +136,8 @@ export interface RouteDeps {
   threadTitle?(threadId: string): Promise<string | null>;
   /** Посев `adopt --native` для нового треда (одноразовый ключ в метаданных треда → хранилище плагина). */
   adoptSeed?(threadId: string): Promise<{ sourceSessionId: string; sourceThreadId: string } | null>;
+  /** 0.3.6: строка журнала с замером шагов маршрута до подготовки («ход thr: config 0,01 с …»). */
+  trace?(line: string): void;
   /**
    * 0.3.4: строки для ленты другого треда (родителя подтреда) — показываются
    * в его следующем ходе. Нет портов — очередь в памяти сервера.
@@ -458,6 +460,13 @@ export function createRouteService(deps: RouteDeps): RouteService {
       const info = await deps.threadInfo(input.threadId).catch(() => null);
       let stored = (await deps.load(input.threadId).catch(() => undefined)) ?? freshState(input.threadId, info);
       const now = deps.now();
+      // 0.3.6: замер шагов до подготовки — в журнал сервера, если всё вместе дольше 1 с.
+      const marks: string[] = [];
+      let lastMark = performance.now();
+      const startMark = lastMark;
+      const mark = (label: string) => { const t = performance.now(); marks.push(`${label} ${((t - lastMark) / 1000).toFixed(2)} с`); lastMark = t; };
+      const flushMarks = (to: string) => { if (performance.now() - startMark > 1_000) deps.trace?.(`ход ${input.threadId} до подготовки (${to}): ${marks.join(', ')}`); };
+      mark('состояние');
       const requestedProfileId = input.requestedModel ?? stored.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto';
       const projectId = input.projectId ?? info?.projectId ?? stored.engine.projectId;
       const bridgeHost = info?.hostId ?? stored.engine.homeHostId;
@@ -504,8 +513,15 @@ export function createRouteService(deps: RouteDeps): RouteService {
         await deps.save(input.threadId, stored).catch(error => warn(`состояние треда: ${String(error)}`));
       }
 
+      mark('профиль и задание');
       const plannedSteps = config.steps.filter(s => s.enabled);
-      await deps.refreshLimits(config, plannedSteps).catch(error => warn(`лимиты перед ходом: ${String(error)}`));
+      // Бюджет держится и при медленном источнике лимитов (0.3.6): ход идёт по последнему показанию.
+      const budget = config.policies.preTurnBudgetMs;
+      await Promise.race([
+        deps.refreshLimits(config, plannedSteps).catch(error => warn(`лимиты перед ходом: ${String(error)}`)),
+        new Promise<void>(resolve => { const t = setTimeout(resolve, budget); (t as { unref?: () => void }).unref?.(); }),
+      ]);
+      mark('лимиты');
       // S11: дом подтреда — машина родителя (каждый ход заново: прежнее состояние могло
       // сохранить пустую машину). Неизвестна — подтред не тратит чужие лимиты: отказ.
       const home = await homeOf(info, stored, bridgeHost);
@@ -552,6 +568,7 @@ export function createRouteService(deps: RouteDeps): RouteService {
         }
         return d;
       };
+      mark('машина, согласия, писатель');
       let decision: Decision = pick();
       // Правило потомков исчерпано, выключено или не приняло ход: режим `fallback` — ход по
       // «Авто» без S11; `wait` (по умолчанию) — ждать сброса или спросить владельца (0.3.5).
@@ -644,6 +661,8 @@ export function createRouteService(deps: RouteDeps): RouteService {
       }
 
       // decision.kind === 'run'
+      mark('решение');
+      flushMarks(decision.stepId);
       const notes: RouteNote[] = [];
       const to = stageLabel(config, decision);
       if (!input.probe && decision.providerId !== input.provider) {

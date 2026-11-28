@@ -3839,6 +3839,10 @@ proxy-manager 0.3.6: свой значок «Прокси».
   модель, effort и готовые аргументы запуска; подтред мимо каскада отмечается у
   родителя. Шаги — `subscriptions-cascade-0-3-5`,
   `thread-account-usage-0-3-3`.
+- 0.3.6: повторный ход на той же ступени — без ожидания. Квоты и обнаружение машин
+  перед ходом идут в фоне, бюджет держится. Тёплый хвост ленивого режима
+  (`warmTailMinutes`, 30 мин): повторная подготовка одним flush. Шаг —
+  `subscriptions-cascade-0-3-6`.
 
 Опирается на BB 0.50.1: плоский каталог моделей (≤ 64), `threads.spawn({ pluginMetadata,
 environment: reuse })`, `threads.getPluginMetadata`, `providerThreadId` в событиях треда,
