@@ -3742,7 +3742,7 @@ proxy-manager 0.3.6: свой значок «Прокси».
   `bb plugin remove thread-description`.
 - **Обновление для установивших:** шаг `plugin-thread-description` в релизе v1.20.0.
 
-## Каскад подписок 0.3.0–0.3.1 — подтреды, закреплённые ступени, resolve, adopt --native (28 ноября 2026)
+## Каскад подписок 0.3.0–0.3.2 — подтреды, закреплённые ступени, resolve, adopt --native (28 ноября 2026)
 
 Плагин `agentcli-subscriptions-cascade` 0.3.0 (`plugins/agentcli-subscriptions-cascade/`).
 Подробно — `ARCHITECTURE.md` плагина, раздел «0.3.0»; как пользоваться — навык
@@ -3763,11 +3763,13 @@ proxy-manager 0.3.6: свой значок «Прокси».
 - 0.3.1: машину можно убрать из каскада — её выход писателя закрывается сам (или
   снимается через 5 мин со строкой, где могли остаться правки), gc собирает её реплики;
   подтред без машины родителя идёт по профилю; отказ «нет ступеней» объясняет причины.
+- 0.3.2: фоновые субагенты и фоновые команды CLI на чужой ступени доживают и возвращают
+  итог в тред (CLI не отпускается, пока у сессии есть незавершённые задачи).
 
 Опирается на BB 0.50.1: плоский каталог моделей (≤ 64), `threads.spawn({ pluginMetadata,
 environment: reuse })`, `threads.getPluginMetadata`, `providerThreadId` в событиях треда,
 окружение терминала BB машины (`BB_SERVER_URL`, `BB_CLI`). Тесты: `npm test --prefix
-plugins/agentcli-subscriptions-cascade` (253; новые — `pins.test.ts`, `busy.test.ts`, `subthread-home.test.ts`,
+plugins/agentcli-subscriptions-cascade` (256; новые — `pins.test.ts`, `busy.test.ts`, `subthread-home.test.ts`, `launcher/background.test.ts`,
 `bridge/adopt-native.test.ts`, `bridge/route-jobs.test.ts`), `npm run typecheck`,
 `bb plugin build`. Обновление для установивших — шаг `subscriptions-cascade-0-3-0`
 (`docs/releases/next/`, `plugin_git_update.py`); откат — тег

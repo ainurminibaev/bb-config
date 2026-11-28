@@ -115,6 +115,8 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
    * сессии последнего хода не возвращается. По умолчанию 2 мин; 0 — держать процесс.
    */
   releaseAfterMs?: number;
+  /** Сколько фоновая задача без события конца держит CLI от отпускания. По умолчанию 3 ч. */
+  backgroundHoldMs?: number;
 } = {}): Promise<number> {
   let route = first;
   let routeFirst = options.routeFirst ?? false;
@@ -132,13 +134,29 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
   let releaseTimer: ReturnType<typeof setTimeout> | null = null;
   let released: StageChild | null = null;
   const clearRelease = () => { if (releaseTimer) { clearTimeout(releaseTimer); releaseTimer = null; } };
-  /** Между ходами на чужой машине — отпустить CLI ступени после простоя. */
+  // Фоновые задачи CLI (субагенты, фоновый Bash): `system/task_started` → до
+  // `task_notification` / `task_updated` с конечным статусом (0.3.2). Пока они идут,
+  // CLI не отпускается: иначе их запросы разрешения (can_use_tool) и итог (handback)
+  // упираются в закрытый stdin и CLI считает это отказом пользователя. Задача без
+  // события конца дольше `backgroundHoldMs` перестаёт держать CLI.
+  const tasks = new Map<string, number>();
+  const holdMs = options.backgroundHoldMs ?? 3 * 3_600_000;
+  // Ход, который CLI начал сам (уведомление о завершении фоновой задачи), — до его result.
+  let selfTurn = false;
+  let selfTurnDone: (() => void) | null = null;
+  let selfTurnWait: Promise<void> | null = null;
+  const holding = () => {
+    const now = ports.now();
+    for (const [id, at] of tasks) if (now - at > holdMs) { tasks.delete(id); ports.log(`background task ${id}: нет конца ${Math.round(holdMs / 60_000)} мин — CLI больше не держит`); }
+    return selfTurn || tasks.size > 0;
+  };
+  /** Между ходами на чужой машине — отпустить CLI ступени после простоя (не раньше, чем закончатся фоновые задачи). */
   const armRelease = () => {
     clearRelease();
-    if (releaseMs <= 0 || route.local || turnActive || childExit) return;
+    if (releaseMs <= 0 || route.local || turnActive || childExit || holding()) return;
     releaseTimer = setTimeout(() => {
       releaseTimer = null;
-      if (turnActive || childExit) return;
+      if (turnActive || childExit || holding()) return;
       ports.log(`release idle stage CLI on ${route.hostId} after ${Math.round(releaseMs / 1000)} s`);
       released = child;
       child.end();
@@ -182,6 +200,7 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
   const onLine = (line: string) => {
     armIdle();
     const message = parse(line);
+    trackTasks(message);
     if (message?.type === 'control_response') {
       const id = requestIdOf(message);
       if (id && swallow.has(id)) { swallow.delete(id); return; }
@@ -203,6 +222,17 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
     } else {
       out = out.then(() => { ports.stdout.write(`${line}\n`); });
     }
+    if (message?.type === 'result' && !turnActive && selfTurn) {
+      // Ход CLI по уведомлению о фоновой задаче закончился: его вывод уже у моста.
+      selfTurn = false;
+      selfTurnDone?.();
+      selfTurnDone = null;
+      selfTurnWait = null;
+      queueMicrotask(armRelease);
+    } else if (!turnActive && releaseTimer) {
+      // Вывод между ходами — CLI занят: отсчёт простоя заново.
+      queueMicrotask(armRelease);
+    }
     if (message?.type === 'result' && turnActive) {
       turnActive = false;
       clearIdle();
@@ -213,6 +243,33 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
       finishing = finishing.then(() => ports.finishTurn(current, done)).catch(error => ports.log(`finishTurn: ${String(error)}`));
     }
   };
+
+  const TASK_DONE = new Set(['completed', 'failed', 'stopped', 'killed', 'cancelled', 'canceled', 'error']);
+  function trackTasks(message: Record<string, unknown> | null): void {
+    if (!message) return;
+    if (message.type === 'system') {
+      const id = typeof message.task_id === 'string' ? message.task_id : null;
+      if (!id) return;
+      const patch = (message.patch && typeof message.patch === 'object' ? message.patch : {}) as Record<string, unknown>;
+      const status = typeof message.status === 'string' ? message.status : typeof patch.status === 'string' ? patch.status : null;
+      if (message.subtype === 'task_started') {
+        tasks.set(id, ports.now());
+        clearRelease();
+        ports.log(`background task ${id} started (${tasks.size} идёт)`);
+      } else if ((message.subtype === 'task_notification' || message.subtype === 'task_updated') && status && TASK_DONE.has(status) && tasks.delete(id)) {
+        ports.log(`background task ${id} ${status} (${tasks.size} идёт)`);
+        if (!turnActive) queueMicrotask(armRelease);
+      }
+      return;
+    }
+    // CLI сам начал ход (уведомление о задаче пришло после конца хода моста).
+    if (!turnActive && sawUser && !selfTurn && (message.type === 'assistant' || message.type === 'stream_event')) {
+      selfTurn = true;
+      selfTurnWait = new Promise<void>(resolve => { selfTurnDone = resolve; });
+      clearRelease();
+      ports.log('CLI ведёт ход сам (фоновая задача) — CLI не отпускается до его конца');
+    }
+  }
 
   // Новый процесс на другой ступени продолжает сессию через --resume, только если
   // прежний процесс её записал; иначе — тот же ID как новая сессия.
@@ -228,6 +285,8 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
       if (c !== child) return;
       childExit = result;
       clearRelease();
+      tasks.clear();
+      if (selfTurn) { selfTurn = false; selfTurnDone?.(); selfTurnDone = null; selfTurnWait = null; }
       if (released === c) { ports.log('stage CLI released between turns'); return; }
       ports.log(`stage CLI exited code=${result.code}${result.transportError ? ` (${result.transportError})` : ''}`);
       // Посреди хода — ход завершается ошибкой сразу, а не висит.
@@ -271,6 +330,12 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
       sawUser = true;
       out = out.then(() => { for (const l of lines) ports.stdout.write(`${l}\n`); });
       continue;
+    }
+    if (isUser && !turnActive && selfTurn && selfTurnWait) {
+      // CLI ещё ведёт свой ход по фоновой задаче: сообщение — после него, на той же ступени
+      // (смена ступени посреди хода CLI оборвала бы его). Не дольше сторожа хода.
+      ports.log('сообщение ждёт конца хода CLI по фоновой задаче');
+      await Promise.race([selfTurnWait, new Promise<void>(resolve => { const t = setTimeout(resolve, idleMs); (t as { unref?: () => void }).unref?.(); })]);
     }
     if (isUser && !turnActive) {
       clearRelease();
