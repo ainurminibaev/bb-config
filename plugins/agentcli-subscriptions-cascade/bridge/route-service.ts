@@ -9,7 +9,8 @@ import { BUSY_RECHECK_MS, explainNoSteps, resolveProfile, explainProfile, parent
 import { previewText, usesTestQuota } from '../profiles.ts';
 import { buildHandoff, type ThreadEventRow } from './handoff.ts';
 import { briefRefusalText, briefTextFromEvents, checkBrief, BRIEF_PART_TITLES } from '../brief.ts';
-import { SUBTHREAD_CODEX_ID } from '../contract.ts';
+import { AUTO_MODEL_ID, MODEL_ID_PREFIX, SUBTHREAD_CODEX_ID } from '../contract.ts';
+import { effectiveModelId } from '../models.ts';
 import { MAX_ANCESTOR_DEPTH, SUBTHREAD_FALLBACK_PROFILE_ID, codexFallbackReason, codexUnavailableLine, descendantsRule, inheritsRule, isSubthreadCodexId, type DescendantsRule } from '../subthreads.ts';
 import { subthreadsPreview } from '../profiles.ts';
 import type {
@@ -166,6 +167,34 @@ export const REFUSAL_ACTIONS = 'Что сделать: повторите ход
  */
 export function cascadeEnv(profileId: string, stepId: string): Record<string, string> {
   return { BB_CASCADE_PROFILE: profileId, BB_CASCADE_STEP: stepId };
+}
+
+/**
+ * 0.3.9: профиль хода не найден в настройках (BB подставил в модель треда ID модели CLI,
+ * пока список моделей каскада был недоступен, или профиль удалён). Подбор вместо отказа:
+ * 1) ID совпадает со строкой таблицы моделей (ключ, имя или ID модели на машине) —
+ *    «только эта модель» (`m:<ключ>`) на любой ступени её провайдера;
+ * 2) сохранённый профиль треда, если он разрешается;
+ * 3) «Авто» (или первый включённый профиль).
+ * Строка в ленте объясняет подмену. null-подмены нет — профиль разрешается как есть.
+ */
+export function recoverProfile(config: CascadeConfig, accounts: readonly DiscoveredAccount[], requested: string, storedProfileId: string | null): { profileId: string; note: string | null } {
+  if (!unknownProfile(config, requested)) return { profileId: requested, note: null };
+  const want = requested.trim().toLowerCase();
+  const rows = config.models.filter(r => r.enabled && (
+    r.key.toLowerCase() === want || r.displayName.toLowerCase() === want
+    || Object.values(r.cells).some(c => c.modelId?.toLowerCase() === want)
+    || config.machines.some(m => effectiveModelId(r, m.hostId, accounts.find(a => a.hostId === m.hostId && a.providerId === r.providerId))?.toLowerCase() === want)));
+  if (rows.length === 1) {
+    const row = rows[0]!;
+    return { profileId: `${MODEL_ID_PREFIX}${row.key}`, note: `Модель треда «${requested}» — не профиль каскада: ход «только ${row.displayName}» на ступенях ${row.providerId === 'codex' ? 'Codex' : row.providerId === 'claude-code' ? 'Claude' : row.providerId}. Выберите профиль каскада в списке моделей.` };
+  }
+  if (storedProfileId && storedProfileId !== requested && !unknownProfile(config, storedProfileId)) {
+    return { profileId: storedProfileId, note: `Профиль «${requested}» не найден — ход по прежнему профилю треда «${storedProfileId}».` };
+  }
+  const fallback = config.profiles.find(p => p.id === AUTO_MODEL_ID && p.enabled)?.id ?? config.profiles.find(p => p.enabled)?.id ?? null;
+  if (!fallback) return { profileId: requested, note: null };
+  return { profileId: fallback, note: `Профиль «${requested}» не найден — ход по «${config.profiles.find(p => p.id === fallback)?.name ?? fallback}». Выберите профиль каскада в списке моделей.` };
 }
 
 /** Профиль хода не разрешается в настройках (нет такого профиля и это не `pin:`/`m:`/синтетика). */
@@ -501,7 +530,10 @@ export function createRouteService(deps: RouteDeps): RouteService {
       const mark = (label: string) => { const t = performance.now(); marks.push(`${label} ${((t - lastMark) / 1000).toFixed(2)} с`); lastMark = t; };
       const flushMarks = (to: string) => { if (performance.now() - startMark > 1_000) deps.trace?.(`ход ${input.threadId} до подготовки (${to}): ${marks.join(', ')}`); };
       mark('состояние');
-      const requestedProfileId = input.requestedModel ?? stored.profileId ?? deps.profileHint?.(input.threadId) ?? config.profiles.find(p => p.enabled)?.id ?? 'auto';
+      // 0.3.9: в модели треда оказался ID модели CLI или неизвестный профиль — подбор вместо отказа.
+      const recovered = recoverProfile(config, deps.accounts(), input.requestedModel ?? stored.profileId ?? deps.profileHint?.(input.threadId) ?? config.profiles.find(p => p.enabled)?.id ?? 'auto', stored.profileId);
+      const requestedProfileId = recovered.profileId;
+      if (recovered.note) settingsNote = settingsNote ? `${settingsNote} ${recovered.note}` : recovered.note;
       const projectId = input.projectId ?? info?.projectId ?? stored.engine.projectId;
       const bridgeHost = info?.hostId ?? stored.engine.homeHostId;
 
@@ -1012,7 +1044,7 @@ export function createRouteService(deps: RouteDeps): RouteService {
     const [config, stored] = await Promise.all([deps.loadConfig(), deps.load(threadId).catch(() => undefined)]);
     if (!stored) return null;
     // Codex-подтред (0.3.5): схема по «Подтред · Codex» без S11, как у его маршрута.
-    const profileId = stored.inherited ? stored.inherited.profileId : stored.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto';
+    const profileId = stored.inherited ? stored.inherited.profileId : recoverProfile(config, deps.accounts(), stored.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto', null).profileId;
     const now = deps.now();
     const explained = explainProfile({ config, requestedModel: profileId, accounts: deps.accounts(), thread: stored.engine, health: withObserved(deps.health(config, threadId), stored.observed, now), now, ignoreHome: isSubthreadCodexId(profileId) });
     const subthreads = subthreadsPreview(config, profileId, deps.accounts(), withObserved(deps.health(config, threadId), null, now), now);
@@ -1050,7 +1082,7 @@ export function createRouteService(deps: RouteDeps): RouteService {
       const { decision } = selectWithFallback({
         config, accounts: deps.accounts(),
         thread: { ...stored.engine, turnId: `retry-${now}`, lastRunAt: stored.lastRun?.at ?? null }, health: withObserved(deps.health(config, threadId), stored.observed, now, stored.modelBlocks), now,
-      }, stored.inherited ? stored.inherited.profileId : stored.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto', stored.inherited ?? null);
+      }, stored.inherited ? stored.inherited.profileId : recoverProfile(config, deps.accounts(), stored.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto', null).profileId, stored.inherited ?? null);
       switch (decision.kind) {
         case 'run':
         case 'confirm': return { kind: 'ready' };
@@ -1130,7 +1162,7 @@ export function createRouteService(deps: RouteDeps): RouteService {
     const [info, stored] = await Promise.all([deps.threadInfo(input.threadId).catch(() => null), deps.load(input.threadId).catch(() => undefined)]);
     const state = stored ?? freshState(input.threadId, info);
     const projectId = input.projectId ?? info?.projectId ?? state.engine.projectId;
-    const requested = input.requestedModel ?? state.profileId ?? deps.profileHint?.(input.threadId) ?? config.profiles.find(p => p.enabled)?.id ?? 'auto';
+    const requested = recoverProfile(config, deps.accounts(), input.requestedModel ?? state.profileId ?? deps.profileHint?.(input.threadId) ?? config.profiles.find(p => p.enabled)?.id ?? 'auto', state.profileId).profileId;
     // Правило потомков предка (0.3.5) — тот же выбор, что у routeTurn.
     const rule = await inheritedRule(config, input.threadId, info, input.requestedModel ?? null);
     const profileId = rule ? rule.profileId : requested;
