@@ -842,6 +842,39 @@ SSH-переход используется только для установк
 целевой машине. Маршруты и идентификаторы сохранены только в приватном снимке.
 На VPS с небольшим объёмом RAM проверить swap перед установкой CLI и запуском агентов.
 
+### Машина на чужом рабочем сервере под отдельным пользователем
+
+Если на сервере уже работают продукты (например, прод-сервис в Docker), BB
+ставится под отдельным непривилегированным пользователем, а не под root:
+
+1. Под root: `useradd -m -s /bin/bash bb`, `chmod 700 /home/bb`,
+   `loginctl enable-linger bb` (служба живёт без входа). Пользователь не
+   добавляется в `sudo` и `docker`: группа docker равна root. Проверить, что
+   ему не читаются каталоги и секреты продуктов (`sudo -u bb test -r …`).
+   Для обслуживания по SSH — `authorized_keys` в `/home/bb/.ssh`.
+2. Каталог для checkout'ов каскада: `mkdir -p /opt/bbfs && chown bb:bb /opt/bbfs`.
+3. Нет swap — добавить файл (`fallocate -l 4G /swapfile`, `mkswap`, `swapon`,
+   строка в `/etc/fstab`) и `vm.swappiness=10`, чтобы нехватка памяти у
+   агентов не приводила к убийству процессов продукта.
+4. Под `bb`, без sudo: Node.js из официального архива nodejs.org в
+   `~/.local/node` со сверкой `SHASUMS256.txt`, ссылки в `~/.local/bin`,
+   `PATH` в `~/.profile` и `~/.bashrc`; `npm config set prefix ~/.local/node`.
+5. Claude Code: если `claude.ai/install.sh` недоступен из страны сервера,
+   скачать нативную сборку из официального хранилища релизов
+   (`…/claude-code-releases/<version>/<platform>/claude`), сверить sha256 с
+   `manifest.json` той же версии и выполнить `./claude install stable`.
+   Ключ стороннего шлюза — в `~/.claude/settings.json` с правами 600.
+6. Codex: `npm install -g @openai/codex`. Если OpenAI отвечает 403, сначала
+   маршрут `bb proxy-manager check|prepare|apply <machine> <proxy-id>`, затем
+   вход `codex login --device-auth` с окружением из `~/.codex/.env`; код
+   вводится в браузере владельца.
+7. Регистрация: `bb machine create --provider manual` (заявка живёт около
+   15 минут), команда подключения из интерфейса или SDK
+   `hosts.experimental_getEnrollmentCommand`, выполнить её под `bb`, затем
+   `bb machine rename`. Команду и ключ не сохранять и не выводить в чат.
+
+Имя машины, адрес и выбранный прокси — только в приватном снимке.
+
 ## Имена фоновых служб macOS
 
 `scripts/macos_named_services.py` оформляет описательные запускатели для
