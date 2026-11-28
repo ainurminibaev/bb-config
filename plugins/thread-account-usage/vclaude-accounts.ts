@@ -76,7 +76,7 @@ export function vclaudeGroups(routes: ReadonlyMap<string, VClaudeRoute>, targetH
   const matched = email ? keyed.find(id => labels[id]?.trim().toLowerCase() === email) : undefined;
   const cabinetId = matched ?? (keyed.length === 1 ? keyed[0] : null);
   const name = (id: string | null, cabinet: boolean) =>
-    (id ? labels[id] : undefined) ?? (cabinet ? options.cabinetEmail?.trim() || null : null) ?? (id ? `VClaude · ${id}` : 'VClaude');
+    (id ? labels[id] : undefined) ?? (cabinet ? options.cabinetEmail?.trim() || null : null) ?? (id ? `VClaude · ${id}` : 'VClaude · ключ не найден');
   const pick = (test: (keyId: string | null) => boolean) => {
     const hit = routed.filter(h => test(h.keyId));
     return { hostIds: hit.map(h => h.id), hostNames: hit.map(h => h.name) };

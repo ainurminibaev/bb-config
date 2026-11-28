@@ -25,7 +25,7 @@ test('one account on two machines: one row with the cabinet email and both machi
 
 test('older hosts without a key id stay under the cabinet row, as before', () => {
   const groups = vclaudeGroups(routes([['h1', 'Mac', gateway, undefined]]), gateway, [{ id: 'h1', name: 'Mac · new name' }], {});
-  assert.deepEqual(groups.map(g => [g.key, g.label, g.hostNames]), [['vclaude', 'VClaude', ['Mac · new name']]]);
+  assert.deepEqual(groups.map(g => [g.key, g.label, g.hostNames]), [['vclaude', 'VClaude · ключ не найден', ['Mac · new name']]]);
 });
 
 test('two accounts: the label equal to the cabinet email picks the cabinet group, the other is its own row', () => {
