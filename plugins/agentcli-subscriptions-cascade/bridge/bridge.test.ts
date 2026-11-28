@@ -308,7 +308,7 @@ test('маршрут S9: конфликт файлов — ход не пере�
   assert.equal(fx.store.get('thr_1'), undefined);
 });
 
-test('маршрут: всё исчерпано — ожидание сброса; проба моста — там же, где прошлый ход', async () => {
+test('маршрут: всё исчерпано — ожидание сброса; проба моста — на машине моста, не на ступени прошлого хода', async () => {
   const all = { [TRU_MAX]: exhausted(Date.parse('2026-11-27T14:00:00Z')), [MAC_GW]: exhausted(null), [UA_PRO]: exhausted(null), [MAC_CODEX]: exhausted(null), [UA_CODEX]: exhausted(null) };
   const fx = routeFixture({ health: all });
   const r = await fx.routes.routeTurn(turn);
@@ -318,7 +318,8 @@ test('маршрут: всё исчерпано — ожидание сброс�
   const first = await fx2.routes.routeTurn(turn);
   assert.ok(first.action === 'run' && first.hostId === UA);
   const probe = await fx2.routes.routeTurn({ ...turn, probe: true });
-  assert.ok(probe.action === 'run' && probe.hostId === UA && probe.notes.length === 0);
+  // Прошлый ход на UA, мост на Tru: проба локально, без модели UA, без синхронизации.
+  assert.ok(probe.action === 'run' && probe.local && probe.hostId === TRU && probe.modelId === null && probe.cwd === null && probe.notes.length === 0, JSON.stringify(probe));
   assert.deepEqual(fx2.syncCalls, [`prepare:${UA}`]);
 });
 

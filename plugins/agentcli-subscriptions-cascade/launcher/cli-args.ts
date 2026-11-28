@@ -118,3 +118,21 @@ export function remoteEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   }
   return out;
 }
+
+/**
+ * Аргументы пробы моста на машине моста: если файла сессии здесь нет (прошлые
+ * ходы шли на чужой машине), проба идёт без продолжения сессии (`--resume`,
+ * `--fork-session` убираются), иначе CLI ответит «No conversation found».
+ */
+export function probeArgs(args: readonly string[], exists: (sessionId: string) => boolean): string[] {
+  const resume = flagValue(args, '--resume');
+  if (resume === null || exists(resume)) return [...args];
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    if (arg === '--resume') { i += 1; continue; }
+    if (arg.startsWith('--resume=') || arg === '--fork-session') continue;
+    out.push(arg);
+  }
+  return out;
+}

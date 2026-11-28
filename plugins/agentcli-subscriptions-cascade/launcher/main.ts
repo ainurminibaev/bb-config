@@ -19,7 +19,7 @@ import {
 } from '../bridge/route-contract.ts';
 import { parseBridgeAnswer, resolveRoute, type BridgeAnswer } from './confirm.ts';
 import { SANDBOX_ARGS, startCodexRelay } from './codex-relay.ts';
-import { claudeSessionInfo, claudeSessionPath, flagValue, remoteArgs, remoteEnv, replaceModel, resumeOrStart } from './cli-args.ts';
+import { claudeSessionInfo, claudeSessionPath, flagValue, probeArgs, remoteArgs, remoteEnv, replaceModel, resumeOrStart } from './cli-args.ts';
 import { spawn } from 'node:child_process';
 import { resolveRealExecutable, runLocal } from './local.ts';
 import { RemoteRunError, runRemote } from './remote.ts';
@@ -332,7 +332,7 @@ export async function runLauncher(io: LauncherIo): Promise<number> {
   // Сессия считается созданной, только если CLI её записал: ход, упавший до
   // запуска CLI, оставляет штатному мосту `--resume` на несуществующую сессию.
   // Файлы сессий возвращаются на машину моста после каждого хода на чужой машине.
-  const sessionArgs = probe ? args : resumeOrStart(args, id => localSessionFile(io, id, route.action === 'run' ? route.cwd : null) !== null);
+  const sessionArgs = probe ? probeArgs(args, id => localSessionFile(io, id, null) !== null) : resumeOrStart(args, id => localSessionFile(io, id, route.action === 'run' ? route.cwd : null) !== null);
   if (sessionArgs.join('\0') !== args.join('\0')) logLine(io, `сессии ${session.sessionId} ещё нет — старт с --session-id вместо --resume`);
 
 

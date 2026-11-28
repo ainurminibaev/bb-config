@@ -291,12 +291,15 @@ export function createRouteService(deps: RouteDeps): RouteService {
       const projectId = input.projectId ?? info?.projectId ?? stored.engine.projectId;
       const bridgeHost = info?.hostId ?? stored.engine.homeHostId;
 
-      // Проба моста (без сохранения сессии): там же, где прошлый ход; без синхронизации.
-      if (input.probe && stored.lastRun) {
+      // Проба моста (model/list, контекст; без сохранения сессии) — всегда на машине моста:
+      // на чужой машине у неё нет папки (ENOENT), и она не должна трогать процесс сессии
+      // ступени. Модель прошлого хода — только если он был здесь же (у чужой машины свои ID).
+      if (input.probe) {
         const last = stored.lastRun;
+        const here = last !== null && bridgeHost !== null && last.hostId === bridgeHost;
         return {
-          action: 'run', stepId: last.stepId, hostId: last.hostId, providerId: last.providerId, modelId: last.modelId,
-          local: bridgeHost !== null && last.hostId === bridgeHost, cwd: null, env: {}, stage: stageLabel(config, last), notes: [],
+          action: 'run', stepId: last?.stepId ?? '', hostId: bridgeHost ?? last?.hostId ?? '', providerId: last?.providerId ?? input.provider,
+          modelId: here ? last!.modelId : null, local: true, cwd: null, env: {}, stage: { machine: bridgeHost ? machineLabel(config, bridgeHost) : 'машина треда' }, notes: [],
         };
       }
 

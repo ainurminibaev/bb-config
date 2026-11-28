@@ -95,6 +95,8 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
    * `first` тогда — процесс машины моста только для начала сессии.
    */
   routeFirst?: boolean;
+  /** Сторож хода: нет событий от CLI столько — ход завершается ошибкой с автоповтором. По умолчанию 10 мин. */
+  idleTimeoutMs?: number;
 } = {}): Promise<number> {
   let route = first;
   let routeFirst = options.routeFirst ?? false;
@@ -107,11 +109,43 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
   let limits: LimitObservation[] = [];
   let finishing: Promise<void> = Promise.resolve();
   let switching: Promise<void> = Promise.resolve();
+  const idleMs = options.idleTimeoutMs ?? 10 * 60_000;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearIdle = () => { if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; } };
+  const armIdle = () => {
+    clearIdle();
+    if (!turnActive) return;
+    idleTimer = setTimeout(() => {
+      ports.log(`watchdog: нет событий от CLI ${Math.round(idleMs / 1000)} с — ход прерван`);
+      abortTurn(`нет событий от CLI ступени ${route.stage.machine} ${Math.round(idleMs / 60_000) || 1} мин`);
+      child.kill();
+    }, idleMs);
+    (idleTimer as { unref?: () => void }).unref?.();
+  };
+
+  /**
+   * Ход не может закончиться сам (CLI ступени умер, канал оборвался, сторож): мост
+   * получает ошибку хода в штатной форме (перегрузка → автоповтор provider-retry),
+   * сервер — итог с причиной. Следующий ход поднимет CLI заново (`--resume`).
+   */
+  function abortTurn(reason: string): void {
+    if (!turnActive) return;
+    turnActive = false;
+    clearIdle();
+    const message = `Ход прерван: Каскад подписок → ${route.stage.machine}: ${reason}. Ход повторится автоматически.`;
+    const lines = syntheticRefusal('overload', message, sessionId, ports.now());
+    out = out.then(() => { for (const l of lines) ports.stdout.write(`${l}\n`); });
+    const done = { exitCode: null, limits, transportError: reason, durationMs: ports.now() - turnStartedAt };
+    limits = [];
+    const current = route;
+    finishing = finishing.then(() => ports.finishTurn(current, done)).catch(error => ports.log(`finishTurn: ${String(error)}`));
+  }
 
   // Вывод мосту идёт по цепочке: конец хода с исчерпанным лимитом задерживается,
   // пока сервер не отметит ступень (иначе provider-retry повторит ход на ней же).
   let out: Promise<void> = Promise.resolve();
   const onLine = (line: string) => {
+    armIdle();
     const message = parse(line);
     if (message?.type === 'control_response') {
       const id = requestIdOf(message);
@@ -136,6 +170,7 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
     }
     if (message?.type === 'result' && turnActive) {
       turnActive = false;
+      clearIdle();
       const done = { exitCode: 0, limits, transportError: null, durationMs: ports.now() - turnStartedAt };
       limits = [];
       const current = route;
@@ -152,7 +187,15 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
   };
   let child = ports.start(route, argsFor(route, false), onLine);
   let childExit: { code: number; transportError: string | null } | null = null;
-  const watchChild = (c: StageChild) => { void c.done.then(result => { if (c === child) childExit = result; }); };
+  const watchChild = (c: StageChild) => {
+    void c.done.then(result => {
+      if (c !== child) return;
+      childExit = result;
+      ports.log(`stage CLI exited code=${result.code}${result.transportError ? ` (${result.transportError})` : ''}`);
+      // Посреди хода — ход завершается ошибкой сразу, а не висит.
+      abortTurn(result.transportError ? `связь с машиной ступени: ${result.transportError}` : `CLI ступени завершился (код ${result.code})`);
+    });
+  };
   watchChild(child);
 
   async function switchTo(next: RunRoute): Promise<boolean> {
@@ -215,21 +258,30 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
           await child.done;
           return next.retryable ? 75 : 1;
         }
-        if (!sameStage(route, next)) {
+        if (!sameStage(route, next) || childExit) {
+          // Другая ступень или процесс прежней умер — новый процесс продолжает сессию (--resume).
+          if (childExit) ports.log(`stage CLI is gone — restarting on ${next.hostId}/${next.stepId}`);
           switching = switchTo(next).then(() => undefined);
           await switching;
         } else route = next;
+      } else if (childExit) {
+        ports.log('stage CLI is gone — restarting');
+        switching = switchTo(route).then(() => undefined);
+        await switching;
       }
       sawUser = true;
       turnActive = true;
       turnStartedAt = ports.now();
+      armIdle();
     }
     if (childExit) {
-      // CLI ступени завершился сам (сбой, обрыв канала): мост увидит выход процесса.
-      break;
+      // Процесса нет (служебная строка между ходами): строку некому отдать.
+      ports.log(`drop line for dead stage CLI: ${line.slice(0, 120)}`);
+      continue;
     }
     child.write(line);
   }
+  clearIdle();
   child.end();
   const result = childExit ?? await child.done;
   await out;
