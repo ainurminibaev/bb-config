@@ -177,3 +177,12 @@ test('other threads keep the usual path: no gateway', async () => {
   assert.equal(vclaudeThreadSnapshot(base, 'api.anthropic.com', 'vclaude.ru', null), null);
   assert.equal(vclaudeThreadSnapshot({ ...base, providerId: 'codex' }, 'vclaude.ru', 'vclaude.ru', null), null);
 });
+
+test('VClaude header names the machine\'s account: label, else cabinet email, else VClaude (0.3.2)', async () => {
+  const { vclaudeHeadline, vclaudeLabel } = await import('./logic.ts');
+  const meter = { total: 100, left: 50, tokensPerUnit: null };
+  assert.equal(vclaudeHeadline({ meter, windows: [], message: null, label: 'Рабочий', email: 'a@example.com' }).account, 'Рабочий');
+  assert.equal(vclaudeHeadline({ meter, windows: [], message: null, email: 'a@example.com' }).account, 'a@example.com');
+  assert.equal(vclaudeHeadline(null).account, 'VClaude');
+  assert.equal(vclaudeLabel({ label: ' ', email: null }), 'VClaude');
+});

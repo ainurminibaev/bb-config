@@ -33,6 +33,20 @@ BB's current host name. No machine shown: that machine runs an older bundle or
 has no such route. There is no separate VClaude provider — pick Claude Code on
 that machine.
 
+VClaude accounts (0.3.2): `claudeRoute` also returns `keyId` — the first 8 hex
+of sha256 of the gateway key (`ANTHROPIC_AUTH_TOKEN`, else `ANTHROPIC_API_KEY`,
+same sources as the base URL); the key never leaves the machine. Machines with
+one key are one row. The row is named by the `vclaudeLabels` setting (JSON
+`{"<ID>": "<label>"}`), else the cabinet email (from the cabinet answer if it
+has one, else the `email` of the server's `login.json`), else «VClaude · <ID>»,
+with the plugin's own VClaude mark. The server has one cabinet: its quota goes
+to the only key, or with several keys to the one whose label equals the cabinet
+email; other keys get rows without quota («Кабинет этого аккаунта не
+подключён»). Row keys: `vclaude` for the cabinet row, `vclaude:<ID>` for others.
+Machines without `keyId` (older host bundle) stay in the cabinet row. The
+tooltip of a VClaude row shows its ID — that is what an owner puts into
+`vclaudeLabels`.
+
 VClaude packages run as a queue: a bought package waits until the running one
 runs out of limit or term, then its own term starts. The row's date is the end
 of the whole queue (latest possible), its tick measures from the running
@@ -41,8 +55,9 @@ package's start; the tooltip and the VClaude tab list the queue. Do not read
 
 A Claude Code thread on a machine routed to VClaude (0.2.4) gets its header from
 the package, not from `usageLimits` (which answers `unauthenticated` there):
-the `thread` RPC returns `gateway: "vclaude"`, the account is the VClaude row,
-and the header reads «VClaude» with the package left, e.g. «380,73 млн из
+the `thread` RPC returns `gateway: "vclaude"`, the account is the VClaude row
+of the machine the turn runs on, and the header reads its label (0.3.2; before:
+«VClaude») with the package left, e.g. «380,73 млн из
 405 млн · до 27 дек» (level: ≤10 % left — warning, 0 — blocked). Click opens
 «Аккаунты и объёмы» on the VClaude tab (`/plugins/thread-account-usage/accounts/vclaude`).
 Cabinet unreadable — «VClaude · остаток неизвестен», never «Лимиты не

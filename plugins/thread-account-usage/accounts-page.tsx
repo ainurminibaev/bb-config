@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { experimental_useProviders, useBbNavigate, useRpc } from '@get-bb/plugin-sdk/app';
 import { ProviderMark } from './provider-icons';
 import type { Account, QuotaWindow, rpcContract } from './contract';
-import { ahead, isPackageAccount, pace, planLabel, wasteRisk } from './logic';
+import { ahead, isPackageAccount, pace, planLabel, vclaudeLabel, wasteRisk } from './logic';
 import { VClaudePanel } from './vclaude-panel';
 
 type Tab = 'overview' | 'volumes' | 'history' | 'vclaude';
@@ -16,7 +16,7 @@ type Sort = 'load' | 'reset' | 'provider';
 const tag: Record<string, true> = { 'acp-antigravity-acp': true, 'acp-gemini-antig': true };
 const confidence: Record<string, string> = { official: 'официально', measured: 'замер', estimate: 'оценка', none: 'нет данных' };
 const pct = (v: number) => `${Math.round(v)}%`;
-const name = (a: Account) => a.providerId === 'vclaude' ? 'VClaude' : `${a.providerName} · ${a.email?.split('@')[0] ?? '—'}`;
+const name = (a: Account) => a.providerId === 'vclaude' ? vclaudeLabel(a) : `${a.providerName} · ${a.email?.split('@')[0] ?? '—'}`;
 const tokens = (v: number) => v >= 1e9 ? `${(v / 1e9).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} млрд`
   : v >= 1e6 ? `${(v / 1e6).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} млн` : `${Math.round(v / 1e3)} тыс.`;
 const money = (v: number) => `$${v < 10 ? v.toLocaleString('en-US', { maximumFractionDigits: 2 }) : Math.round(v).toLocaleString('en-US')}`;

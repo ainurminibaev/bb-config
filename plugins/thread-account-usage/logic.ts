@@ -239,13 +239,18 @@ export function unavailableVClaude(hostId: string | null, hostName: string | nul
     email: null, plan: null, status: 'unavailable', message: 'Данные кабинета VClaude недоступны',
     fetchedAt: null, windows: [], resetCount: null };
 }
+/** Подпись строки VClaude: ручная метка, почта кабинета, иначе «VClaude». */
+export const vclaudeLabel = (account: Partial<Pick<Account, 'label' | 'email'>> | null | undefined) =>
+  account?.label?.trim() || account?.email?.trim() || 'VClaude';
 /** Thread header for a VClaude thread: the package left instead of quota rings. */
 export type GatewayHeadline = { account: string; amount: string; until: string; text: string;
   level: 'normal' | 'warning' | 'blocked' | null; title: string };
-export function vclaudeHeadline(account: Pick<Account, 'meter' | 'windows' | 'message'> | null | undefined): GatewayHeadline {
+export function vclaudeHeadline(account: (Pick<Account, 'meter' | 'windows' | 'message'> & Partial<Pick<Account, 'label' | 'email'>>) | null | undefined): GatewayHeadline {
+  // Подпись аккаунта VClaude машины треда (0.3.2): метка или почта кабинета.
+  const name = vclaudeLabel(account);
   const meter = account?.meter;
   if (!meter || !(meter.total > 0) || !Number.isFinite(meter.left)) {
-    return { account: 'VClaude', amount: 'остаток неизвестен', until: '', text: 'остаток неизвестен', level: null,
+    return { account: name, amount: 'остаток неизвестен', until: '', text: 'остаток неизвестен', level: null,
       title: account?.message ?? 'Данные кабинета VClaude недоступны' };
   }
   const left = Math.max(0, meter.left);
@@ -255,6 +260,6 @@ export function vclaudeHeadline(account: Pick<Account, 'meter' | 'windows' | 'me
     ? `до ${new Date(end).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', timeZone: 'Europe/Moscow' }).replace(/\.$/, '')}` : '';
   const amount = `${millions(left)} из ${millions(meter.total)}`;
   const text = until ? `${amount} · ${until}` : amount;
-  return { account: 'VClaude', amount, until, text, level: share <= 0 ? 'blocked' : share <= 10 ? 'warning' : 'normal',
+  return { account: name, amount, until, text, level: share <= 0 ? 'blocked' : share <= 10 ? 'warning' : 'normal',
     title: `Пакет VClaude: осталось ${Math.round(share)}% — ${text}` };
 }

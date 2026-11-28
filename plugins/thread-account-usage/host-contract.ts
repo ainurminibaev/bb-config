@@ -20,6 +20,7 @@ export const hostContract = defineRpcContract({
   antigravity: { input: z.object({ refresh: z.boolean().default(false) }), output: z.object({ google: agAccount.nullable(), antig: agAccount.nullable() }) },
   codexVolume: { input: z.null(), output: z.array(codexWindowVolume) },
   // Host name of Claude Code's ANTHROPIC_BASE_URL on this machine (no tokens): which package it spends.
-  claudeRoute: { input: z.null(), output: z.object({ baseHost: z.string().nullable() }) },
+  // keyId — sha256 ключа шлюза, первые 8 hex (аккаунт VClaude машины); сам ключ не передаётся.
+  claudeRoute: { input: z.null(), output: z.object({ baseHost: z.string().nullable(), keyId: z.string().nullable().optional() }) },
   claudeProfile: { input: z.null(), output: z.object({ email: z.string().nullable(), organizationType: z.string().nullable(), rateLimitTier: z.string().nullable() }) },
 });

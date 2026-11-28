@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { definePluginApp, experimental_useProviders, useBbContext, useBbNavigate, useRpc, useSettings, useSidebarSplitLayout } from '@get-bb/plugin-sdk/app';
 import type { rpcContract, Account, Snapshot, QuotaWindow } from './contract';
-import { accountExhausted, ahead, appliesToModel, isPackageAccount, pace, planLabel, rowLead, vclaudeHeadline, wasteRisk, windowRows, type WindowRow } from './logic';
+import { accountExhausted, ahead, vclaudeLabel, appliesToModel, isPackageAccount, pace, planLabel, rowLead, vclaudeHeadline, wasteRisk, windowRows, type WindowRow } from './logic';
 import { AccountsPage } from './accounts-page';
-import { inlineMarks } from './provider-icons';
+import { accountMarks, inlineMarks, markOf, VClaudeIcon } from './provider-icons';
 import './app.css';
 
 type Filter = 'all' | 'five-hour' | 'weekly' | 'model' | 'package';
@@ -25,7 +25,7 @@ const filters: { id: Filter; label: string }[] = [
 // ACP accounts carry their BB provider name (displayName), e.g. «Прямой Gemini».
 const tag: Record<string, true> = { 'acp-antigravity-acp': true, 'acp-gemini-antig': true };
 // Antig's mark is drawn inline (provider-icons.tsx), here and in BB's provider pickers.
-const withAliases = (logos: Record<string, string | null>): Record<string, string | null> => ({ ...logos, ...Object.fromEntries(Object.keys(inlineMarks).map(id => [id, `inline:${id}`])) });
+const withAliases = (logos: Record<string, string | null>): Record<string, string | null> => ({ ...logos, ...Object.fromEntries([...Object.keys(inlineMarks), ...Object.keys(accountMarks)].map(id => [id, `inline:${id}`])) });
 const scopeShort = (scope: string[]) => scope.includes('gemini') ? 'Gemini' : 'Claude';
 const short = (w: QuotaWindow) => w.scope?.length ? `${scopeShort(w.scope)} ${w.kind === 'five-hour' ? '5ч' : w.kind === 'weekly' ? '7д' : ''}`.trim() : w.kind === 'five-hour' ? '5ч' : w.kind === 'weekly' ? 'Нед' : w.label;
 const level = (percent: number) => percent >= 100 ? 'blocked' : percent >= 90 ? 'warning' : 'normal';
@@ -55,7 +55,7 @@ function quotaDeadline(window: QuotaWindow, now: number) {
 // always black and vanishes on a dark theme. Paint them as a mask in the text colour.
 function AgentLogo({ src, alt, className }: { src: string; alt?: string; className: string }) {
   // "inline:<providerId>": a mark this plugin draws itself (provider-icons.tsx).
-  const Mark = src.startsWith('inline:') ? inlineMarks[src.slice(7)] : undefined;
+  const Mark = src.startsWith('inline:') ? markOf(src.slice(7)) : undefined;
   if (Mark) return <span className={`tau-agent-logo-inline ${className}`} role="img" aria-label={alt ?? ''}><Mark /></span>;
   const url = `url("${src.replace(/"/g, '%22')}")`;
   return <span className={`tau-agent-logo ${className}`} role="img" aria-label={alt ?? ''} style={{ WebkitMaskImage: url, maskImage: url }}/>;
@@ -132,8 +132,8 @@ function PairRow({ r, a, now }: { r: WindowRow; a: Account; now: number }) {
 function AccountRow({ a, filter, now, logos, onDetails }: { a: Account; filter: Filter; now: number; logos: Record<string,string|null>; onDetails: (key:string)=>void }) {
   const windows = a.windows.filter(w => matches(w, filter));
   return <section className="tau-compact-row" data-stale={a.status!=='ok'}>
-    <div className="tau-row-identity" title={[a.email ?? a.providerName, a.hostNames.join(', '), a.note, a.message].filter(Boolean).join('\n')}>
-      <strong>{logos[a.providerId]&&<AgentLogo className="tau-grid-logo" src={logos[a.providerId]!} alt={a.providerName}/>}<span>{a.providerId === 'vclaude' ? a.providerName : `${tag[a.providerId] ? a.providerName + ' · ' : ''}${a.email?.split('@')[0] ?? 'Аккаунт неизвестен'}`}</span>{(a.resetCount??0)>0&&<span className="tau-row-reset" title={`Доступно сбросов лимита: ${a.resetCount}. Сброс обнуляет недельное окно Codex — им распоряжаетесь вы в Codex.`}>+{a.resetCount}</span>}</strong>
+    <div className="tau-row-identity" title={[a.providerId === 'vclaude' ? `${vclaudeLabel(a)}${a.accountId ? ` · ID ${a.accountId}` : ''}` : a.email ?? a.providerName, a.hostNames.join(', '), a.note, a.message].filter(Boolean).join('\n')}>
+      <strong>{logos[a.providerId]&&<AgentLogo className="tau-grid-logo" src={logos[a.providerId]!} alt={a.providerName}/>}<span>{a.providerId === 'vclaude' ? vclaudeLabel(a) : `${tag[a.providerId] ? a.providerName + ' · ' : ''}${a.email?.split('@')[0] ?? 'Аккаунт неизвестен'}`}</span>{(a.resetCount??0)>0&&<span className="tau-row-reset" title={`Доступно сбросов лимита: ${a.resetCount}. Сброс обнуляет недельное окно Codex — им распоряжаетесь вы в Codex.`}>+{a.resetCount}</span>}</strong>
       <small>{a.hostNames.map(n=>n.replace(/\s*[—–].*$/,'').trim()).join(' · ')}</small>
       {a.plan&&<small className="tau-plan" title="Тариф и цена в месяц (справочно)">{planLabel(a.providerId,a.plan)}</small>}
     </div>
@@ -291,7 +291,7 @@ function QuotaControl({ threadId, target }: { threadId: string | null; target?:H
         if(gateway){ pinnedRef.current=false; setOpen(false); setPinned(false); navigate.toPluginPanel('accounts', { subPath: 'vclaude' }); return; }
         positionPanel(); const next=!(open&&pinned);pinnedRef.current=next;setOpen(next);setPinned(next); }}>
       {threadId && mobile ? <span className="tau-mobile-quota"><QuotaGlyph windows={importantWindows} logo={logo} agent={account?.providerName??snapshot?.providerId} resets={account?.resetCount??0}/><span data-level={gateway?gateway.level??undefined:worst?level(worst.usedPercent):undefined}>{gateway?gateway.amount:worst?`${short(worst)} ${pct(worst.usedPercent)}`:loading?"…":"Лимиты"}</span></span> : threadId ? <><span className="tau-thread-composite"><QuotaGlyph windows={importantWindows} logo={logo} agent={account?.providerName??snapshot?.providerId} resets={account?.resetCount??0}/><span className="tau-thread-text">
-        <span className="tau-thread-owner" title={`${gateway?'VClaude':account?.email??'Аккаунт не подтверждён'} · ${snapshot?.hostName??''}`}><span>{accountName}</span><small>{snapshot?.hostName?.replace(/\s*[—–].*$/,'').trim()??'машина треда'}</small></span>
+        <span className="tau-thread-owner" title={`${gateway?`VClaude · ${gateway.account}${account?.accountId?` · ID ${account.accountId}`:''}`:account?.email??'Аккаунт не подтверждён'} · ${snapshot?.hostName??''}`}><span>{gateway&&<VClaudeIcon className="tau-owner-mark"/>}{accountName}</span><small>{snapshot?.hostName?.replace(/\s*[—–].*$/,'').trim()??'машина треда'}</small></span>
         {snapshot?.exhausted?<span className="tau-inline-legend tau-exhausted" title={snapshot.exhausted.detail}><strong>Исчерпан</strong><small>{snapshot.exhausted.title}</small></span>:gateway?<span className="tau-inline-legend tau-gateway"><span data-kind="other" data-level={gateway.level??undefined} title={gateway.title}><strong>{gateway.amount}</strong>{gateway.until&&<small>{gateway.until}</small>}</span></span>:worst?<span className="tau-inline-legend">{importantWindows.map(w=><span key={w.label} data-kind={w.kind} data-level={level(w.usedPercent)} title={`${w.label}: ${pct(w.usedPercent)} использовано. ${resetText(w.resetsAt,now).relative}. ${resetText(w.resetsAt,now).exact}`}><strong><span>{short(w)}</span> {pct(w.usedPercent)}</strong><small>{w.endsAt ? `до ${new Date(w.endsAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}` : <><span aria-hidden="true">↻ </span>{compactReset(w.resetsAt,now)}</>}</small></span>)}</span>:<span className="tau-missing">{loading?'…':'Лимиты не подтверждены'}</span>}
       </span></span>
         {(error || account?.status === 'stale') && <span className="tau-caution">!</span>}</>
@@ -315,7 +315,7 @@ function QuotaControl({ threadId, target }: { threadId: string | null; target?:H
       <div className="tau-panel-body">
         {error && <p className="tau-error" role="alert">{error}</p>}
         {view === 'thread' ? <>
-          {snapshot && <div className="tau-account-heading"><strong>{account?.email ?? (snapshot.gateway === 'vclaude' ? 'VClaude' : 'Аккаунт не подтверждён')}</strong>
+          {snapshot && <div className="tau-account-heading"><strong>{snapshot.gateway === 'vclaude' ? <><VClaudeIcon className="tau-owner-mark"/>{vclaudeLabel(account)}</> : account?.email ?? 'Аккаунт не подтверждён'}</strong>
             <small>{account?.providerName ?? snapshot.providerId} · {snapshot.hostName ?? 'Нет машины'}{snapshot.cascade ? ' · ступень каскада' : ''}{account?.plan ? ` · ${planLabel(account.providerId, account.plan)}` : ''}</small>
             {snapshot.model && <small>Модель запуска: {snapshot.model}</small>}{account?.note && <small>{account.note}</small>}</div>}
           {snapshot?.message && <p className="tau-empty">{snapshot.message}</p>}

@@ -33,9 +33,23 @@ export const inlineMarks: Record<string, ComponentType<{ className?: string }>> 
   'acp-gemini-antig': RussianGeminiIcon,
 };
 
+/**
+ * VClaude (0.3.2): своя простая отметка — «V» шлюза с точкой, не логотип сервиса
+ * (официального SVG нет). Монохром, currentColor.
+ */
+export const VClaudeIcon = ({ className }: { className?: string }) =>
+  <svg className={className} width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path d="M1.2 2.6h3.4L8 11.1l3.4-8.5h3.4L9.7 14.4H6.3Z" fill="currentColor" />
+    <circle cx="8" cy="3.6" r="1.6" fill="currentColor" />
+  </svg>;
+
+/** Marks of accounts that are not BB providers (VClaude rows); not registered as provider icons. */
+export const accountMarks: Record<string, ComponentType<{ className?: string }>> = { vclaude: VClaudeIcon };
+export const markOf = (id: string) => inlineMarks[id] ?? accountMarks[id];
+
 /** A provider's mark: inline for the ids above, else BB's masked logo asset. */
 export function ProviderMark({ providerId, src, className }: { providerId: string; src?: string | null; className?: string }) {
-  const Mark = inlineMarks[providerId];
+  const Mark = markOf(providerId);
   if (Mark) return <span className={`tau-agent-logo-inline ${className ?? ''}`} aria-hidden="true"><Mark /></span>;
   if (!src) return null;
   const url = `url("${src.replace(/"/g, '%22')}")`;
