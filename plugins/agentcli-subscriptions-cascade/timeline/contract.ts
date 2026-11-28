@@ -55,7 +55,7 @@ export const stepTimingSchema = z.object({
 });
 export type StepTiming = z.infer<typeof stepTimingSchema>;
 
-export const switchReasonSchema = z.enum(['limit', 'return', 'unavailable', 'auth', 'error', 'manual', 'start']);
+export const switchReasonSchema = z.enum(['limit', 'return', 'unavailable', 'auth', 'error', 'manual', 'start', 'removed']);
 export type SwitchReason = z.infer<typeof switchReasonSchema>;
 
 /** Переход между ступенями: одна строка на весь путь «выбор → пауза → синхронизация → сверка». */

@@ -15,7 +15,7 @@ import { newThreadIdFrom, parseAdoptArgs, runAdopt, type AdoptPorts, type AdoptT
 import { digestMap, nativeBridgeStatus } from './digests.ts';
 import { createTimelineFeed } from './feed.ts';
 import { artifactCacheRoot, loadNativeBridge, NativeLoadError, nativeLoadHint } from './native.ts';
-import { createRouteService, type RouteDeps, type StoredThreadState, type SyncOutcome } from './route-service.ts';
+import { createRouteService, rememberMachineLabels, type RouteDeps, type StoredThreadState, type SyncOutcome } from './route-service.ts';
 import { createCascadeBridge, launcherScript } from './wrapper.ts';
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -583,4 +583,20 @@ test('мост: BB_CODEX_BRIDGE_APP_SERVER_ARGS = ["app-server"] рядом с �
     if (saved.cmd === undefined) delete process.env.BB_CODEX_BRIDGE_APP_SERVER_COMMAND; else process.env.BB_CODEX_BRIDGE_APP_SERVER_COMMAND = saved.cmd;
     if (saved.args === undefined) delete process.env.BB_CODEX_BRIDGE_APP_SERVER_ARGS; else process.env.BB_CODEX_BRIDGE_APP_SERVER_ARGS = saved.args;
   }
+});
+
+test('0.3.3: прошлая машина убрана из каскада — «убран из каскада» с её именем, не ID и не «не на связи»', async () => {
+  const fx = routeFixture();
+  fx.store.set('thr_1', {
+    ...(await (async () => { await fx.routes.routeTurn(turn); return fx.store.get('thr_1')!; })()),
+    lastRun: { stepId: 'host_gone:claude-code:-', hostId: 'host_gone', providerId: 'claude-code', modelId: null, at: 1 },
+  });
+  rememberMachineLabels([{ hostId: 'host_gone', label: 'Старый Mac' }]);
+  const r = await fx.routes.routeTurn(turn);
+  assert.equal(r.action, 'run');
+  if (r.action !== 'run') return;
+  const sw = r.notes.find(n => n.kind === 'switch');
+  assert.ok(sw && sw.kind === 'switch');
+  assert.equal(sw.reason, 'removed');
+  assert.equal(sw.from?.machine, 'Старый Mac');
 });

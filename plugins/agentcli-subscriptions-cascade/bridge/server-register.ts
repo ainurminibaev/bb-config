@@ -22,7 +22,7 @@ import { digestMap, nativeBridgeStatus, type NativeBridgeStatus } from './digest
 import { executorRpcContract, PROVIDER_RETRY_AVAILABILITY, retryAvailabilityContract, type LimitObservation } from './route-contract.ts';
 import type { Consent } from '../consent.ts';
 import type { ThreadEventRow } from './handoff.ts';
-import { createRouteService, type RouteDeps, type RouteService, type StoredThreadState, type SyncPort, type ThreadInfo } from './route-service.ts';
+import { createRouteService, rememberMachineLabels, type RouteDeps, type RouteService, type StoredThreadState, type SyncPort, type ThreadInfo } from './route-service.ts';
 
 export interface ExecutorDeps {
   providerId: string;
@@ -247,6 +247,17 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     return seedFor(seedStore, threadId, nonce, Date.now());
   };
 
+  // Имена машин, убранных из каскада, — из памяти синхронизации (`sync:machine:*`), читается терпимо.
+  const loadRetiredLabels = async () => {
+    const keys = await bb.storage.kv.list('sync:machine:').catch(() => [] as string[]);
+    const found: { hostId: string; label: string }[] = [];
+    for (const key of keys) {
+      const m = await bb.storage.kv.get<{ hostId?: unknown; label?: unknown }>(key).catch(() => undefined);
+      if (typeof m?.hostId === 'string' && typeof m.label === 'string') found.push({ hostId: m.hostId, label: m.label });
+    }
+    rememberMachineLabels(found);
+  };
+  void loadRetiredLabels();
   const routes = createRouteService({
     adoptSeed,
     hostName: hostId => deps.hosts?.().find(h => h.hostId === hostId)?.name ?? null,

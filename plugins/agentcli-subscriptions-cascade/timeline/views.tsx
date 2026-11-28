@@ -41,6 +41,7 @@ export function RouteDetails({ payload, now, timeZone, renderScheme, schemeOpen:
     auth: `вход в CLI на ${payload.from?.machine ?? 'машине'} истёк`,
     error: 'сбой прежней ступени',
     manual: 'выбор владельца',
+    removed: `${payload.from?.machine ?? 'машина'} убрана из каскада — ход на следующей ступени`,
     start: 'первый ход треда на этой ступени',
   }[payload.reason];
 

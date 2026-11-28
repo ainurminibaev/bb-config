@@ -49,6 +49,7 @@ function switchHead(p: SwitchPayload): string {
     case 'auth': return `Вход на ${from} истёк`;
     case 'error': return `Сбой на ${from}`;
     case 'manual': return 'Выбор владельца';
+    case 'removed': return `${from} убран из каскада`;
     case 'start': return 'Ход';
   }
 }

@@ -148,8 +148,17 @@ const FALLBACK_REASONS = new Set(['error', 'not-configured', 'unsupported', 'syn
 
 export const PROVIDER_ID_LOCAL = 'subscriptions-cascade';
 
+/**
+ * Имена машин, которых уже нет в настройках (убраны из каскада): каскад помнит их
+ * по ходам (`sync:machine:*`). Без этого в ленте вместо «Mac» стоял ID хоста (0.3.3).
+ */
+const retiredLabels = new Map<string, string>();
+export function rememberMachineLabels(machines: readonly { hostId: string; label: string }[]): void {
+  for (const m of machines) if (m.hostId && m.label) retiredLabels.set(m.hostId, m.label);
+}
+
 function machineLabel(config: CascadeConfig, hostId: string): string {
-  return config.machines.find(m => m.hostId === hostId)?.label ?? hostId;
+  return config.machines.find(m => m.hostId === hostId)?.label ?? retiredLabels.get(hostId) ?? 'машина вне каскада';
 }
 
 function providerLabel(providerId: string): string {
@@ -525,7 +534,9 @@ export function createRouteService(deps: RouteDeps): RouteService {
       // не переход: иначе в ленте «Сбой на Mac → Mac» (S9, 0.2.13).
       const changed = prev !== null ? prev.stepId !== decision.stepId : decision.switched;
       const returning = decision.returning || (prev !== null && changed && order(decision.stepId) !== -1 && order(prev.stepId) !== -1 && order(decision.stepId) < order(prev.stepId));
-      const switchReason = skipped.length > 0 ? 'unavailable' : prev === null ? 'start' : returning ? 'return' : fromHealth?.exhausted ? 'limit' : fromHealth && !fromHealth.available ? 'unavailable' : 'error';
+      // Прошлой ступени или её машины больше нет в настройках — это не сбой и не «не на связи» (0.3.3).
+      const prevRemoved = prev !== null && (order(prev.stepId) === -1 || !config.machines.some(m => m.hostId === prev.hostId && m.enabled));
+      const switchReason = prevRemoved && changed ? 'removed' : skipped.length > 0 ? 'unavailable' : prev === null ? 'start' : returning ? 'return' : fromHealth?.exhausted ? 'limit' : fromHealth && !fromHealth.available ? 'unavailable' : 'error';
       if (changed || prev === null && !local || skipped.length > 0) {
         notes.push({ kind: 'switch', reason: switchReason, from: fromStage, to, resetAt: fromHealth?.resetsAt ?? null, stepId: decision.stepId });
       }

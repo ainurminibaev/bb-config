@@ -23,7 +23,7 @@ export type StageLabel = z.infer<typeof stageLabelSchema>;
  * строк, которую доводит параллельный тред.
  */
 export const routeNoteSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('switch'), reason: z.enum(['limit', 'return', 'unavailable', 'auth', 'error', 'manual', 'start']), from: stageLabelSchema.nullable(), to: stageLabelSchema, resetAt: z.number().nullable().optional(), stepId: text(120), window: text(60).optional() }),
+  z.object({ kind: z.literal('switch'), reason: z.enum(['limit', 'return', 'unavailable', 'auth', 'error', 'manual', 'start', 'removed']), from: stageLabelSchema.nullable(), to: stageLabelSchema, resetAt: z.number().nullable().optional(), stepId: text(120), window: text(60).optional() }),
   z.object({ kind: z.literal('sync'), from: text(80), to: text(80), ms: z.number().nonnegative(), ok: z.boolean(), detail: text(300).optional() }),
   z.object({ kind: z.literal('run'), stage: stageLabelSchema, stepId: text(120) }),
   z.object({ kind: z.literal('wait'), cause: z.enum(['reset', 'offline', 'recheck']), until: z.number().nullable().optional(), note: text(300).optional(), stepId: text(120).optional() }),
@@ -41,7 +41,7 @@ export const routeNoteSchema = z.discriminatedUnion('kind', [
    */
   z.object({
     kind: z.literal('prep'),
-    reason: z.enum(['limit', 'return', 'unavailable', 'auth', 'error', 'manual', 'start']),
+    reason: z.enum(['limit', 'return', 'unavailable', 'auth', 'error', 'manual', 'start', 'removed']),
     from: stageLabelSchema.nullable(), to: stageLabelSchema, stepId: text(120),
     phase: text(120), elapsedMs: z.number().nonnegative(),
     steps: z.array(z.object({ label: text(80), ms: z.number().nonnegative(), state: z.enum(['running', 'done', 'failed']) })).max(20),
