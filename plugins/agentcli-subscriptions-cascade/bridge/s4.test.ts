@@ -239,3 +239,39 @@ test('S5: возврат Codex → Claude — строка перехода «в
     assert.equal(sw.to.provider, 'Claude');
   }
 });
+
+test('S9: ход на той же ступени, что прошлый (подъём CLI после простоя), — без строки перехода «Сбой на Mac → Mac»', async () => {
+  const fx = fixture();
+  fx.setQuota('exhausted', T0 + 3 * 3_600_000);
+  const first = await fx.routes.routeTurn(turn);
+  assert.equal(stepOf(first), MAC_GW);
+  assert.ok(first.action === 'run' && first.notes.some(n => n.kind === 'switch'), 'первый переход Tru → Mac виден');
+  fx.tick(10 * 60_000);                              // простой: CLI отпущен
+  const again = await fx.routes.routeTurn(turn);
+  assert.equal(stepOf(again), MAC_GW);
+  assert.ok(again.action === 'run' && !again.notes.some(n => n.kind === 'switch'), 'та же ступень — не переход');
+});
+
+test('S9: подготовка хода на той же ступени (Mac → Mac) — строка обычного хода, а не «Сбой»', async () => {
+  let now = T0;
+  const store = new Map<string, StoredThreadState>();
+  let seen: unknown = null;
+  let routes!: ReturnType<typeof createRouteService>;
+  const cfg: CascadeConfig = { ...baseConfig(), policies: { ...baseConfig().policies, executionMode: 'provider' }, testQuota: { ...baseConfig().testQuota, threads: { thr_s4: { [TRU_MAX]: { state: 'exhausted', resetsAt: new Date(T0 + 3 * 3_600_000).toISOString() } } } } };
+  routes = createRouteService({
+    loadConfig: async () => cfg, accounts: () => ACCOUNTS,
+    health: (c, threadId) => quotaLookupFor(c, threadId, () => ok, now),
+    refreshLimits: async () => {}, observeLimit: () => {},
+    threadInfo: async () => ({ projectId: 'p', hostId: TRU, parentThreadId: null, providerId: 'subscriptions-cascade', isolatedWorkspace: true }),
+    load: async id => store.get(id), save: async (id, s) => { store.set(id, s); }, now: () => now,
+    sync: { prepareTurn: async () => { seen = routes.turnProgress('thr_s4'); return sync.prepareTurn(); }, finishTurn: sync.finishTurn },
+  });
+  const tw = { ...turn, cwd: '/data/wt/thr_s4-1/p' };
+  await routes.routeTurn(tw);
+  assert.equal((seen as { reason?: string } | null)?.reason, 'start', 'первый ход треда — «Ход на Mac»');
+  now += 10 * 60_000;
+  await routes.routeTurn(tw);
+  const second = seen as { reason?: string; from?: unknown } | null;
+  assert.equal(second?.reason, 'start', 'та же ступень — обычный ход');
+  assert.equal(second?.from ?? null, null, 'без «откуда»');
+});

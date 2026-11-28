@@ -396,7 +396,9 @@ export function createRouteService(deps: RouteDeps): RouteService {
       // увидеть ход другого провайдера, а строка перехода нужна при любой смене —
       // машины, провайдера (Codex → Claude) или аккаунта.
       const order = (stepId: string) => config.steps.findIndex(s => s.id === stepId);
-      const changed = decision.switched || (prev !== null && prev.stepId !== decision.stepId);
+      // Та же ступень, что в прошлом ходе (например, подъём CLI после простоя), —
+      // не переход: иначе в ленте «Сбой на Mac → Mac» (S9, 0.2.13).
+      const changed = prev !== null ? prev.stepId !== decision.stepId : decision.switched;
       const returning = decision.returning || (prev !== null && changed && order(decision.stepId) !== -1 && order(prev.stepId) !== -1 && order(decision.stepId) < order(prev.stepId));
       const switchReason = skipped.length > 0 ? 'unavailable' : prev === null ? 'start' : returning ? 'return' : fromHealth?.exhausted ? 'limit' : fromHealth && !fromHealth.available ? 'unavailable' : 'error';
       if (changed || prev === null && !local || skipped.length > 0) {
@@ -425,7 +427,10 @@ export function createRouteService(deps: RouteDeps): RouteService {
         }
         let consentNeeded: { machine: string; hostId: string; text: string } | null = null;
         // Строка подготовки в ленте: запускатель опрашивает turnProgress, пока ждёт решения.
-        prep.begin(input.threadId, { reason: switchReason, from: fromStage, to, stepId: decision.stepId });
+        // Та же ступень, что в прошлом ходе (подъём CLI после простоя), — строка
+        // обычного хода «Ход на Mac · …», а не перехода «Сбой на Mac → Mac» (S9, 0.2.13).
+        const prepAsSwitch = changed || prev === null || skipped.length > 0;
+        prep.begin(input.threadId, { reason: prepAsSwitch ? switchReason : 'start', from: prepAsSwitch ? fromStage : null, to, stepId: decision.stepId });
         const prepareOnce = () => deps.sync!.prepareTurn({ threadId: input.threadId, projectId, workspace }, { hostId: decision.hostId }, event => prep.event(input.threadId, event)).catch(error => ({
           ok: false as const, reason: 'error', message: error instanceof Error ? error.message : String(error), conflicts: [], timings: [], notices: [],
         }));
