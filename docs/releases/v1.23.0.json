@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "version": "v1.23.0",
+  "title": "Каскад подписок 0.3.3, Mac Computer Use 0.5.0, Browser Relay 0.2.0",
+  "steps": [
+    {
+      "id": "bundle",
+      "title": "Полный набор компонентов bb-config",
+      "component": "bb-config",
+      "where": "server",
+      "kind": "bundle",
+      "rerun": "Безопасно: установленное и актуальное только проверяется; повтор доделывает остаток после сбоя.",
+      "rollback": "Компонент, который не нужен, исключите командой python3 scripts/bundle.py exclude <id> и удалите штатно (bb plugin remove <id>); прежнюю версию собственного плагина ставит предыдущий релиз."
+    },
+    {
+      "id": "browser-relay-connect-stop",
+      "title": "Browser Relay 0.2.0 — одно «Allow» с долгим ожиданием, честный статус, остановка по треду",
+      "component": "browser-relay",
+      "where": "server",
+      "kind": "command",
+      "applies": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "applicable",
+        "browser-relay",
+        "0.2.0"
+      ],
+      "apply": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "apply",
+        "browser-relay",
+        "0.2.0"
+      ],
+      "verify": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "check",
+        "browser-relay",
+        "0.2.0"
+      ],
+      "rerun": "Актуальная работающая версия проходит проверку без установки.",
+      "rollback": "Установите плагин из предыдущего тега v0.1.0; служба на Mac продолжит работать."
+    },
+    {
+      "id": "mac-computer-use-stop",
+      "title": "Mac Computer Use 0.5.0 — «Стоп» работает и прерывает действия в полёте",
+      "component": "mac-computer-use",
+      "where": "server",
+      "kind": "command",
+      "applies": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "applicable",
+        "mac-computer-use",
+        "0.5.0"
+      ],
+      "apply": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "apply",
+        "mac-computer-use",
+        "0.5.0"
+      ],
+      "verify": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "check",
+        "mac-computer-use",
+        "0.5.0"
+      ],
+      "rerun": "Актуальная работающая версия проходит проверку без установки.",
+      "rollback": "Установите плагин из предыдущего тега v0.4.3."
+    },
+    {
+      "id": "subscriptions-cascade-0-3-3",
+      "title": "Каскад подписок 0.3.3 — «Открыть папку» и файлы треда ведут в папку проекта; понятная строка, когда машину убрали из каскада",
+      "component": "agentcli-subscriptions-cascade",
+      "where": "server",
+      "kind": "command",
+      "applies": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "applicable",
+        "agentcli-subscriptions-cascade",
+        "0.3.3"
+      ],
+      "apply": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "apply",
+        "agentcli-subscriptions-cascade",
+        "0.3.3"
+      ],
+      "verify": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "check",
+        "agentcli-subscriptions-cascade",
+        "0.3.3"
+      ],
+      "rerun": "Актуальная работающая версия проходит проверку без установки.",
+      "rollback": "Установите предыдущий тег agentcli-subscriptions-cascade/v0.3.2."
+    }
+  ]
+}
