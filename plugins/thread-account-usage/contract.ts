@@ -35,6 +35,8 @@ export const snapshotSchema = z.object({
   message: z.string().nullable(), account: accountSchema.nullable(),
   // The thread's budget is spent or its last answer was a provider's limit refusal.
   exhausted: z.object({ title: z.string(), detail: z.string(), link: z.string().nullable() }).nullable().optional(),
+  // Тред «Каскада подписок»: кольцо показано по его текущей ступени (провайдер, машина, аккаунт).
+  cascade: z.object({ profileId: z.string().nullable(), kind: z.enum(['subscription', 'gateway']) }).nullable().optional(),
 });
 export const rpcContract = defineRpcContract({
   comparison: { input: z.object({ refresh: z.boolean().default(false) }), output: comparisonSchema },

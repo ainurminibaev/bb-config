@@ -44,3 +44,7 @@ identity limitations, DOM anchors and restoration are described in the plugin
 README.md. After changing source, run TypeScript, `node --test logic.test.ts`,
 `bb plugin build .`, then `bb plugin reload thread-account-usage` from the
 installed plugin directory. Build alone does not update the running bundle.
+
+## Каскад подписок
+
+Тред «Каскада подписок»: кольцо показывает квоту текущей ступени (провайдер, машина, аккаунт из паспорта каскада, у шлюза vclaude — пакет VClaude), в снимке есть поле `cascade`. Каскад не ответил — как раньше. Код: `cascade-passport.ts`, `cascade-step.ts`.

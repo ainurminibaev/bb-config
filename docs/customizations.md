@@ -3878,3 +3878,22 @@ bb plugin install ./plugins/agentcli-subscriptions-cascade --yes
 `docs/releases/next/subscriptions-cascade-scaffold` ручной: плагин ничего не
 ставит сам. Откат: `bb plugin disable agentcli-subscriptions-cascade`, затем
 `bb plugin remove agentcli-subscriptions-cascade`.
+
+## Совместимость с «Каскадом подписок»: паспорт треда (27 ноября 2026)
+
+limit-guard 0.10.0, thread-account-usage 0.3.0, codex-delegation-watch 0.3.0,
+file-local-open 0.4.0, project-open 0.4.0 и git-thread-provenance 0.2.0
+узнают тред каскада по `providerId` `subscriptions-cascade` и мягко
+читают его паспорт: RPC `agentcli-subscriptions-cascade.threadStatus`
+(поля `step.hostId/providerId/model/accountKey/kind`, `anchorHostId`, `path`,
+`freshCopyHostId`). Опора — этот контракт, а не код каскада. Каскад не
+установлен, выключен или не ответил за 3 с — поведение прежнее; треды
+Claude Code и Codex каскад не спрашивают вовсе. Что меняется в каждом плагине,
+разбор provider-retry (патч Keeper не нужен для пути B) и предложение команды
+«Перевести в каскад» — `docs/cascade-compat.md`.
+
+Код чтения — `cascade-passport.ts`, одинаковая копия в каждом из пяти плагинов
+(сборка плагина не берёт файлы соседних папок; правьте копии вместе).
+Проверка: тесты `cascade-*.test.ts` в каждом плагине, в каждом есть случай
+«без каскада всё как раньше». Восстановление и обновление — как у этих
+плагинов (шаги `docs/releases/next/*-cascade.*`).

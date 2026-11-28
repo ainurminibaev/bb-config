@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
+import { z } from 'zod';
 import { rpcContract, type Account, type QuotaWindow, type Snapshot } from './contract';
 import { appliesToModel, carryModelWindows, claudeProfilePlan, classifyWindow, dedupeAccounts, riskyOverride, routedHosts, vclaudeNote } from './logic';
 import { hostContract } from './host-contract';
@@ -9,6 +10,8 @@ import { createVClaudeReader, origin as vclaudeOrigin } from './vclaude';
 import { createComparisonReader } from './vclaude-comparison';
 import { googleComparison, short, volumeFor, type VolumeInputs } from './volumes';
 import { accumulate, type MeterReading, type MeterSums } from './token-meter';
+import { CASCADE_PLUGIN_ID, CASCADE_STATUS_METHOD, isCascadeProvider, passportCache } from './cascade-passport';
+import { cascadeSnapshot, isVClaudeStep } from './cascade-step';
 const providers = [{ id: 'claude-code', name: 'Claude Code' }, { id: 'codex', name: 'Codex' }];
 // ACP providers backed by the Antigravity CLI; their quotas come from the host entry.
 const antigravityProviders = [
@@ -23,6 +26,9 @@ const string = (v: unknown): string | null => typeof v === 'string' && v.length 
 
 export default function plugin(bb: BbPluginApi) {
   const hostClient = bb.hosts.experimental_client({ contract: hostContract });
+  // Паспорт «Каскада подписок»: спрашивается только для его тредов; нет ответа — как без каскада.
+  const passportOf = passportCache((threadId, signal) => bb.sdk.plugins.callRpc({
+    pluginId: CASCADE_PLUGIN_ID, method: CASCADE_STATUS_METHOD, input: { threadId }, outputSchema: z.unknown(), signal }));
   const settings = bb.settings.define({
     hideGlobalTokenomics: { type: 'boolean', label: 'Hide duplicate global Tokenomics indicator', default: true },
     comparisonHost: { type: 'string', label: 'ID машины с подпиской Claude и журналами на сервере BB', default: '' },
@@ -159,6 +165,16 @@ export default function plugin(bb: BbPluginApi) {
   }
   async function threadSnapshot(threadId: string, refresh: boolean): Promise<Snapshot> {
     const thread = await bb.sdk.threads.get({ threadId });
+    // Тред каскада: кольцо по текущей ступени. Каскад не ответил — как раньше (провайдер без лимитов).
+    const passport = isCascadeProvider(thread.providerId) ? await passportOf({ id: threadId, providerId: thread.providerId }) : null;
+    if (passport?.step) {
+      const step = passport.step;
+      const hostName = await bb.sdk.hosts.get({ hostId: step.hostId }).then(h => h.name, () => null);
+      const account = isVClaudeStep(step) ? await vclaudeAccount(refresh)
+        : step.kind === 'subscription' ? (await readHost(step.hostId, hostName ?? step.hostId, refresh)).find(a => a.providerId === step.providerId) ?? null
+        : null;
+      return cascadeSnapshot(threadId, step, passport.profileId, hostName, account);
+    }
     const base: Snapshot = { threadId, providerId: thread.providerId, model: null, hostId: null,
       hostName: null, binding: 'unavailable', message: null, account: null };
     if (!supported(thread.providerId)) return { ...base, message: 'Этот провайдер не сообщает поддерживаемые лимиты' };

@@ -11,12 +11,14 @@ import {
   latestGoal,
   newWatch,
   parseSettingValue,
+  runsCodex,
   shouldEnroll,
   type Config,
   type Settings,
   type Snapshot,
   type Watch,
 } from "./policy.ts";
+import { CASCADE_PLUGIN_ID, CASCADE_STATUS_METHOD, isCascadeProvider, passportCache } from "./cascade-passport.ts";
 
 const WATCH = "watch:";
 const SINCE = "meta:since";
@@ -85,6 +87,15 @@ export default function codexDelegationWatch(bb: BbPluginApi) {
     await kv.set(SINCE, now);
     return now;
   };
+  // Паспорт «Каскада подписок»: только для его тредов. Нет ответа — ступень неизвестна, тред не считается Codex.
+  const passportOf = passportCache((threadId, signal) => bb.sdk.plugins.callRpc({
+    pluginId: CASCADE_PLUGIN_ID, method: CASCADE_STATUS_METHOD, input: { threadId }, outputSchema: z.unknown(), signal }));
+  /** Провайдер текущей ступени каскада; у обычного треда — null без обращений к каскаду. */
+  const stepOf = async (t: Obj | null): Promise<string | null> => {
+    const id = t ? str(t.id) : null;
+    if (!t || id === null || !isCascadeProvider(t.providerId)) return null;
+    return (await passportOf({ id, providerId: t.providerId }))?.step?.providerId ?? null;
+  };
   const load = async (threadId: string) => (await kv.get(WATCH + threadId)) as Watch | null | undefined;
   const save = (w: Watch) => kv.set(WATCH + w.threadId, w);
 
@@ -109,9 +120,9 @@ export default function codexDelegationWatch(bb: BbPluginApi) {
     if (existing && (!existing.done || !force)) return force ? existing : null;
     if (!force) {
       // Event payloads can be stale or partial: decide on the stored thread row.
-      if (!shouldEnroll(thread, await since())) return null;
+      if (!shouldEnroll(thread, await since(), await stepOf(thread))) return null;
       const fresh = await getThread(id);
-      if (fresh === null || !shouldEnroll(fresh, await since())) return null;
+      if (fresh === null || !shouldEnroll(fresh, await since(), await stepOf(fresh))) return null;
       thread = fresh;
     }
     const parent = str(thread.parentThreadId);
@@ -189,6 +200,11 @@ export default function codexDelegationWatch(bb: BbPluginApi) {
         next.doneReason = decision.reason;
         break;
       case "nudge":
+        // Тред каскада ушёл со ступени Codex: подсказки про /goal ему не подходят — только наблюдаем.
+        if (isCascadeProvider(row?.providerId) && (await stepOf(row)) !== "codex") {
+          next.lastSummary = `${decision.summary} (ступень каскада не Codex — не подталкиваю)`;
+          break;
+        }
         await sendText(w.threadId, decision.text);
         next.nudges += 1;
         next.lastNudgeAt = s.now;
@@ -238,7 +254,7 @@ export default function codexDelegationWatch(bb: BbPluginApi) {
     const result: unknown = await sdk().threads.list({ hasParent: true, limit: 200 });
     const threads = Array.isArray(result) ? result : Array.isArray(obj(result).threads) ? (obj(result).threads as unknown[]) : [];
     for (const t of threads) {
-      if (shouldEnroll(obj(t), cutoff)) await enroll(obj(t), null, false);
+      if (shouldEnroll(obj(t), cutoff, await stepOf(obj(t)))) await enroll(obj(t), null, false);
     }
   };
 
@@ -408,7 +424,9 @@ export default function codexDelegationWatch(bb: BbPluginApi) {
           async run(input) {
             const t = await getThread(input.positionals.thread);
             if (t === null) throw new PluginCliError(`тред ${input.positionals.thread} не найден`, { code: "thread_not_found" });
-            if (t.providerId !== "codex") throw new PluginCliError("надзор рассчитан на треды Codex", { code: "not_codex" });
+            if (!runsCodex(t, await stepOf(t))) throw new PluginCliError(isCascadeProvider(t.providerId)
+              ? "надзор рассчитан на треды Codex: тред каскада сейчас не на ступени Codex (или каскад не ответил)"
+              : "надзор рассчитан на треды Codex", { code: "not_codex" });
             const existing = await load(input.positionals.thread);
             const mode = input.options.observe ? "observe" : input.options.supervise ? "supervise" : null;
             if (existing && !existing.done && mode !== null) await setMode(existing.threadId, mode);
@@ -483,6 +501,9 @@ export default function codexDelegationWatch(bb: BbPluginApi) {
             if (!s.exists) throw new PluginCliError("тред не найден", { code: "thread_not_found" });
             if (s.status !== "idle" && s.status !== "error") throw new PluginCliError(`тред сейчас ${s.status}; /goal resume выполняется только в начале хода`, { code: "thread_busy", hint: "Дождитесь окончания хода." });
             if (s.goal === null) throw new PluginCliError("у треда нет цели", { code: "no_goal" });
+            const t = await getThread(id);
+            if (isCascadeProvider(t?.providerId) && (await stepOf(t)) !== "codex")
+              throw new PluginCliError("тред каскада сейчас не на ступени Codex: /goal resume он не поймёт", { code: "not_codex" });
             if (s.goal.status === "active" || s.goal.status === "complete") return { exitCode: 0, stdout: `Цель уже ${s.goal.status}.` };
             await sendText(id, "/goal resume");
             const w = await load(id);

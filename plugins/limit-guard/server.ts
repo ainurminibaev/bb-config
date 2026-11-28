@@ -9,6 +9,8 @@ import {
 } from './logic.ts';
 import { snapshotMessage, snapshotRef } from './snapshot-logic.ts';
 import { staleNoteDecision } from './note-dispatch.ts';
+import { CASCADE_PLUGIN_ID, CASCADE_STATUS_METHOD, isCascadeProvider, passportCache } from './cascade-passport.ts';
+import { forCascade, runtimeOf, type Runtime } from './cascade-logic.ts';
 import { accountPlan, claudeProfilePlan, DEFAULT_ACCOUNT_RULES, parseAccountRules, policiesForAccount, ruleFor, thresholdsFor, type AccountInfo, type AccountRule } from './account-logic.ts';
 import {
   decideHold, DEFAULT_POLICIES, holdReason, mergePolicies, MODE_LABEL, nextCheckAt, normalizePolicy, parseMode, parsePolicySpec, POLICY_LABEL, priorityStatus,
@@ -107,6 +109,11 @@ export default function plugin(bb: BbPluginApi) {
   };
   void settings.get().then(load).catch(() => undefined);
   settings.onChange(next => load(next));
+  // Паспорт «Каскада подписок»: спрашивается только для его тредов; нет ответа — как без каскада.
+  const passportOf = passportCache((threadId, signal) => bb.sdk.plugins.callRpc({
+    pluginId: CASCADE_PLUGIN_ID, method: CASCADE_STATUS_METHOD, input: { threadId }, outputSchema: z.unknown(), signal }));
+  const runtime = async (row: { id: string; providerId: string; environmentHostId: string | null }): Promise<Runtime | null> =>
+    runtimeOf(row, await passportOf(row), SUPPORTED);
 
   // ---------- Usage, cached per machine in memory; recent samples give the pace ----------
   const cache = new Map<string, HostUsage>();
@@ -217,21 +224,32 @@ export default function plugin(bb: BbPluginApi) {
     const base = { threadId, providerId: thread.providerId, model: null as string | null, hostId: null as string | null,
       hostName: null as string | null, fetchedAt: null as string | null, thresholds };
     const unknown = (reason: string): Status => ({ ...base, assessment: assess([], null, thresholds, reason) });
-    if (!SUPPORTED.has(thread.providerId)) return unknown('этот провайдер не сообщает лимиты подписки');
-    if (!thread.environmentId) return unknown('у треда ещё нет рабочей машины');
-    const environment = await bb.sdk.environments.get({ environmentId: thread.environmentId });
-    base.hostId = environment.hostId;
-    try { base.hostName = (await bb.sdk.hosts.get({ hostId: environment.hostId })).name; } catch { /* cosmetic */ }
-    base.model = await threadModel(threadId);
+    // Тред каскада — лимиты текущей ступени (её машина и провайдер); остальные — как раньше.
+    const cascade = isCascadeProvider(thread.providerId);
+    const passport = cascade ? await passportOf({ id: threadId, providerId: thread.providerId }) : null;
+    const step = passport?.step ?? null;
+    const providerId = step?.providerId ?? thread.providerId;
+    base.providerId = providerId;
+    if (!SUPPORTED.has(providerId)) return unknown(cascade && passport ? 'каскад ещё не выбрал ступень' : 'этот провайдер не сообщает лимиты подписки');
+    if (step && step.kind !== 'subscription') return unknown('ступень каскада идёт через шлюз: квоты подписки у неё нет, остаток считает каскад');
+    let hostId: string;
+    if (step) hostId = step.hostId;
+    else {
+      if (!thread.environmentId) return unknown('у треда ещё нет рабочей машины');
+      hostId = (await bb.sdk.environments.get({ environmentId: thread.environmentId })).hostId;
+    }
+    base.hostId = hostId;
+    try { base.hostName = (await bb.sdk.hosts.get({ hostId })).name; } catch { /* cosmetic */ }
+    base.model = step?.model ?? await threadModel(threadId);
     let usage: HostUsage;
-    try { usage = await hostUsage(environment.hostId, refresh); }
+    try { usage = await hostUsage(hostId, refresh); }
     catch (error) { return unknown(`машина не ответила: ${message(error)}`); }
     base.fetchedAt = usage.fetchedAt;
-    const { windows, error } = windowsOf(usage, environment.hostId, thread.providerId);
+    const { windows, error } = windowsOf(usage, hostId, providerId);
     if (error) return unknown(error);
-    const account = await accountOf(usage, environment.hostId, thread.providerId);
+    const account = await accountOf(usage, hostId, providerId);
     const t = thresholdsFor(thresholds, account.rule);
-    return { ...base, thresholds: t, account: { plan: account.plan, rule: account.rule }, assessment: assess(windows, base.model, t, await poolReason()) };
+    return { ...base, thresholds: t, account: { plan: account.plan, rule: account.rule }, assessment: forCascade(assess(windows, base.model, t, await poolReason()), cascade) };
   }
   const describe = (s: Status) => render(s.assessment, Date.now(), { provider: s.providerId, model: s.model, host: s.hostName, fetchedAt: s.fetchedAt })
     + (s.account?.rule ? `\nТариф ${s.account.plan ?? 'аккаунта'}: работа идёт до ${s.account.rule.short}% 5-часового и ${s.account.rule.long}% недельного окна (правило «${s.account.rule.match}» в настройке «Пороги по аккаунтам»).` : '');
@@ -286,24 +304,27 @@ export default function plugin(bb: BbPluginApi) {
   }
   async function poll() {
     const all = await bb.sdk.threads.list({ archived: false, limit: 500, includeHidden: true }) as unknown;
-    const rows = ((Array.isArray(all) ? all : record(all).threads ?? []) as ThreadRow[])
-      .filter(row => row.status === 'active' && SUPPORTED.has(row.providerId) && row.environmentHostId);
+    const active = ((Array.isArray(all) ? all : record(all).threads ?? []) as ThreadRow[])
+      .filter(row => row.status === 'active' && (SUPPORTED.has(row.providerId) || isCascadeProvider(row.providerId)));
+    // Тред каскада считается по своей текущей ступени; без паспорта он пропускается, как раньше.
+    const rows: (ThreadRow & { rt: Runtime })[] = [];
+    for (const row of active) { const rt = await runtime(row); if (rt && !rt.gateway) rows.push({ ...row, rt }); }
     // Every connected machine, not only those running a turn: held threads may sit on a quiet one.
     const connected = await bb.sdk.hosts.list().then(list => list.filter(h => h.status === 'connected').map(h => h.id)).catch(() => [] as string[]);
-    const hosts = [...new Set([...rows.map(row => row.environmentHostId!), ...connected])];
+    const hosts = [...new Set([...rows.map(row => row.rt.hostId), ...connected])];
     const usage = new Map<string, HostUsage>();
     await Promise.all(hosts.map(async hostId => { try { usage.set(hostId, await hostUsage(hostId, true)); } catch { /* offline */ } }));
     // A low-priority thread gets the priority note only: two notes in a row say the same thing twice.
     const lowPriority = new Set<string>();
     for (const row of rows) {
       if ((await effectiveMode(row.id)).mode !== 'normal') lowPriority.add(row.id);
-      await notePriority(row, usage).catch(error => bb.log.warn(`Limit Guard: priority note: ${message(error)}`));
+      await notePriority(row, row.rt, usage).catch(error => bb.log.warn(`Limit Guard: priority note: ${message(error)}`));
     }
     for (const row of rows) {
-      const u = usage.get(row.environmentHostId!);
+      const u = usage.get(row.rt.hostId);
       if (!u) continue;
-      const { windows } = windowsOf(u, row.environmentHostId!, row.providerId);
-      const a = assess(windows, await threadModel(row.id), await thresholdsAt(u, row.environmentHostId!, row.providerId));
+      const { windows } = windowsOf(u, row.rt.hostId, row.rt.providerId);
+      const a = forCascade(assess(windows, await threadModel(row.id), await thresholdsAt(u, row.rt.hostId, row.rt.providerId)), row.rt.cascade);
       if (!a.driver || a.mode === 'unknown' || a.mode === 'normal') continue;
       // The reset time jitters by seconds between reads: round it so one window stays one key.
       const resetKey = a.driver.resetsAt ? Math.round(Date.parse(a.driver.resetsAt) / 600_000) : '';
@@ -316,7 +337,7 @@ export default function plugin(bb: BbPluginApi) {
       try {
         // Strict steer: BB refuses it unless a turn is running. steer-if-active would start a new
         // turn for a thread in error (stopped by the limit) — that happened on 22.11.2026 (R12).
-        await bb.sdk.threads.send({ threadId: row.id, mode: 'steer', input: [{ type: 'text', text: thresholdMessage(a, Date.now(), row.providerId), mentions: [] }] });
+        await bb.sdk.threads.send({ threadId: row.id, mode: 'steer', input: [{ type: 'text', text: thresholdMessage(a, Date.now(), row.rt.providerId), mentions: [] }] });
         await markSent(row.id, { key, mode: a.mode, at: Date.now() });
       } catch (error) { bb.log.warn(`Limit Guard: could not message ${row.id}: ${message(error)}`); }
     }
@@ -361,9 +382,10 @@ export default function plugin(bb: BbPluginApi) {
     const { mode, from, custom } = await effectiveMode(threadId, parentHint);
     if (mode === 'normal') return { mode, from, custom, base: policies, decision: { hold: false, unknown: false, closest: null } };
     const row = await threadRow(threadId);
-    const usage = row?.environmentHostId ? await quickUsage(row.environmentHostId) : null;
-    const windows = usage && row ? windowsOf(usage, row.environmentHostId!, row.providerId) : null;
-    const base = await policiesAt(usage, row?.environmentHostId ?? null, row?.providerId ?? '');
+    const rt = row ? await runtime(row) : null;
+    const usage = rt && !rt.gateway ? await quickUsage(rt.hostId) : null;
+    const windows = usage && rt ? windowsOf(usage, rt.hostId, rt.providerId) : null;
+    const base = await policiesAt(usage, rt?.hostId ?? null, rt?.providerId ?? '');
     return { mode, from, custom, base, decision: decideHold(mode, mergePolicies(base, custom), windows && !windows.error ? windows.windows : null, await threadModel(threadId), Date.now(), wasHeld) };
   }
   /** `custom` undefined keeps the thread's own thresholds, null drops them, an object replaces the windows it names. */
@@ -522,15 +544,15 @@ export default function plugin(bb: BbPluginApi) {
   });
 
   /** A running low-priority turn above its threshold is asked once to finish its step and stop. */
-  async function notePriority(row: ThreadRow, usage: Map<string, HostUsage>) {
+  async function notePriority(row: ThreadRow, rt: Runtime, usage: Map<string, HostUsage>) {
     const { mode, custom } = await effectiveMode(row.id);
     if (mode === 'normal' || !cfg.steer) return;
-    const u = usage.get(row.environmentHostId!);
+    const u = usage.get(rt.hostId);
     if (!u) return;
-    const { windows, error } = windowsOf(u, row.environmentHostId!, row.providerId);
+    const { windows, error } = windowsOf(u, rt.hostId, rt.providerId);
     if (error) return;
     // The same rules as the dispatch hook: account rule, then the thread's own thresholds.
-    const d = decideHold(mode, mergePolicies(await policiesAt(u, row.environmentHostId, row.providerId), custom), windows, await threadModel(row.id), Date.now());
+    const d = decideHold(mode, mergePolicies(await policiesAt(u, rt.hostId, rt.providerId), custom), windows, await threadModel(row.id), Date.now());
     if (!d.hold) return;
     const key = `prio|${d.label}|${d.resetsAt ? Math.round(d.resetsAt / 600_000) : ''}`;
     if ((await sentFor(row.id)).some(item => item.key === key)) return;
@@ -675,7 +697,10 @@ export default function plugin(bb: BbPluginApi) {
   });
   bb.agents.configure(context => SUPPORTED.has(context.provider.id)
     ? { tools: ['limit_status', 'limit_resume_after_reset'], skills: [], instructions: agentRules() }
-    : { tools: [], skills: [] });
+    // Тред каскада: остаток текущей ступени виден, а переход на другую подписку каскад делает сам.
+    : isCascadeProvider(context.provider.id)
+      ? { tools: ['limit_status'], skills: [], instructions: 'Лимиты (плагин limit-guard). Тред ведёт «Каскад подписок»: когда подписка подходит к концу, он сам переходит на следующую между ходами. Не сворачивай работу из-за лимита; в экономном режиме делай короткие законченные шаги. Остаток текущей ступени — инструмент limit_status.' }
+      : { tools: [], skills: [] });
 
   // ---------- CLI ----------
   const threadOption = { type: 'string', description: 'ID треда; внутри треда можно не указывать' } as const;

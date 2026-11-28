@@ -1,0 +1,30 @@
+{
+  "id": "project-open-cascade",
+  "title": "Project Open 0.4.0 — папка треда каскада в Finder",
+  "component": "project-open",
+  "where": "server",
+  "kind": "command",
+  "applies": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "applicable",
+    "project-open",
+    "0.4.0"
+  ],
+  "apply": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "apply",
+    "project-open",
+    "0.4.0"
+  ],
+  "verify": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "check",
+    "project-open",
+    "0.4.0"
+  ],
+  "rerun": "Актуальная работающая версия проходит проверку без установки.",
+  "rollback": "Установите предыдущий тег project-open/v0.3.6."
+}

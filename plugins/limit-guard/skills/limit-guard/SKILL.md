@@ -105,3 +105,7 @@ thresholds for every account.
 
 Never hand a thread off, delete snapshot refs or change these settings on the
 user's behalf unless they ask.
+
+## Каскад подписок
+
+Тред «Каскада подписок» (`providerId` `subscriptions-cascade`): лимиты берутся по текущей ступени из паспорта каскада (RPC `agentcli-subscriptions-cascade.threadStatus`), «финиш» смягчается до экономного режима, потому что каскад сам переходит на другую подписку между ходами. У ступени через шлюз режима нет. Каскад не установлен или не ответил — тред пропускается, как раньше. Код: `cascade-passport.ts`, `cascade-logic.ts`.

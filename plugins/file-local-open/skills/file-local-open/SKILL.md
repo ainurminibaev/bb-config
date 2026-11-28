@@ -65,3 +65,7 @@ pinned to another viewer, select this viewer in Settings → File openers.
 
 The thread's composer hosts the plugin bridge: in an archived thread (no composer)
 the icon and right-click menu are not offered.
+
+## Каскад подписок
+
+Тред «Каскада подписок»: файл рабочей папки открывается с машины свежей копии (иначе с опорной) по общему пути из паспорта каскада. Явная машина и хранилище треда не меняются; каскад не ответил — как раньше.

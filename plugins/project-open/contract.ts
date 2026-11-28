@@ -20,4 +20,9 @@ export const hostContract = defineRpcContract({
 export const rpcContract = defineRpcContract({
   /** Hands the Macs with the Finder handler the machines and project folders BB knows. */
   prepare: { input: z.null(), output: z.object({ saved: z.number() }) },
+  /**
+   * Папка треда «Каскада подписок»: машина со свежей копией и общий путь из его паспорта.
+   * null — обычный тред или каскад не ответил: папка окружения, как раньше.
+   */
+  threadFolder: { input: z.object({ threadId: z.string().min(1) }), output: z.object({ hostId: z.string(), path: z.string() }).nullable() },
 });

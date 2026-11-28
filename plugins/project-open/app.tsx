@@ -5,7 +5,7 @@ import { definePluginApp, useRpc, useSdk, useBbNavigate, useSettings, useCompose
 import { toast } from 'sonner';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { openNativeTerminal, openNativeWorkspace, openNativeFiles, waitFor } from './native';
-import { finderFolderUrl, folderClientMode } from './folder-target';
+import { asThreadFolder, finderFolderUrl, folderClientMode } from './folder-target';
 import { addFinderItem, EXPLORER_MENU_EVENT } from './explorer-menu';
 import type { rpcContract } from './server';
 
@@ -174,6 +174,8 @@ async function openThreadTarget(
   kind: 'folder' | 'terminal', threadId: string, sdk: ReturnType<typeof useSdk>,
   navigate: ReturnType<typeof useBbNavigate>, values: ReturnType<typeof useSettings>['values'],
   signal: AbortSignal, root?: HTMLElement,
+  /** Папка треда каскада от сервера плагина; нет функции или ответа — папка окружения, как раньше. */
+  folderOf?: (threadId: string) => Promise<unknown>,
 ) {
   const getRoot = async () => {
     if (root) return root;
@@ -185,6 +187,13 @@ async function openThreadTarget(
     }, signal);
   };
   if (kind === 'terminal') return openNativeTerminal(await getRoot(), signal);
+  // Тред каскада: Finder открывает машину со свежей копией по общему пути (другие режимы — штатные панели BB).
+  const cascade = folderOf && values && clientMode(values.finderHelper === true) === 'finder' ? asThreadFolder(await folderOf(threadId).catch(() => null)) : null;
+  if (cascade) {
+    prepareFinder();
+    if (!navigate.openUrl(finderFolderUrl(cascade.hostId, cascade.path))) throw new Error('На этом устройстве недоступен обработчик Finder.');
+    return;
+  }
   const thread = await sdk.threads.get({ threadId, signal });
   if (!thread.environmentId) throw new Error('У треда нет рабочей папки.');
   const environment = await sdk.environments.get({ environmentId: thread.environmentId, signal });
@@ -203,6 +212,8 @@ async function openThreadTarget(
 
 function ThreadButtons({ root, threadId }: { root?: HTMLElement; threadId: string }) {
   const sdk = useSdk(), navigate = useBbNavigate();
+  const rpc = useRpc<typeof rpcContract>();
+  const folderOf = (id: string) => rpc.call('threadFolder', { threadId: id });
   const { values } = useSettings();
   const { threads } = experimental_useSidebarThreads();
   const sidebarThread = threads.find(thread => thread.id === threadId);
@@ -220,6 +231,12 @@ function ThreadButtons({ root, threadId }: { root?: HTMLElement; threadId: strin
     const controller = new AbortController();
     setDestination(null);
     void (async () => {
+      const cascade = asThreadFolder(await folderOf(threadId).catch(() => null));
+      if (cascade) {
+        const name = await sdk.hosts.get({ hostId: cascade.hostId, signal: controller.signal }).then(h => h.name, () => cascade.hostId);
+        if (!controller.signal.aborted) setDestination({ threadId, hostName: `${name} · каскад`, path: cascade.path });
+        return;
+      }
       const thread = await sdk.threads.get({ threadId, signal: controller.signal });
       if (!thread.environmentId) throw new Error('У треда нет рабочей папки.');
       const environment = await sdk.environments.get({ environmentId: thread.environmentId, signal: controller.signal });
@@ -230,7 +247,7 @@ function ThreadButtons({ root, threadId }: { root?: HTMLElement; threadId: strin
       if (!controller.signal.aborted) setDestination({ threadId, hostName: '', path: '', error: error instanceof Error ? error.message : String(error) });
     });
     return () => controller.abort();
-  }, [sdk, threadId, tooltipOpen]);
+  }, [sdk, rpc, threadId, tooltipOpen]);
   const currentDestination = destination?.threadId === threadId ? destination : null;
   const hostName = currentDestination?.hostName || sidebarThread?.host?.name;
   const path = currentDestination?.path || sidebarThread?.environment?.path;
@@ -250,7 +267,7 @@ function ThreadButtons({ root, threadId }: { root?: HTMLElement; threadId: strin
       hideTooltip();
       if (pending.current) return;
       const controller = new AbortController(); pending.current = controller; setBusy(true);
-      void openThreadTarget(kind, threadId, sdk, navigate, values, controller.signal, root)
+      void openThreadTarget(kind, threadId, sdk, navigate, values, controller.signal, root, folderOf)
         .catch(error => { if (!controller.signal.aborted) toast.error(error instanceof Error ? error.message : String(error)); })
         .finally(() => { if (!controller.signal.aborted) { pending.current = null; setBusy(false); } });
     }}><Icon name={kind === 'folder' ? 'FolderOpen' : 'Terminal'} className="size-4" /></button></Tooltip.Trigger>

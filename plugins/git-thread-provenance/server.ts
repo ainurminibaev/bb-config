@@ -2,9 +2,13 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 
 const threadIdPattern = /^thr_[a-z0-9]{10}$/u;
 
+/** Провайдеры с git в оболочке агента. Тред «Каскада подписок» идёт нативным Claude Code или Codex. */
+const PROVIDERS = new Set(["codex", "claude-code", "subscriptions-cascade"]);
+export const appliesTo = (providerId: string): boolean => PROVIDERS.has(providerId);
+
 export default function gitThreadProvenance(bb: BbPluginApi) {
   bb.agents.configure(({ provider, thread }) => {
-    if (provider.id !== "codex" && provider.id !== "claude-code") {
+    if (!appliesTo(provider.id)) {
       return { tools: [], skills: [] };
     }
 

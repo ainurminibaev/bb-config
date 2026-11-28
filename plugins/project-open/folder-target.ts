@@ -16,3 +16,10 @@ export function finderFolderUrl(hostId: string, path: string, request: string = 
   url.search = new URLSearchParams({ host: hostId, path, request, ...(select ? { select: '1' } : {}) }).toString();
   return url.href;
 }
+
+/** Ответ RPC `threadFolder`: папка треда каскада или null (обычный тред, каскад молчит, ответ не по форме). */
+export function asThreadFolder(raw: unknown): { hostId: string; path: string } | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const { hostId, path } = raw as Record<string, unknown>;
+  return typeof hostId === 'string' && hostId && typeof path === 'string' && path.startsWith('/') ? { hostId, path } : null;
+}

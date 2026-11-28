@@ -1,6 +1,9 @@
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
 import { isAbsolute, resolve } from 'node:path';
+import { z } from 'zod';
 import { hostContract, rpcContract } from './contract';
+import { CASCADE_PLUGIN_ID, CASCADE_STATUS_METHOD, readPassport, type CascadePassport } from './cascade-passport';
+import { fileOrigin } from './cascade-origin';
 export type { rpcContract } from './contract';
 export default function plugin(bb: BbPluginApi) {
   // The key keeps its first name: installations with a Mac already have it set.
@@ -40,17 +43,23 @@ export default function plugin(bb: BbPluginApi) {
   },
   open: async ({ path, source, action, app }) => {
     const { target } = await desktop();
-    let hostId = source.experimental_hostId;
     let environmentId = source.environmentId;
+    // Тред «Каскада подписок»: файлы — на машине со свежей копией по общему пути. Нет паспорта — как раньше.
+    let passport: CascadePassport | null = null;
     if (source.threadId) {
       const thread = await bb.sdk.threads.get({ threadId: source.threadId });
       environmentId ??= thread.environmentId;
+      passport = await readPassport((threadId, signal) => bb.sdk.plugins.callRpc({
+        pluginId: CASCADE_PLUGIN_ID, method: CASCADE_STATUS_METHOD, input: { threadId }, outputSchema: z.unknown(), signal }), { id: source.threadId, providerId: thread.providerId });
     }
-    let root: string | null = null;
+    let envHostId: string | null = null, envPath: string | null = null;
     if (environmentId) {
       const env = await bb.sdk.environments.get({ environmentId });
-      hostId ??= env.hostId; root = env.path;
+      envHostId = env.hostId; envPath = env.path;
     }
+    const origin = fileOrigin({ kind: source.kind, explicitHostId: source.experimental_hostId, envHostId, envPath, passport });
+    let hostId = origin.hostId;
+    let root = origin.root;
     if (!hostId) throw new Error('Не удалось определить машину файла.');
     if (source.kind === 'thread-storage') {
       const machine = await bb.sdk.hosts.get({ hostId });
