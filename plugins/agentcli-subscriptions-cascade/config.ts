@@ -1,11 +1,10 @@
 // Умолчания и нормализация конфигурации. Чистые функции, без SDK.
 import type { Stage } from './adapter.ts';
-import { defaultProfiles, renameLegacyProfile } from './profiles.ts';
-import { autoCodexChildrenProfile } from './subthreads.ts';
+import { builtinProfile, defaultProfiles, migrateBuiltinProfile, ONLY_CODEX_ID } from './profiles.ts';
 import { AUTO_CODEX_CHILDREN_ID, SUBTHREAD_CODEX_ID, configSchema, stepSchema, type CascadeConfig, type Machine, type ModelRow, type Platform, type Step } from './contract.ts';
 
 /** Встроенные профили, которые добавляются в уже существующие настройки (один раз). */
-const OFFERED_BUILTINS = [{ id: AUTO_CODEX_CHILDREN_ID, make: autoCodexChildrenProfile }] as const;
+const OFFERED_BUILTINS = [AUTO_CODEX_CHILDREN_ID, 'fable-no-codex', 'fable-codex-children', ONLY_CODEX_ID] as const;
 
 export const DEFAULT_SHARED_PATH = '/opt/bbfs';
 export const DEFAULT_WINDOWS_SHARED_PATH = 'C:\\bbfs';
@@ -106,7 +105,7 @@ export function normalizeConfig(input: unknown): CascadeConfig {
   // Пустой список, оставленный владельцем, не заполняется заново.
   const hasProfiles = typeof input === 'object' && input !== null && Array.isArray((input as { profiles?: unknown }).profiles);
   // 0.3.4 → 0.3.5: `subthreads: 'codex'` — правило потомков `descendants: 'subthread-codex'`.
-  let profiles = (hasProfiles ? uniqueBy(config.profiles, p => p.id) : defaultProfiles({ models })).map(renameLegacyProfile).map(p => {
+  let profiles = (hasProfiles ? uniqueBy(config.profiles, p => p.id) : defaultProfiles({ models })).map(p => migrateBuiltinProfile(p, { models })).map(p => {
     if (p.subthreads !== 'codex') return p;
     const { subthreads: _legacy, ...rest } = p;
     return { ...rest, descendants: p.descendants ?? SUBTHREAD_CODEX_ID, onDescendantsExhausted: p.onDescendantsExhausted ?? 'wait' };
@@ -114,11 +113,14 @@ export function normalizeConfig(input: unknown): CascadeConfig {
   // Встроенные профили новых версий (0.3.4: «Авто · подтреды на Codex») — один раз
   // в существующие настройки; удалённый владельцем профиль не возвращается.
   const offered = new Set(config.offeredProfiles);
-  for (const builtin of OFFERED_BUILTINS) {
-    if (offered.has(builtin.id)) continue;
-    offered.add(builtin.id);
-    // Пустой список владельца остаётся пустым.
-    if (hasProfiles && profiles.length > 0 && !profiles.some(p => p.id === builtin.id)) profiles = [...profiles, builtin.make()];
+  for (const id of OFFERED_BUILTINS) {
+    if (offered.has(id)) continue;
+    const made = builtinProfile(id, { models });
+    // Модели профиля ещё нет в таблице — предложим, когда появится.
+    if (!made) continue;
+    offered.add(id);
+    // Пустой список владельца остаётся пустым; новые — в конец, порядок владельца не трогаем.
+    if (hasProfiles && profiles.length > 0 && !profiles.some(p => p.id === id)) profiles = [...profiles, made];
   }
   return { ...config, machines: anchored, steps, models, profiles, offeredProfiles: [...offered] };
 }

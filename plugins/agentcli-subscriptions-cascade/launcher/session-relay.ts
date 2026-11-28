@@ -12,6 +12,7 @@
 import { createInterface } from 'node:readline';
 import { PassThrough } from 'node:stream';
 import type { LimitObservation, RouteNote, RoutedTurn } from '../bridge/route-contract.ts';
+import { appendToUserLine } from '../bridge/route-service.ts';
 import { replaceModel, resumeOrStart } from './cli-args.ts';
 
 export interface StageChild {
@@ -378,6 +379,8 @@ export async function runSessionRelay(first: RunRoute, baseArgs: string[], sessi
       turnActive = true;
       turnStartedAt = ports.now();
       armIdle();
+      // 0.4.1: ход на чужой машине — строка «где я выполняюсь» в конец сообщения хода.
+      if (route.whereNote && !childExit) { child.write(appendToUserLine(line, route.whereNote)); continue; }
     }
     if (childExit) {
       // Процесса нет (служебная строка между ходами): строку некому отдать.

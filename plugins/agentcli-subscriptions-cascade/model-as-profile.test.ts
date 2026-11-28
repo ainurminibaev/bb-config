@@ -48,7 +48,7 @@ test('не модель таблицы — сохранённый профиль
   assert.ok(r.notes.some(n => n.kind === 'notice' && /не найден — ход по прежнему профилю треда «only-opus-5\.5»/u.test(n.message)));
   const fresh = await turn(world(c), 'something-unknown');
   assert.ok(fresh.action === 'run' && fresh.stepId === TRU_MAX && fresh.env.BB_CASCADE_PROFILE === 'auto', JSON.stringify(fresh));
-  assert.ok(fresh.notes.some(n => n.kind === 'notice' && /не найден — ход по «Лучшая модель · любая машина»/u.test(n.message)));
+  assert.ok(fresh.notes.some(n => n.kind === 'notice' && /не найден — ход по «Авто Opus · с Codex»/u.test(n.message)));
   const none = { ...c, profiles: c.profiles.map(p => ({ ...p, enabled: false })) };
   assert.equal((await turn(world(none), 'something-unknown')).action, 'refuse');
 });

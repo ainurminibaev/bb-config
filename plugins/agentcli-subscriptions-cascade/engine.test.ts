@@ -29,13 +29,15 @@ test('каскад по умолчанию: Tru → Mac (шлюз) → UA (Pro) 
 
 test('профили из коробки: названия, политики и порядок', () => {
   assert.deepEqual(config().profiles.map(p => [p.id, p.name, p.policy, p.modelKey, p.excludedProviders]), [
-    ['auto', 'Лучшая модель · любая машина', 'any', null, []],
-    ['auto-no-codex', 'Лучшая модель · без Codex', 'any', null, ['codex']],
-    ['auto-codex-children', 'Лучшая модель · подтреды на Codex', 'any', null, []],
-    ['opus-then-auto', 'Opus, потом лучшая', 'prefer-then-any', 'opus-5.5', []],
-    ['fable-then-auto', 'Fable, потом лучшая', 'prefer-then-any', 'fable-5.2', []],
+    ['auto', 'Авто Opus · с Codex', 'prefer-then-any', 'opus-5.5', []],
+    ['auto-no-codex', 'Авто Opus · без Codex', 'prefer-then-any', 'opus-5.5', ['codex']],
+    ['auto-codex-children', 'Авто Opus · подтреды только Codex', 'prefer-then-any', 'opus-5.5', []],
+    ['fable-then-auto', 'Авто Fable · с Codex', 'prefer-then-any', 'fable-5.2', []],
+    ['fable-no-codex', 'Авто Fable · без Codex', 'prefer-then-any', 'fable-5.2', ['codex']],
+    ['fable-codex-children', 'Авто Fable · подтреды только Codex', 'prefer-then-any', 'fable-5.2', []],
     ['only-opus-5.5', 'Только Opus 5.5', 'only', 'opus-5.5', []],
     ['only-fable-5.2', 'Только Fable 5.2', 'only', 'fable-5.2', []],
+    ['only-codex', 'Только Codex', 'any', null, ['claude-code']],
   ]);
 });
 
@@ -56,7 +58,9 @@ test('any (0.4.0): модель важнее машины — Opus исчерп�
   assert.deepEqual(pick(selectStep({ ...input({}), health: opusOut })), ['run', TRU_MAX, 'claude-fable-5-2']);
   const c = config();
   c.policies.modelPriority = ['fable-5.2', 'opus-5.5'];
-  assert.deepEqual(pick(selectStep(input({}, { config: c }))), ['run', TRU_MAX, 'claude-fable-5-2'], 'приоритет моделей задаётся в настройках');
+  // 0.4.1: «Авто Opus» начинает с Opus при любом приоритете; приоритет решает фазу «потом лучшая».
+  assert.deepEqual(pick(selectStep(input({}, { config: c }))), ['run', TRU_MAX, 'claude-opus-5-5']);
+  assert.deepEqual(pick(selectStep({ ...input({}, { config: c }), health: opusOut })), ['run', TRU_MAX, 'claude-fable-5-2'], 'приоритет моделей задаётся в настройках');
 });
 
 test('prefer-then-any: сначала X на всех ступенях, потом любые', () => {

@@ -96,8 +96,8 @@ test('названия говорят о модели; прежние имена
     { id: 'auto', name: 'Авто' }, { id: 'opus-then-auto', name: 'Opus → Авто', policy: 'prefer-then-any', modelKey: 'opus-5.5' },
     { id: 'auto-codex-children', name: 'Авто · подтреды на Codex', descendants: 'subthread-codex' }, { id: 'mine', name: 'Мой профиль' }] });
   assert.deepEqual(c.profiles.map(p => [p.id, p.name]), [
-    ['auto', 'Лучшая модель · любая машина'], ['opus-then-auto', 'Opus, потом лучшая'],
-    ['auto-codex-children', 'Лучшая модель · подтреды на Codex'], ['mine', 'Мой профиль']]);
+    ['auto', 'Авто Opus · с Codex'], ['opus-then-auto', 'Opus, потом лучшая (прежний)'],
+    ['auto-codex-children', 'Авто Opus · подтреды только Codex'], ['mine', 'Мой профиль'], ['only-codex', 'Только Codex']]);
 });
 
 test('подзаголовок — цепочка моделей; Fable, которую не может запустить ни одна ступень, не показывается', () => {

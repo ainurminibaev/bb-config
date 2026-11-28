@@ -5,7 +5,7 @@ import { AUTO_MODEL_ID, SUBTHREAD_CODEX_ID, type CascadeConfig, type DiscoveredA
 import { buildPlan, explainProfile, profileSteps, stepConfirm, type Attempt, type Decision, type HealthLookup, type ThreadCascadeState } from './engine.ts';
 import type { StepHealth } from './limits.ts';
 import { pinnedEntries, type BlockedModel } from './pins.ts';
-import { autoCodexChildrenProfile, descendantsOf, isSubthreadCodexId } from './subthreads.ts';
+import { descendantsOf, isSubthreadCodexId } from './subthreads.ts';
 import { profileName } from './pins.ts';
 
 const PROVIDER_SHORT: Record<string, string> = { 'claude-code': 'Claude', codex: 'Codex', 'gemini-cli': 'Gemini' };
@@ -18,21 +18,85 @@ function profile(patch: Partial<Profile> & Pick<Profile, 'id' | 'name'>): Profil
   return { enabled: true, policy: 'any', modelKey: null, stepOrder: null, excludedSteps: [], excludedProviders: [], confirm: {}, ...patch };
 }
 
-/** 0.4.0: названия говорят о модели, а не о машине (ID профилей прежние). */
-export const AUTO_NAME = 'Лучшая модель · любая машина';
+/** 0.4.0: названия говорят о модели (ID профилей прежние). */
 export const thenBestName = (model: string) => `${model}, потом лучшая`;
 
+/** 0.4.1: «Авто <модель> · с Codex / без Codex / подтреды только Codex». */
+export const autoName = (model: string, variant: 'codex' | 'no-codex' | 'children') =>
+  `Авто ${model} · ${variant === 'codex' ? 'с Codex' : variant === 'no-codex' ? 'без Codex' : 'подтреды только Codex'}`;
+export const AUTO_NAME = autoName('Opus', 'codex');
+export const ONLY_CODEX_ID = 'only-codex';
+export const LEGACY_SUFFIX = ' (прежний)';
+
 /**
- * Прежние имена встроенных профилей → новые. Переименовываются только профили, чьё имя
- * владелец не менял (совпадает с прежним умолчанием).
+ * Профиль «Авто <модель>»: сначала модель на всех ступенях, потом лучшая (prefer-then-any).
+ * Строки модели нет в таблице — лучшая модель по приоритету (any).
  */
-export function renameLegacyProfile(p: Profile): Profile {
-  const legacy: Record<string, string> = {
-    'Авто': AUTO_NAME, 'Авто · без Codex': 'Лучшая модель · без Codex', 'Авто · подтреды на Codex': 'Лучшая модель · подтреды на Codex',
-  };
-  if (legacy[p.name]) return { ...p, name: legacy[p.name]! };
-  const then = /^(\S+) → Авто$/u.exec(p.name);
-  return then && p.policy === 'prefer-then-any' ? { ...p, name: thenBestName(then[1]!) } : p;
+function autoProfile(id: string, model: { key: string; name: string } | null, variant: 'codex' | 'no-codex' | 'children'): Profile {
+  return profile({
+    id, name: autoName(model?.name ?? 'Opus', variant),
+    ...(model ? { policy: 'prefer-then-any' as const, modelKey: model.key } : {}),
+    ...(variant === 'no-codex' ? { excludedProviders: ['codex'] } : {}),
+    ...(variant === 'children' ? { descendants: SUBTHREAD_CODEX_ID, onDescendantsExhausted: 'wait' as const } : {}),
+  });
+}
+
+/** «Только Codex»: ступени Codex любой машины, без подтверждения, неизвестная квота — пробовать. */
+export function onlyCodexProfile(): Profile {
+  return profile({ id: ONLY_CODEX_ID, name: 'Только Codex', excludedProviders: ['claude-code'], confirmDefault: false, onUnknown: 'try' });
+}
+
+/**
+ * Встроенные профили 0.4.1 по ID (для умолчаний и добавления в существующие настройки).
+ * null — модели нет в таблице, профиль не создаётся.
+ */
+export function builtinProfile(id: string, config: Pick<CascadeConfig, 'models'>): Profile | null {
+  const row = (key: string) => config.models.find(r => r.key === key);
+  const opus = row(OPUS) ? { key: OPUS, name: shortModel(row(OPUS)!.displayName) } : null;
+  const fable = row(FABLE) ? { key: FABLE, name: shortModel(row(FABLE)!.displayName) } : null;
+  switch (id) {
+    case AUTO_MODEL_ID: return autoProfile(id, opus, 'codex');
+    case 'auto-no-codex': return autoProfile(id, opus, 'no-codex');
+    case 'auto-codex-children': return autoProfile(id, opus, 'children');
+    case 'fable-then-auto': return fable ? autoProfile(id, fable, 'codex') : null;
+    case 'fable-no-codex': return fable ? autoProfile(id, fable, 'no-codex') : null;
+    case 'fable-codex-children': return fable ? autoProfile(id, fable, 'children') : null;
+    case `only-${OPUS}`: return row(OPUS) ? profile({ id, name: `Только ${row(OPUS)!.displayName}`, policy: 'only', modelKey: OPUS }) : null;
+    case `only-${FABLE}`: return row(FABLE) ? profile({ id, name: `Только ${row(FABLE)!.displayName}`, policy: 'only', modelKey: FABLE }) : null;
+    case ONLY_CODEX_ID: return onlyCodexProfile();
+    default: return null;
+  }
+}
+
+/** Порядок встроенных профилей 0.4.1. */
+export const BUILTIN_ORDER = [AUTO_MODEL_ID, 'auto-no-codex', 'auto-codex-children', 'fable-then-auto', 'fable-no-codex', 'fable-codex-children', `only-${OPUS}`, `only-${FABLE}`, ONLY_CODEX_ID] as const;
+
+/**
+ * Прежние имена встроенных профилей (0.3.x «Авто…», 0.4.0 «Лучшая модель…»). Профиль с таким
+ * именем владелец не менял — его можно привести к умолчанию 0.4.1.
+ */
+const LEGACY_NAMES: Record<string, readonly string[]> = {
+  [AUTO_MODEL_ID]: ['Авто', 'Лучшая модель · любая машина'],
+  'auto-no-codex': ['Авто · без Codex', 'Лучшая модель · без Codex'],
+  'auto-codex-children': ['Авто · подтреды на Codex', 'Лучшая модель · подтреды на Codex'],
+  'fable-then-auto': ['Fable → Авто', 'Fable, потом лучшая'],
+  'opus-then-auto': ['Opus → Авто', 'Opus, потом лучшая'],
+};
+
+/**
+ * Встроенный профиль с прежним, не изменённым владельцем именем → определение 0.4.1 (имя,
+ * политика, модель, правило потомков). Своё у владельца (ступени, исключения, подтверждения,
+ * выключатель) сохраняется. «Opus → Авто» — дубль «Авто Opus · с Codex»: остаётся для старых
+ * тредов, скрыт из списка моделей и помечен «(прежний)».
+ */
+export function migrateBuiltinProfile(p: Profile, config: Pick<CascadeConfig, 'models'>): Profile {
+  if (!LEGACY_NAMES[p.id]?.includes(p.name)) return p;
+  if (p.id === 'opus-then-auto') return { ...p, name: `${thenBestName('Opus')}${LEGACY_SUFFIX}`, hidden: true };
+  const next = builtinProfile(p.id, config);
+  if (!next) return p;
+  const { subthreads: _legacy, ...rest } = p;
+  return { ...rest, name: next.name, policy: next.policy, modelKey: next.modelKey,
+    ...(next.descendants ? { descendants: next.descendants, onDescendantsExhausted: p.onDescendantsExhausted ?? next.onDescendantsExhausted } : {}) };
 }
 
 /** Короткое имя модели для цепочек: «Opus 5.5» → «Opus». */
@@ -41,26 +105,11 @@ export function shortModel(displayName: string): string {
 }
 
 /**
- * Профили из коробки: «Авто», «Авто · без Codex», «Авто · подтреды на Codex» (0.3.4),
- * «Opus → Авто», «Fable → Авто»,
- * «Только Opus 5.5», «Только Fable 5.2». Профили модели — только если строка есть в таблице.
+ * Профили из коробки (0.4.1): «Авто Opus · с Codex / без Codex / подтреды только Codex»,
+ * «Авто Fable · …», «Только Opus 5.5», «Только Fable 5.2», «Только Codex».
  */
 export function defaultProfiles(config: Pick<CascadeConfig, 'models'>): Profile[] {
-  const row = (key: string) => config.models.find(r => r.key === key);
-  const out: Profile[] = [
-    profile({ id: AUTO_MODEL_ID, name: AUTO_NAME }),
-    profile({ id: 'auto-no-codex', name: 'Лучшая модель · без Codex', excludedProviders: ['codex'] }),
-    autoCodexChildrenProfile(),
-  ];
-  for (const key of [OPUS, FABLE]) {
-    const r = row(key);
-    if (r) out.push(profile({ id: `${shortModel(r.displayName).toLowerCase()}-then-auto`, name: thenBestName(shortModel(r.displayName)), policy: 'prefer-then-any', modelKey: key }));
-  }
-  for (const key of [OPUS, FABLE]) {
-    const r = row(key);
-    if (r) out.push(profile({ id: `only-${key}`, name: `Только ${r.displayName}`, policy: 'only', modelKey: key }));
-  }
-  return out;
+  return BUILTIN_ORDER.map(id => builtinProfile(id, config)).filter((p): p is Profile => p !== null);
 }
 
 export type PresetKind = 'only-model' | 'model-then-auto' | 'no-codex';
@@ -162,7 +211,11 @@ export function describeProfile(config: CascadeConfig, profile: Profile, account
     const name = row ? shortModel(row.displayName) : profile.modelKey ?? '';
     parts.push(`Старт: ${attemptLabel(config, first)}`);
     if (profile.policy === 'only') parts.push(own.length > 0 ? `Только ${row?.displayName ?? name} на ${hostsOf(own)}` : `${name} нет ни на одной машине`);
-    else parts.push(own.length > 0 ? `Сначала ${name} на ${hostsOf(own)}, потом любые модели` : `${name} нет ни на одной машине — сразу любые модели`);
+    else {
+      // 0.4.1: «Авто <модель>» — подзаголовок тоже цепочка моделей («Opus → Fable → Sonnet → Codex»).
+      parts.unshift(modelChain(config, live));
+      parts.push(own.length > 0 ? `Сначала ${name} на ${hostsOf(own)}, потом лучшая` : `${name} нет ни на одной машине — сразу лучшая`);
+    }
   }
   const excluded = profile.excludedProviders.map(providerShort);
   const confirm = confirmPhrase(config, live);
@@ -237,7 +290,7 @@ function profileModels(config: CascadeConfig, accounts: readonly DiscoveredAccou
   });
   const out: ProviderModel[] = [];
   for (const p of config.profiles) {
-    if (!p.enabled) continue;
+    if (!p.enabled || p.hidden) continue;
     const plan = buildPlan({ config, requestedModel: p.id, accounts, thread: NEUTRAL_THREAD });
     if (!Array.isArray(plan) || !plan.some(a => a.skip === null)) continue;
     out.push(entry(p, describeProfile(config, p, accounts), out.length === 0));

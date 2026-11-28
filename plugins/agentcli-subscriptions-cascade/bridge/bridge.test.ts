@@ -275,7 +275,10 @@ test('маршрут S1: Tru исчерпан — ход на Mac, строка 
   assert.equal(r.stepId, MAC_GW);
   assert.equal(r.local, false);
   assert.equal(r.cwd, '/opt/bbfs/proj');
-  assert.deepEqual(r.env, { CASCADE_SYNC: '1', BB_CASCADE_PROFILE: 'auto', BB_CASCADE_STEP: MAC_GW });
+  const { BB_CASCADE_MACHINES: machines, ...env } = r.env;
+  assert.deepEqual(env, { CASCADE_SYNC: '1', BB_CASCADE_PROFILE: 'auto', BB_CASCADE_STEP: MAC_GW, BB_CASCADE_HOME_HOST: TRU, BB_CASCADE_HOME_LABEL: 'Tru', BB_CASCADE_EXEC_HOST: MAC });
+  assert.match(machines ?? '', /Tru=host_tru/u);
+  assert.match(r.whereNote ?? '', /^\[Каскад: этот ход выполняется на Mac/u, 'ход не на машине треда — строка «где я выполняюсь»');
   const kinds = r.notes.map(n => n.kind);
   assert.deepEqual(kinds, ['switch', 'sync', 'run', 'state']);
   const sw = r.notes[0]!;
@@ -398,7 +401,7 @@ test('обёртка: model/list без каталога от сервера —
   bridge.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'model/list', params: { providerOptions: { catalog: [{ id: 'mine', displayName: 'Мой' }] } } }));
   await bridge.close();
   const models = (id: number) => ((out.find(m => m.id === id)!.result as { models: { id: string; isDefault?: boolean }[] }).models);
-  assert.deepEqual(models(7).map(m => m.id), ['auto', 'auto-no-codex', 'auto-codex-children', 'opus-then-auto', 'fable-then-auto', 'only-opus-5.5', 'only-fable-5.2']);
+  assert.deepEqual(models(7).map(m => m.id), ['auto', 'auto-no-codex', 'auto-codex-children', 'fable-then-auto', 'fable-no-codex', 'fable-codex-children', 'only-opus-5.5', 'only-fable-5.2', 'only-codex']);
   assert.equal(models(7)[0]!.isDefault, true);
   assert.deepEqual(models(8).map(m => m.id), models(7).map(m => m.id), 'пустой каталог — тоже статический');
   assert.deepEqual(models(9).map(m => m.id), ['mine'], 'каталог сервера главнее');

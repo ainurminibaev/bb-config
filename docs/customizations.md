@@ -3859,6 +3859,9 @@ proxy-manager 0.3.6: свой значок «Прокси».
   `account/rateLimits/read`, если `usageLimits` даёт 403. Шаг — `subscriptions-cascade-0-4-0`.
 - Thread Account Usage 0.3.5: квота Codex при 403 от `usageLimits` — у самого Codex на
   машине (хост-RPC `codexResets` отдаёт `rateLimits`). Шаг — `thread-account-usage-0-3-5`.
+- 0.4.1: профили «Авто Opus/Fable · с Codex / без Codex / подтреды только Codex», «Только
+  Codex»; прежний «Opus → Авто» скрыт; строка «где я выполняюсь» в конце сообщения хода на
+  чужой машине и `BB_CASCADE_HOME_*`/`BB_CASCADE_MACHINES`. Шаг — `subscriptions-cascade-0-4-1`.
 
 Опирается на BB 0.50.1: плоский каталог моделей (≤ 64), `threads.spawn({ pluginMetadata,
 environment: reuse })`, `threads.getPluginMetadata`, `providerThreadId` в событиях треда,

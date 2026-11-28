@@ -229,9 +229,9 @@ test('0.3.5: правило идёт вглубь — внук Codex-подтр�
 test('встроенный профиль добавляется в существующие настройки один раз; удалённый не возвращается; пустой список — пустой', () => {
   const old = { machines: [], steps: [], models: [], profiles: [{ id: 'auto', name: 'Авто' }] };
   const first = normalizeConfig(old);
-  assert.deepEqual(first.profiles.map(p => p.id), ['auto', PROFILE]);
+  assert.deepEqual(first.profiles.map(p => p.id), ['auto', PROFILE, 'only-codex']);
   const removed = normalizeConfig({ ...first, profiles: first.profiles.filter(p => p.id !== PROFILE) });
-  assert.deepEqual(removed.profiles.map(p => p.id), ['auto']);
+  assert.deepEqual(removed.profiles.map(p => p.id), ['auto', 'only-codex']);
   assert.deepEqual(normalizeConfig({ machines: [], steps: [], models: [], profiles: [] }).profiles, []);
   assert.equal(normalizeConfig(normalizeConfig(old)).profiles.filter(p => p.id === PROFILE).length, 1);
 });

@@ -108,9 +108,9 @@ test('режим fallback: ушёл на Claude, Codex сбросился — н
 });
 
 test('descendants — любой профиль: потомки «Opus → Авто»-корня идут по «Только Opus 5.5»', async () => {
-  const c = cfg(null, x => ({ ...x, profiles: x.profiles.map(p => (p.id === 'opus-then-auto' ? { ...p, descendants: 'only-opus-5.5' } : p)) }));
-  const t = tree(c, 'opus-then-auto', { thr_child: 'thr_root' });
-  const r = await t.turn('thr_child', 'opus-then-auto');
+  const c = cfg(null, x => ({ ...x, profiles: x.profiles.map(p => (p.id === 'fable-then-auto' ? { ...p, descendants: 'only-opus-5.5' } : p)) }));
+  const t = tree(c, 'fable-then-auto', { thr_child: 'thr_root' });
+  const r = await t.turn('thr_child', 'fable-then-auto');
   assert.ok(r.action === 'run' && r.env.BB_CASCADE_PROFILE === 'only-opus-5.5', JSON.stringify(r));
 });
 
