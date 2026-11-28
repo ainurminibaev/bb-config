@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
 import { rpcContract, type Account, type QuotaWindow, type Snapshot } from './contract';
-import { appliesToModel, carryModelWindows, claudeProfilePlan, dedupeAccounts, usageWindows, vclaudeUsedPercent, riskyOverride, vclaudeNote, vclaudeRouted, vclaudeThreadSnapshot } from './logic';
+import { appliesToModel, carryModelWindows, claudeProfilePlan, dedupeAccounts, codexAppServerWindows, usageWindows, vclaudeUsedPercent, riskyOverride, vclaudeNote, vclaudeRouted, vclaudeThreadSnapshot } from './logic';
 import { hostContract } from './host-contract';
 import { createVClaudeReader, origin as vclaudeOrigin } from './vclaude';
 import { createComparisonReader } from './vclaude-comparison';
@@ -125,7 +125,7 @@ export default function plugin(bb: BbPluginApi) {
       try {
         const [raw, resets, profile, antigravity, route] = await Promise.all([
           bb.sdk.system.usageLimits({ hostId, refresh: true, signal: AbortSignal.timeout(20_000) }),
-          hostClient.call('codexResets', null, { hostId, signal: AbortSignal.timeout(15_000) }).catch(() => ({ email: null, count: null })),
+          hostClient.call('codexResets', null, { hostId, signal: AbortSignal.timeout(15_000) }).catch(() => ({ email: null, count: null, rateLimits: undefined as unknown })),
           hostClient.call('claudeProfile', null, { hostId, signal: AbortSignal.timeout(5_000) }).catch(() => null),
           // Older host bundles lack this method; such a host simply has no Antigravity rows.
           hostClient.call('antigravity', { refresh }, { hostId, signal: AbortSignal.timeout(40_000) }).catch(() => null),
@@ -137,9 +137,13 @@ export default function plugin(bb: BbPluginApi) {
         const accounts = providers.map(provider => {
           const usage = record(raw[provider.id]);
           const old = saved?.accounts.find(a => a.providerId === provider.id);
-          const parsed = usageWindows(usage);
+          let parsed = usageWindows(usage);
+          // 0.3.5: usageLimits не отдал квоту Codex (403 с российского IP) — окна от самого Codex на машине.
+          const fromCodex = provider.id === 'codex' && !parsed.ok ? codexAppServerWindows(resets.rateLimits) : [];
+          if (fromCodex.length > 0) parsed = { ok: true, windows: fromCodex };
           const ok = parsed.ok;
-          const email = string(usage.accountEmail)?.toLowerCase() ?? null;
+          const accountEmail = string(usage.accountEmail) ?? (fromCodex.length > 0 ? resets.email : null);
+          const email = accountEmail?.toLowerCase() ?? null;
           const windows = ok ? carryModelWindows(parsed.windows, email ? modelWindows.get(`${provider.id}:${email}`) : undefined, Date.now()) : old?.windows ?? [];
           if (ok && email) {
             modelWindows.set(`${provider.id}:${email}`, windows.filter(w => w.kind === 'model'));
@@ -148,12 +152,12 @@ export default function plugin(bb: BbPluginApi) {
           }
           return {
             key: `${provider.id}:${hostId}`, providerId: provider.id, providerName: provider.name,
-            hostIds: [hostId], hostNames: [hostName], email: string(usage.accountEmail) ?? (!ok ? old?.email ?? null : null),
+            hostIds: [hostId], hostNames: [hostName], email: accountEmail ?? (!ok ? old?.email ?? null : null),
             plan: (provider.id === 'claude-code' && profile?.email && profile.email.toLowerCase() === string(usage.accountEmail)?.toLowerCase()
-              ? claudeProfilePlan(profile.organizationType, profile.rateLimitTier) : null) ?? string(usage.planLabel), status: ok ? 'ok' : windows.length ? 'stale' : 'unavailable',
+              ? claudeProfilePlan(profile.organizationType, profile.rateLimitTier) : null) ?? string(usage.planLabel) ?? (fromCodex.length > 0 ? string(record(resets.rateLimits).planType) : null), status: ok ? 'ok' : windows.length ? 'stale' : 'unavailable',
             message: ok ? null : string(usage.message) ?? `Нет данных: ${String(usage.status ?? 'unknown')}`,
             fetchedAt: ok ? at : old?.fetchedAt ?? null, windows,
-            resetCount: provider.id === 'codex' && resets.email?.toLowerCase() === string(usage.accountEmail)?.toLowerCase() ? resets.count : null,
+            resetCount: provider.id === 'codex' && resets.email?.toLowerCase() === accountEmail?.toLowerCase() ? resets.count : null,
           } satisfies Account;
         });
         for (const provider of antigravityProviders) {

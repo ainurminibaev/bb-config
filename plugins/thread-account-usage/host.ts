@@ -14,17 +14,17 @@ const readCodexVolume = createCodexVolumeReader();
 const readAntigravity = createAntigravityReader();
 
 // Read-only protocol: never includes the credit consumption method.
-function readCodexResets(): Promise<{ email: string | null; count: number | null }> {
+function readCodexResets(): Promise<{ email: string | null; count: number | null; rateLimits?: unknown }> {
   return new Promise(resolve => {
     const child = spawn(process.env.CODEX_BIN || 'codex', ['app-server', '--stdio'], { stdio: ['pipe','pipe','pipe'] });
     const lines = createInterface({ input: child.stdout });
-    let done = false, email: string | null = null, count: number | null = null;
+    let done = false, email: string | null = null, count: number | null = null, rateLimits: unknown = undefined;
     let received = 0;
     const finish = () => {
       if (done) return; done = true; clearTimeout(timer); lines.close();
       child.kill('SIGTERM');
       const kill = setTimeout(() => { if (child.exitCode === null) child.kill('SIGKILL'); }, 250); kill.unref();
-      resolve({ email, count });
+      resolve({ email, count, ...(rateLimits !== undefined ? { rateLimits } : {}) });
     };
     const timer = setTimeout(finish, 12_000); timer.unref();
     const send = (message: object) => { if (!done) child.stdin.write(JSON.stringify(message)+'\n', error => { if(error) finish(); }); };
@@ -47,6 +47,7 @@ function readCodexResets(): Promise<{ email: string | null; count: number | null
           const value = message.result?.rateLimitResetCredits?.availableCount;
           const parsed = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
           count = Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+          rateLimits = message.result?.rateLimits ?? undefined;
           if (++received === 2) finish();
         }
       } catch { /* Ignore non-JSON CLI log lines. */ }
