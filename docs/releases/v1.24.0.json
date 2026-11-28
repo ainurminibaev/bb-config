@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "version": "v1.24.0",
+  "title": "Каскад подписок 0.3.6: профиль на дерево тредов, подтреды на Codex, быстрый повторный ход",
+  "steps": [
+    {
+      "id": "bundle",
+      "title": "Полный набор компонентов bb-config",
+      "component": "bb-config",
+      "where": "server",
+      "kind": "bundle",
+      "rerun": "Безопасно: установленное и актуальное только проверяется; повтор доделывает остаток после сбоя.",
+      "rollback": "Компонент, который не нужен, исключите командой python3 scripts/bundle.py exclude <id> и удалите штатно (bb plugin remove <id>); прежнюю версию собственного плагина ставит предыдущий релиз."
+    },
+    {
+      "id": "subscriptions-cascade-0-3-4",
+      "title": "Каскад подписок 0.3.4 — профиль «Авто · подтреды на Codex»: подтреды на Codex с проверкой задания из 4 частей и правилом приёмки",
+      "component": "agentcli-subscriptions-cascade",
+      "where": "server",
+      "kind": "command",
+      "applies": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "applicable",
+        "agentcli-subscriptions-cascade",
+        "0.3.4"
+      ],
+      "apply": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "apply",
+        "agentcli-subscriptions-cascade",
+        "0.3.4"
+      ],
+      "verify": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "check",
+        "agentcli-subscriptions-cascade",
+        "0.3.4"
+      ],
+      "rerun": "Актуальная работающая версия проходит проверку без установки.",
+      "rollback": "Установите предыдущий тег agentcli-subscriptions-cascade/v0.3.3."
+    },
+    {
+      "id": "subscriptions-cascade-0-3-5",
+      "title": "Каскад подписок 0.3.5 — профиль как правило на дерево тредов, квота видна до хода, команды limits и check",
+      "component": "agentcli-subscriptions-cascade",
+      "where": "server",
+      "kind": "command",
+      "applies": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "applicable",
+        "agentcli-subscriptions-cascade",
+        "0.3.5"
+      ],
+      "apply": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "apply",
+        "agentcli-subscriptions-cascade",
+        "0.3.5"
+      ],
+      "verify": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "check",
+        "agentcli-subscriptions-cascade",
+        "0.3.5"
+      ],
+      "rerun": "Актуальная работающая версия проходит проверку без установки.",
+      "rollback": "Установите предыдущий тег agentcli-subscriptions-cascade/v0.3.4."
+    },
+    {
+      "id": "subscriptions-cascade-0-3-6",
+      "title": "Каскад подписок 0.3.6 — повторный ход на той же ступени без ожидания: квоты в фоне, тёплый хвост синхронизации",
+      "component": "agentcli-subscriptions-cascade",
+      "where": "server",
+      "kind": "command",
+      "applies": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "applicable",
+        "agentcli-subscriptions-cascade",
+        "0.3.6"
+      ],
+      "apply": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "apply",
+        "agentcli-subscriptions-cascade",
+        "0.3.6"
+      ],
+      "verify": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "check",
+        "agentcli-subscriptions-cascade",
+        "0.3.6"
+      ],
+      "rerun": "Актуальная работающая версия проходит проверку без установки.",
+      "rollback": "Установите предыдущий тег agentcli-subscriptions-cascade/v0.3.5."
+    },
+    {
+      "id": "thread-account-usage-0-3-3",
+      "title": "Thread Account Usage 0.3.3 — разбор окон квоты и пакета VClaude вынесен в проверяемые функции; сверка с каскадом подписок на общих образцах",
+      "component": "thread-account-usage",
+      "where": "server",
+      "kind": "command",
+      "applies": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "applicable",
+        "thread-account-usage",
+        "0.3.3"
+      ],
+      "apply": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "apply",
+        "thread-account-usage",
+        "0.3.3"
+      ],
+      "verify": [
+        "{python}",
+        "scripts/plugin_git_update.py",
+        "check",
+        "thread-account-usage",
+        "0.3.3"
+      ],
+      "rerun": "Актуальная работающая версия проходит проверку без установки.",
+      "rollback": "Установите предыдущий тег thread-account-usage/v0.3.2."
+    }
+  ]
+}
