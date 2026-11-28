@@ -121,6 +121,10 @@ function apply(feed: ThreadFeed, note: RouteNote): void {
       feed.wait?.resolve();
       feed.wait = tl.emitWaiting({ cause: note.cause, until: note.until ?? null, note: note.note, stepId: note.stepId });
       return;
+    case 'notice':
+      // Строку перехода не закрываем: ход идёт, это только предупреждение.
+      tl.emitFailure({ message: note.message, ...(note.stepId ? { stepId: note.stepId } : {}) });
+      return;
     case 'problem':
       if (feed.openSwitch) {
         // Строка перехода закрывается сбоем; причина с действиями — одной строкой ниже.

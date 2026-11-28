@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-agentcli-subscriptions-cascade",
-  "version": "0.2.13",
+  "version": "0.2.14",
   "type": "module",
   "engines": {
     "bb": ">=0.50",

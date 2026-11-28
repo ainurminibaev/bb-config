@@ -19,7 +19,8 @@ const after = await fileSync.finishTurn({ threadId, projectId }, { hostId });
   `unsupported` (нативный Windows), `not-configured` (нет SSH-цели), `error`.
 - `timings` — замеры шагов для ленты; `lines.ts`: `timingLines` даёт
   «Mac → Tru: flush 0,3 с ✓», `summaryLine` — итог одной строкой. `notices` —
-  карантин, снятый lock, решённый конфликт `.git/index`.
+  карантин, снятый lock, решённый конфликт `.git/index`; мост показывает
+  каждое отдельной строкой ленты (RouteNote `notice`), не пряча в flush.
 - Git-читатели на опоре во время хода другой машины — с `ANCHOR_GIT_ENV`
   (`GIT_OPTIONAL_LOCKS=0`).
 

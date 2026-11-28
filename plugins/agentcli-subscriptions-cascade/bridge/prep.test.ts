@@ -93,3 +93,20 @@ test('лента: prep обновляет одну строку перехода
   assert.equal(closed.item!.payload!.state, 'done');
   assert.ok(closed.item!.payload!.steps!.every(s => s.state !== 'running'), 'шаги закрыты');
 });
+
+test('S8: «Отложено файлов» при успешной синхронизации — отдельная строка ленты, строка перехода не ломается', async () => {
+  const qdir = '~/bbfs-quarantine/proj-w1234abcd/2026-11-28T05-41-41-080Z';
+  const svc = routes(async hostId => ({ ...okAt(hostId), notices: hostId === MAC ? [`Отложено файлов Mac: 1 изменённых, 0 удалённых — ${qdir}`] : [] }));
+  const out = await svc.routeTurn(turn);
+  assert.equal(out.action, 'run');
+  const notice = out.notes.find(n => n.kind === 'notice');
+  assert.ok(notice && notice.kind === 'notice' && notice.message.includes(qdir), 'уведомление с путём карантина');
+  assert.ok(!out.notes.some(n => n.kind === 'sync' && /Отложено/u.test(n.detail ?? '')), 'не спрятано в подробностях flush');
+
+  const feed = createTimelineFeed({ now: () => 1_000 });
+  const rows = feed.render('thr_1', out.notes, 'pt-1') as { kind: string; item?: { payload?: { type?: string; message?: string; state?: string } } }[];
+  const shown = rows.filter(d => d.kind === 'item.open' && d.item?.payload?.type === 'problem' && /Отложено файлов Mac: 1 изменённых/u.test(d.item.payload.message ?? ''));
+  assert.equal(shown.length, 1, 'строка «Отложено файлов» видна в ленте');
+  const switchClosed = rows.find(d => d.kind === 'item.close' && d.item?.payload?.type === 'switch');
+  assert.ok(!switchClosed || switchClosed.item!.payload!.state !== 'failed', 'переход не помечен сбоем');
+});

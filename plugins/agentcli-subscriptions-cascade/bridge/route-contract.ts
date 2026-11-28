@@ -30,6 +30,12 @@ export const routeNoteSchema = z.discriminatedUnion('kind', [
   /** note — что сделать владельцу: «Повторите ход · пропустить ступень … · настройки …». */
   z.object({ kind: z.literal('problem'), message: text(300), stage: stageLabelSchema.optional(), stepId: text(120).optional(), note: text(300).optional() }),
   /**
+   * Уведомление синхронизации (карантин опоздавших записей, снятая блокировка,
+   * перенос прежнего содержимого): ход идёт, но владелец должен это увидеть —
+   * отдельной строкой, а не в подробностях успешного flush, которые лента прячет.
+   */
+  z.object({ kind: z.literal('notice'), message: text(300), stepId: text(120).optional() }),
+  /**
    * Подготовка хода идёт (синхронизация): строка перехода обновляется на месте.
    * Шлёт запускатель, пока ждёт решения сервера (RPC turnProgress).
    */
