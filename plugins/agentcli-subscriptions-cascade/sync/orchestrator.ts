@@ -48,6 +48,11 @@ export interface SyncProjectContext {
   anchor: SyncMachine;
   /** Включённые машины-исполнители (без опоры). */
   executors: SyncMachine[];
+  /**
+   * Машины, которые раньше были исполнителями, а теперь выключены или убраны из
+   * каскада (0.3.1): нужны, чтобы закрыть оставшийся там выход писателя и для gc.
+   */
+  retired?: SyncMachine[];
   mode: SyncModeExt;
   ignores: string[];
   /** Режим symlink сессий (symlinkModeFor); не задан — posix-raw. */
@@ -62,6 +67,22 @@ export interface WriterState {
   since: number;
   /** Файлы `.env*` на опоре, у которых до хода было 0600. */
   env600: string[];
+  /**
+   * Все треды, пишущие сейчас на этой машине (0.3.0): тред → начало хода.
+   * Писатели одной машины пишут одну реплику — входят без ожидания; ждут только
+   * писатели с другой машины. Нет поля — писатель один (`threadId`).
+   */
+  threads?: Record<string, number>;
+  /** Папка реплики на машине писателя и подпись машины — на случай, если машину уберут из каскада (0.3.1). */
+  root?: string;
+  label?: string;
+  /** Машина писателя выбыла, а правки ещё не вернулись: с какого момента ждём (0.3.1). */
+  drainSince?: number;
+}
+
+/** Писатели машины-писателя: тред → начало хода. */
+export function writerThreads(writer: WriterState): Record<string, number> {
+  return writer.threads && Object.keys(writer.threads).length > 0 ? { ...writer.threads } : { [writer.threadId]: writer.since };
 }
 
 export interface ProjectSyncState {
@@ -121,6 +142,8 @@ export interface SyncOrchestratorDeps {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   /** Ход другого треда старше этого считается брошенным. По умолчанию 6 ч. */
+  /** Сколько ждать возврата правок с выбывшей из каскада машины, прежде чем снять её блокировку (0.3.1). По умолчанию 5 мин. */
+  retiredWaitMs?: number;
   staleAfterMs?: number;
   /** Сколько ждать живой git перед отказом. По умолчанию 10 с. */
   gitWaitMs?: number;
@@ -264,22 +287,45 @@ export class SyncOrchestrator {
     const now = this.now();
     const stale = (since: number) => now - since > (this.deps.staleAfterMs ?? 6 * 3600_000);
 
-    // Блокировка чужого треда устарела по сроку или потому, что тред не идёт
-    // (упал, заархивирован, удалён): её снимаем, а не ждём.
-    const abandoned = async (threadId: string, since: number) => {
-      if (stale(since)) return true;
-      const active = await this.deps.threadActive?.(threadId).catch(() => null);
-      return active === false;
-    };
+    const abandoned = (threadId: string, since: number) => this.abandoned(threadId, since, now);
+    void stale;
 
     // Открытый писатель: свой незакрытый ход закрываем, чужой живой — отказ «busy»
     // (исполнитель ждёт), брошенный — возвращаем его изменения на опору и снимаем.
+    // Писатель на машине, которая выбыла из каскада (выключена или убрана), — сначала
+    // его обычный выход (flush до опоры, пауза), потом ход; машина недоступна — ждём до
+    // N мин, затем снимаем блокировку со строкой, где могли остаться правки (0.3.1).
+    if (state.writer && this.writerMachine(ctx, state.writer).retired) {
+      await this.drainRetired(ctx, state, thread, timings, notices, now);
+    }
+    let liveWriters: Record<string, number> = {};
     if (state.writer) {
       const writer = state.writer;
-      const foreign = writer.threadId !== thread.threadId;
-      if (foreign && !(await abandoned(writer.threadId, writer.since))) {
-        throw new Refused('busy', `Рабочую папку сейчас пишет другой тред (${writer.threadId}) на ${this.label(ctx, writer.hostId)}`);
+      // Живые писатели, кроме этого треда (свой незакрытый ход закрывается ниже).
+      const others: Record<string, number> = {};
+      for (const [threadId, since] of Object.entries(writerThreads(writer))) {
+        if (threadId !== thread.threadId && !(await abandoned(threadId, since))) others[threadId] = since;
       }
+      const liveOthers = Object.keys(others);
+      liveWriters = others;
+      if (liveOthers.length > 0 && writer.hostId === host) {
+        // Та же машина, та же реплика: ещё один писатель, как два треда одной папки в штатном BB.
+        return this.joinWriter(ctx, state, thread, writer, others, timings);
+      }
+      if (liveOthers.length > 0 && host !== anchor) {
+        throw new Refused('busy', `Рабочую папку сейчас пишет другой тред (${liveOthers.join(', ')}) на ${this.label(ctx, writer.hostId)}`);
+      }
+    }
+    if (state.writer && host === anchor && Object.keys(liveWriters).length > 0) {
+      // Ход на опоре при живом писателе на исполнителе: не блокируем. W (two-way-safe) идёт,
+      // обе стороны пишут; конфликт одного файла — по правилам two-way-safe, строкой в ленте при возврате.
+      const writer = state.writer;
+      const threads = liveWriters;
+      state.writer = { ...writer, threadId: writer.threadId in threads ? writer.threadId : Object.keys(threads)[0]!, threads };
+      notices.push(`${ctx.anchor.label} и ${this.label(ctx, state.writer!.hostId)} пишут рабочую папку одновременно: двусторонняя синхронизация, конфликт одного файла — по правилам two-way-safe`);
+    } else if (state.writer) {
+      const writer = state.writer;
+      const foreign = writer.threadId !== thread.threadId;
       try {
         await this.release(ctx, state, timings, notices);
         if (foreign) notices.push(`Снята блокировка брошенного хода треда ${writer.threadId} на ${this.label(ctx, writer.hostId)}: его изменения возвращены на ${ctx.anchor.label}`);
@@ -308,8 +354,9 @@ export class SyncOrchestrator {
     const machine = ctx.executors.find(m => m.hostId === host);
     if (!machine) throw new Refused('unsupported', `Машина ${host} не участвует в синхронизации проекта`);
     if (machine.pathTranslation || machine.platform === 'windows') throw new Refused('unsupported', `${machine.label}: нативный Windows пока не синхронизируется (нужен перевод путей)`);
-    const busy = Object.keys(state.anchorTurns);
-    if (busy.length) throw new Refused('busy', `На ${ctx.anchor.label} идёт ход другого треда (${busy.join(', ')}) в этой рабочей папке`);
+    // Ход на опоре идёт: не ждём (0.3.0) — после выравнивания W (two-way-safe) держит обе стороны.
+    const anchorBusy = Object.keys(state.anchorTurns);
+    if (anchorBusy.length) notices.push(`${ctx.anchor.label} и ${machine.label} пишут рабочую папку одновременно: двусторонняя синхронизация, конфликт одного файла — по правилам two-way-safe`);
     const ssh = ctx.anchorSsh(host);
     if (!ssh) throw new Refused('not-configured', `${machine.label}: не задан SSH-доступ к ${ctx.anchor.label} для Mutagen. Задайте его в настройках «Каскада»: Машины → ${machine.label} → «SSH к опоре» (имя из ~/.ssh/config на ${machine.label} или user@host).`);
 
@@ -349,7 +396,7 @@ export class SyncOrchestrator {
     }
     pushWarnings(notices, `${ctx.anchor.label} → ${machine.label}`, health.warnings);
 
-    state.writer = { hostId: host, threadId: thread.threadId, since: now, env600 };
+    state.writer = { hostId: host, threadId: thread.threadId, since: now, env600, threads: { [thread.threadId]: now }, root, label: machine.label };
     await this.deps.store.set(thread.projectId, state);
     return { cwd: root, env: {} };
   }
@@ -363,11 +410,104 @@ export class SyncOrchestrator {
       return { cwd: projectRoot(ctx.anchor, ctx.slug), env: {} };
     }
     const machine = ctx.executors.find(m => m.hostId === step.hostId);
-    if (!state.writer || state.writer.threadId !== thread.threadId || state.writer.hostId !== step.hostId) {
+    const threads = state.writer ? writerThreads(state.writer) : {};
+    if (!state.writer || !(thread.threadId in threads) || state.writer.hostId !== step.hostId) {
       return { cwd: machine ? projectRoot(machine, ctx.slug) : projectRoot(ctx.anchor, ctx.slug), env: {} };
+    }
+    delete threads[thread.threadId];
+    // Брошенные соседи (тред не идёт) не держат реплику: счётчик не залипает.
+    for (const [threadId, since] of Object.entries(threads)) if (await this.abandoned(threadId, since, this.now())) delete threads[threadId];
+    const rest = Object.keys(threads);
+    if (rest.length > 0 && machine) {
+      // На машине пишут другие треды: реплика остаётся открытой, изменения этого хода — на опору.
+      const w = sessionName(ctx.projectId, step.hostId, 'w');
+      await this.timed(timings, 'flush', step.hostId, () => this.mutagenOk(step.hostId, sessionArgs('flush', w), 180_000), undefined, { from: step.hostId, to: ctx.anchor.hostId });
+      state.writer = { ...state.writer, threadId: state.writer.threadId in threads ? state.writer.threadId : rest[0]!, threads };
+      await this.deps.store.set(ctx.projectId, state);
+      return { cwd: projectRoot(ctx.anchor, ctx.slug), env: {} };
     }
     await this.release(ctx, state, timings, notices);
     return { cwd: projectRoot(ctx.anchor, ctx.slug), env: {} };
+  }
+
+  /**
+   * Блокировка треда устарела по сроку или тред не идёт (упал, заархивирован,
+   * удалён): её снимаем, а не ждём.
+   */
+  private async abandoned(threadId: string, since: number, now: number): Promise<boolean> {
+    if (now - since > (this.deps.staleAfterMs ?? 6 * 3600_000)) return true;
+    const active = await this.deps.threadActive?.(threadId).catch(() => null);
+    return active === false;
+  }
+
+  /**
+   * Машина писателя: включённый исполнитель или выбывшая (выключена / убрана из
+   * каскада). Для убранной путь берётся из записи писателя, иначе из общего пути
+   * по умолчанию.
+   */
+  private writerMachine(ctx: SyncProjectContext, writer: WriterState): { machine: SyncMachine; retired: boolean } {
+    const live = ctx.executors.find(m => m.hostId === writer.hostId);
+    if (live) return { machine: live, retired: false };
+    if (writer.hostId === ctx.anchor.hostId) return { machine: ctx.anchor, retired: false };
+    const known = ctx.retired?.find(m => m.hostId === writer.hostId);
+    const sharedPath = writer.root ? posix.dirname(writer.root) : known?.sharedPath ?? '/opt/bbfs';
+    return { machine: { hostId: writer.hostId, label: known?.label ?? writer.label ?? writer.hostId, sharedPath, platform: known?.platform ?? 'linux' }, retired: true };
+  }
+
+  /** Подождать, пока ходы живых писателей на выбывшей машине закончатся, затем закрыть их выход. */
+  private async drainRetired(ctx: SyncProjectContext, state: ProjectSyncState, thread: SyncThreadRef, timings: SyncTiming[], notices: string[], now: number) {
+    const writer = state.writer!;
+    const { machine } = this.writerMachine(ctx, writer);
+    const root = writer.root ?? projectRoot(machine, ctx.slug);
+    const waitMs = this.deps.retiredWaitMs ?? 5 * 60_000;
+    const since = writer.drainSince ?? now;
+    const timedOut = now - since >= waitMs;
+    const remember = async () => {
+      if (writer.drainSince === undefined) { state.writer = { ...writer, drainSince: since }; await this.deps.store.set(ctx.projectId, state); }
+    };
+    const alive: string[] = [];
+    for (const [threadId, at] of Object.entries(writerThreads(writer))) if (threadId !== thread.threadId && !(await this.abandoned(threadId, at, now))) alive.push(threadId);
+    if (alive.length > 0 && !timedOut) {
+      await remember();
+      throw new Refused('busy', `Жду: последние правки на ${machine.label} ещё не вернулись (там идёт ход ${alive.join(', ')}; ${machine.label} больше не в каскаде)`);
+    }
+    try {
+      await this.release(ctx, state, timings, notices);
+      notices.push(`${machine.label} больше не в каскаде: её последние правки возвращены на ${ctx.anchor.label}, блокировка снята`);
+      return;
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      if (!timedOut) {
+        await remember();
+        throw new Refused('busy', `Жду: последние правки на ${machine.label} ещё не вернулись (${why.slice(0, 120)})`);
+      }
+      await this.mutagenOk(writer.hostId, sessionArgs('pause', sessionName(ctx.projectId, writer.hostId, 'w')), 30_000).catch(() => undefined);
+      state.writer = null;
+      await this.deps.store.set(ctx.projectId, state);
+      notices.push(`Блокировка ${machine.label} снята: машина больше не в каскаде и не вернула правки за ${Math.round(waitMs / 60_000)} мин — последние правки, возможно, остались на ${machine.label} в ${root}`);
+    }
+  }
+
+  /** Писатель единицы (для маршрута: предпочесть его машину, строка ожидания). */
+  async writerOf(projectId: string): Promise<{ hostId: string; threadIds: string[] } | null> {
+    const state = await this.load(projectId);
+    return state.writer ? { hostId: state.writer.hostId, threadIds: Object.keys(writerThreads(state.writer)) } : null;
+  }
+
+  /**
+   * Ещё один писатель на машине, где реплика уже открыта (W идёт): без
+   * выравнивания и карантина — они помешали бы идущему ходу; только flush W,
+   * чтобы новый ход видел свежие файлы опоры.
+   */
+  private async joinWriter(ctx: SyncProjectContext, state: ProjectSyncState, thread: SyncThreadRef, writer: WriterState, others: Record<string, number>, timings: SyncTiming[]) {
+    const host = writer.hostId;
+    const machine = ctx.executors.find(m => m.hostId === host);
+    if (!machine) throw new Refused('unsupported', `Машина ${host} не участвует в синхронизации проекта`);
+    const w = sessionName(ctx.projectId, host, 'w');
+    await this.timed(timings, 'flush', host, () => this.mutagenOk(host, sessionArgs('flush', w), 180_000), undefined, { from: ctx.anchor.hostId, to: host });
+    state.writer = { ...writer, threadId: writer.threadId in others ? writer.threadId : Object.keys(others)[0]!, threads: { ...others, [thread.threadId]: this.now() } };
+    await this.deps.store.set(thread.projectId, state);
+    return { cwd: projectRoot(machine, ctx.slug), env: {} };
   }
 
   /** Конец хода писателя: вернуть его изменения на опору и поставить W на паузу. */
@@ -375,9 +515,9 @@ export class SyncOrchestrator {
     const writer = state.writer!;
     const host = writer.hostId;
     const anchor = ctx.anchor.hostId;
-    const machine = ctx.executors.find(m => m.hostId === host);
-    if (!machine) throw new Refused('unsupported', `Пишущая машина ${host} больше не в каскаде: закройте её сессию вручную`);
-    const root = projectRoot(machine, ctx.slug);
+    // Машина могла выбыть из каскада: выход писателя тот же, через её хост-RPC (0.3.1).
+    const { machine } = this.writerMachine(ctx, writer);
+    const root = writer.root ?? projectRoot(machine, ctx.slug);
     const anchorRoot = projectRoot(ctx.anchor, ctx.slug);
     const w = sessionName(ctx.projectId, host, 'w');
     const flush = () => this.mutagenOk(host, sessionArgs('flush', w), 180_000);

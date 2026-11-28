@@ -71,6 +71,14 @@ export const routeTurnInputSchema = z.object({
    * действует на все повторные routeTurn этого хода. null — новый ход на каждый вызов.
    */
   turnKey: z.string().min(1).max(160).nullable().default(null),
+  /**
+   * 0.3.0: запускатель умеет ждать решения по билету. Подготовка (ожидание
+   * рабочей папки, первая синхронизация) идёт до 20 мин, а HTTP-запрос дольше
+   * 300 с рвёт undici («fetch failed»). С `async` сервер отвечает не позже чем
+   * через ~20 с: решением или `{ action: 'pending', ticket }`, дальше — опрос
+   * `routeTurnResult`. Без флага (старый запускатель) — ответ, как раньше.
+   */
+  async: z.boolean().optional(),
 });
 export type RouteTurnInput = z.input<typeof routeTurnInputSchema>;
 
@@ -104,6 +112,12 @@ export const routeTurnOutputSchema = z.discriminatedUnion('action', [
     env: z.record(z.string(), z.string()).default({}),
     stage: stageLabelSchema,
     notes: z.array(routeNoteSchema).default([]),
+    /**
+     * `adopt --native` (0.3.0): первый ход переведённого треда продолжает
+     * исходную сессию Claude — запускатель копирует её jsonl под ID сессии
+     * этого треда (если там ещё нет разговора) и стартует с `--resume`.
+     */
+    seedSession: z.object({ sessionId: z.string().regex(/^[0-9a-zA-Z-]{8,80}$/u) }).nullable().optional(),
   }),
   z.object({
     action: z.literal('refuse'),
@@ -233,8 +247,14 @@ export const threadStatusSchema = z.union([
 ]);
 export type ThreadStatus = z.infer<typeof threadStatusSchema>;
 
+/** Решение ещё готовится: спросить `routeTurnResult` с этим билетом. */
+export const routeTurnPendingSchema = z.object({ action: z.literal('pending'), ticket: z.string().min(1) });
+export const routeTurnAsyncOutputSchema = z.union([routeTurnPendingSchema, routeTurnOutputSchema]);
+
 export const executorRpcContract = defineRpcContract({
-  routeTurn: { input: routeTurnInputSchema, output: routeTurnOutputSchema },
+  routeTurn: { input: routeTurnInputSchema, output: routeTurnAsyncOutputSchema },
+  /** Решение по билету `routeTurn` (ждёт до ~20 с): готово — решение, иначе снова pending. */
+  routeTurnResult: { input: z.object({ ticket: z.string().min(1) }), output: routeTurnAsyncOutputSchema },
   finishTurn: { input: finishTurnInputSchema, output: z.object({ notes: z.array(routeNoteSchema) }) },
   threadStatus: { input: z.object({ threadId: z.string().min(1) }), output: threadStatusSchema },
   /**

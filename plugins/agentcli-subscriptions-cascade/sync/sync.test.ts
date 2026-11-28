@@ -74,7 +74,7 @@ test('первый ход на Mac: mount, создание R и W на пауз
   assert.equal(fake.session(MAC, 'r')!.paused, true);
   assert.equal(fake.session(MAC, 'w')!.mode, 'two-way-safe');
   assert.equal(fake.session(MAC, 'r')!.mode, 'one-way-replica');
-  assert.deepEqual(states.get('proj_1')!.writer, { hostId: MAC, threadId: 'thr_a', since: 1_000_000, env600: ['.env'] });
+  assert.deepEqual(states.get('proj_1')!.writer, { hostId: MAC, threadId: 'thr_a', since: 1_000_000, env600: ['.env'], threads: { thr_a: 1_000_000 }, root: '/opt/bbfs/app', label: 'Mac' });
   const align = result.timings.find(t => t.step === 'align')!;
   assert.deepEqual([align.from, align.to, align.ok], [TRU, MAC, true]);
   assert.ok(result.timings.every(t => typeof t.seconds === 'number'));
@@ -171,19 +171,149 @@ test('застрявший index.lock без живого git снимается
   assert.equal(!busy.ok && busy.reason, 'git-busy');
 });
 
-test('один писатель на проект: другой тред получает busy, брошенный ход истекает', async () => {
-  const { sync, tick } = setup();
+test('писатель на исполнителе: другая машина ждёт, опора не блокируется (two-way-safe), брошенный ход истекает', async () => {
+  const { sync, tick, states } = setup();
   assert.equal((await sync.prepareTurn(T, { hostId: MAC })).ok, true);
   const onAnchor = await sync.prepareTurn(T2, { hostId: TRU });
-  assert.equal(!onAnchor.ok && onAnchor.reason, 'busy');
-  const onUa = await sync.prepareTurn(T2, { hostId: UA });
-  assert.equal(!onUa.ok && onUa.reason, 'busy');
+  assert.equal(onAnchor.ok, true, 'ход на опоре при писателе на Mac идёт (0.3.0)');
+  assert.ok(onAnchor.notices.some(n => /пишут рабочую папку одновременно/u.test(n)), onAnchor.notices.join('\n'));
+  assert.equal(states.get('proj_1')!.writer!.threadId, T.threadId, 'писатель на Mac остаётся');
+  const onUa = await sync.prepareTurn({ ...T2, threadId: 'thr_c' }, { hostId: UA });
+  assert.equal(!onUa.ok && onUa.reason, 'busy', 'третья машина ждёт');
   await sync.finishTurn(T, { hostId: MAC });
-  assert.equal((await sync.prepareTurn(T2, { hostId: TRU })).ok, true);
+  // Ход на опоре идёт — исполнитель тоже не ждёт: выравнивание по опоре, дальше two-way-safe.
   const macWhileAnchor = await sync.prepareTurn(T, { hostId: MAC });
-  assert.equal(!macWhileAnchor.ok && macWhileAnchor.reason, 'busy');
+  assert.equal(macWhileAnchor.ok, true);
+  assert.ok(macWhileAnchor.notices.some(n => /пишут рабочую папку одновременно/u.test(n)));
   tick(7 * 3600_000);
+  assert.equal((await sync.prepareTurn({ ...T2, threadId: 'thr_c' }, { hostId: UA })).ok, true, 'брошенный писатель Mac истёк');
+});
+
+test('0.3.0 п.9: два треда одной папки на одной машине пишут вместе; ждёт только писатель с другой машины', async () => {
+  const { fake, sync, states } = setup();
   assert.equal((await sync.prepareTurn(T, { hostId: MAC })).ok, true);
+  const second = await sync.prepareTurn(T2, { hostId: MAC });
+  assert.equal(second.ok, true, second.ok ? '' : second.message);
+  assert.ok(second.ok && second.cwd === (await sync.prepareTurn(T2, { hostId: MAC }).then(r => r.ok ? r.cwd : null)), 'та же реплика');
+  assert.deepEqual(Object.keys(states.get('proj_1')!.writer!.threads!).sort(), [T.threadId, T2.threadId].sort());
+  const fromUa = await sync.prepareTurn({ ...T2, threadId: 'thr_c' }, { hostId: UA });
+  assert.equal(!fromUa.ok && fromUa.reason, 'busy', 'другая машина ждёт');
+  const onAnchor = await sync.prepareTurn({ ...T2, threadId: 'thr_c' }, { hostId: TRU });
+  assert.equal(onAnchor.ok, true, 'ход на опоре не блокируется');
+  await sync.finishTurn({ ...T2, threadId: 'thr_c' }, { hostId: TRU });
+  // Первый закончил — реплика открыта для второго, блокировка за ним.
+  assert.equal((await sync.finishTurn(T, { hostId: MAC })).ok, true);
+  assert.equal(fake.session(MAC, 'w')!.paused, false, 'W идёт, пока пишет второй');
+  assert.equal(states.get('proj_1')!.writer!.threadId, T2.threadId);
+  // Последний закончил — обычное освобождение.
+  assert.equal((await sync.finishTurn(T2, { hostId: MAC })).ok, true);
+  assert.equal(fake.session(MAC, 'w')!.paused, true);
+  assert.equal(states.get('proj_1')!.writer, null);
+  assert.equal((await sync.prepareTurn({ ...T2, threadId: 'thr_c' }, { hostId: UA })).ok, true, 'теперь UA входит');
+});
+
+test('0.3.0 п.9: два треда на Mac параллельно — второй без выравнивания и карантина, правки обоих доходят до Tru', async () => {
+  const { fake, sync } = setup();
+  await sync.prepareTurn(T, { hostId: MAC });
+  await sync.finishTurn(T, { hostId: MAC });
+  // Второй ход A (lazy): первый писатель делает карантин и выравнивание.
+  fake.log.length = 0;
+  assert.equal((await sync.prepareTurn(T, { hostId: MAC })).ok, true);
+  const first = steps(fake.log);
+  assert.ok(first.some(l => /syncQuarantine/u.test(l)) && first.some(l => /flush R/u.test(l)), first.join('\n'));
+  fake.log.length = 0;
+  const b = await sync.prepareTurn(T2, { hostId: MAC });
+  assert.equal(b.ok, true);
+  const join = steps(fake.log);
+  assert.ok(!join.some(l => /syncQuarantine|flush R|resume R/u.test(l)), `второй — без карантина и выравнивания:\n${join.join('\n')}`);
+  assert.ok(join.some(l => /flush W/u.test(l)), 'только flush W');
+  // Конец хода A: flush W на опору, без паузы и снимка; конец B — пауза и снимок.
+  fake.log.length = 0;
+  const doneA = await sync.finishTurn(T, { hostId: MAC });
+  assert.ok(doneA.ok && doneA.timings.some(t => t.step === 'flush' && t.from === MAC && t.to === TRU), 'правки A — на Tru');
+  assert.ok(!steps(fake.log).some(l => /pause W|syncSnapshot/u.test(l)), steps(fake.log).join('\n'));
+  fake.log.length = 0;
+  const doneB = await sync.finishTurn(T2, { hostId: MAC });
+  assert.ok(doneB.ok && doneB.timings.some(t => t.step === 'flush' && t.from === MAC && t.to === TRU), 'правки B — на Tru');
+  assert.ok(steps(fake.log).some(l => /pause W/u.test(l)) && steps(fake.log).some(l => /syncSnapshot/u.test(l)));
+});
+
+test('0.3.0 п.9: один из двух писателей упал — конец хода второго освобождает реплику, счётчик не залипает', async () => {
+  const fake = new FakeMutagen();
+  const states = new Map<string, ProjectSyncState>();
+  let aliveA = true;
+  const sync = new SyncOrchestrator({
+    call: fake.call, context: async () => context(),
+    store: { get: async id => structuredClone(states.get(id)), set: async (id, st) => { states.set(id, structuredClone(st)); } },
+    now: () => 1_000_000, sleep: async () => {}, gitWaitMs: 0,
+    threadActive: async id => (id === 'thr_a' ? aliveA : true),
+  });
+  await sync.prepareTurn(T, { hostId: MAC });
+  await sync.prepareTurn(T2, { hostId: MAC });
+  aliveA = false; // A упал посреди хода
+  assert.equal((await sync.finishTurn(T2, { hostId: MAC })).ok, true);
+  assert.equal(states.get('proj_1')!.writer, null, 'блокировка снята');
+  assert.equal(fake.session(MAC, 'w')!.paused, true);
+  assert.equal((await sync.prepareTurn({ ...T2, threadId: 'thr_c' }, { hostId: UA })).ok, true, 'другая машина входит сразу');
+});
+
+test('0.3.1 п.12: писатель на машине, убранной из каскада, — ход сам закрывает его выход (flush до опоры, пауза) и идёт', async () => {
+  const fake = new FakeMutagen();
+  const states = new Map<string, ProjectSyncState>();
+  let ctx = context();
+  let aliveA = true;
+  const sync = new SyncOrchestrator({
+    call: fake.call, context: async () => ctx,
+    store: { get: async id => structuredClone(states.get(id)), set: async (id, st) => { states.set(id, structuredClone(st)); } },
+    now: () => 1_000_000, sleep: async () => {}, gitWaitMs: 0, threadActive: async id => (id === 'thr_a' ? aliveA : true),
+  });
+  assert.equal((await sync.prepareTurn(T, { hostId: MAC })).ok, true);
+  // Mac убрали из каскада (в настройках его больше нет): ход A там ещё идёт — ждём его.
+  ctx = context({ executors: [{ hostId: UA, label: 'UA', sharedPath: '/opt/bbfs', platform: 'linux' }] });
+  const wait = await sync.prepareTurn(T2, { hostId: UA });
+  assert.ok(!wait.ok && /^Жду: последние правки на Mac ещё не вернулись/u.test(wait.message));
+  aliveA = false; // ход A закончился
+  fake.log.length = 0;
+  const r = await sync.prepareTurn(T2, { hostId: UA });
+  assert.equal(r.ok, true, r.ok ? '' : r.message);
+  const log = steps(fake.log);
+  const flushMac = log.findIndex(l => l.startsWith(`${MAC}:`) && /flush W/u.test(l));
+  const pauseMac = log.findIndex(l => l.startsWith(`${MAC}:`) && /pause W/u.test(l));
+  const firstUa = log.findIndex(l => l.startsWith(`${UA}:`));
+  assert.ok(flushMac !== -1 && pauseMac > flushMac && firstUa > pauseMac, `сначала выход писателя Mac, потом ход на UA:\n${log.join('\n')}`);
+  assert.equal(states.get('proj_1')!.writer!.hostId, UA);
+});
+
+test('0.3.1 п.12: конец хода самого писателя после того, как его машину убрали, — обычный выход, без отказа', async () => {
+  const { sync, states, setContext } = setup();
+  await sync.prepareTurn(T, { hostId: MAC });
+  setContext({ executors: [{ hostId: UA, label: 'UA', sharedPath: '/opt/bbfs', platform: 'linux' }] });
+  const done = await sync.finishTurn(T, { hostId: MAC });
+  assert.equal(done.ok, true, done.ok ? '' : done.message);
+  assert.ok(done.timings.some(t => t.step === 'flush' && t.from === MAC && t.to === TRU));
+  assert.equal(states.get('proj_1')!.writer, null);
+});
+
+test('0.3.1 п.12: выбывшая машина недоступна — ждём со строкой, потом снимаем блокировку и пишем, где могли остаться правки', async () => {
+  const fake = new FakeMutagen();
+  const states = new Map<string, ProjectSyncState>();
+  let now = 1_000_000;
+  let ctx = context();
+  const call: typeof fake.call = (hostId, method, input) => (hostId === MAC && !ctx.executors.some(m => m.hostId === MAC) ? Promise.reject(new Error('host offline')) : fake.call(hostId, method, input));
+  const sync = new SyncOrchestrator({
+    call, context: async () => ctx,
+    store: { get: async id => structuredClone(states.get(id)), set: async (id, st) => { states.set(id, structuredClone(st)); } },
+    now: () => now, sleep: async () => {}, gitWaitMs: 0, retiredWaitMs: 5 * 60_000,
+  });
+  await sync.prepareTurn(T, { hostId: MAC });
+  ctx = context({ executors: [{ hostId: UA, label: 'UA', sharedPath: '/opt/bbfs', platform: 'linux' }], retired: [{ hostId: MAC, label: 'Mac', sharedPath: '/opt/bbfs', platform: 'macos' }] });
+  const waiting = await sync.prepareTurn(T2, { hostId: UA });
+  assert.ok(!waiting.ok && waiting.reason === 'busy' && /^Жду: последние правки на Mac ещё не вернулись/u.test(waiting.message), JSON.stringify(waiting));
+  now += 6 * 60_000;
+  const taken = await sync.prepareTurn(T2, { hostId: UA });
+  assert.equal(taken.ok, true, taken.ok ? '' : taken.message);
+  assert.ok(taken.notices.some(n => /правки, возможно, остались на Mac в \/opt\/bbfs\/app/u.test(n)), taken.notices.join('\n'));
+  assert.equal(states.get('proj_1')!.writer!.hostId, UA);
 });
 
 test('свой незакрытый ход закрывается перед следующим (ход перешёл Mac → UA)', async () => {
@@ -476,7 +606,7 @@ test('строки ленты: flush и выравнивание с направ
   assert.ok(lines.some(l => /^Tru → Mac: выравнивание \d+,\d с ✓$/.test(l)), lines.join('\n'));
   assert.ok(lines.some(l => /^Tru → Mac: flush \d+,\d с ✓$/.test(l)));
   assert.match(summaryLine(prepared, label, 'prepare'), /^Файлы готовы к ходу за \d+,\d с \(Tru, Mac\) ✓$/);
-  const busy = await sync.prepareTurn(T2, { hostId: TRU });
+  const busy = await sync.prepareTurn(T2, { hostId: UA });
   assert.match(summaryLine(busy, label, 'prepare'), /^Синхронизация: Рабочую папку сейчас пишет другой тред \(thr_a\) на Mac/);
 });
 
@@ -541,8 +671,8 @@ test('блокировка упавшего треда: тред не идёт �
     threadActive: async id => (id === 'thr_a' ? alive : true),
   });
   assert.equal((await sync.prepareTurn(T, { hostId: MAC })).ok, true, 'тред A начал ход на Mac');
-  const busy = await sync.prepareTurn(T2, { hostId: MAC });
-  assert.equal(!busy.ok && busy.reason, 'busy', 'A ещё идёт — B ждёт');
+  const busy = await sync.prepareTurn(T2, { hostId: UA });
+  assert.equal(!busy.ok && busy.reason, 'busy', 'A ещё идёт на Mac — B с другой машины ждёт');
   alive = false; // A упал / заархивирован
   const taken = await sync.prepareTurn(T2, { hostId: MAC });
   assert.equal(taken.ok, true, taken.ok ? '' : taken.message);

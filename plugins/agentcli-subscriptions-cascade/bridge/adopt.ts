@@ -3,6 +3,7 @@
 // исходного снимается ожидающий автоповтор provider-retry — иначе он
 // повторит ход на исчерпанном лимите.
 //   bb subscriptions-cascade adopt --stuck | --thread <id> | --project <id> [--dry-run] [--model <профиль>]
+// `--native --thread <id>` — без Handoff, та же сессия Claude (adopt-native.ts).
 // Чужие плагины вызываются по их CLI (REST сервера BB), их код не трогаем.
 
 export interface AdoptThread {
@@ -32,6 +33,12 @@ export interface AdoptOptions {
   /** Профиль каскада для новых тредов. */
   model: string;
   providerId: string;
+  /** `--native` (0.3.0): продолжить ту же сессию Claude в треде каскада, а не Handoff. */
+  native?: boolean;
+  /** Первое сообщение нового треда (`--native`). */
+  prompt?: string | null;
+  /** Сколько ждать простоя исходного треда, с (`--native`). */
+  waitSeconds?: number;
 }
 
 export interface AdoptItem {
@@ -47,7 +54,7 @@ export interface AdoptItem {
 const NATIVE = new Set(['claude-code', 'codex']);
 
 export function parseAdoptArgs(argv: readonly string[]): AdoptOptions | { error: string } {
-  const out = { stuck: false, threadId: null as string | null, projectId: null as string | null, dryRun: false, model: 'auto', json: false };
+  const out = { stuck: false, threadId: null as string | null, projectId: null as string | null, dryRun: false, model: 'auto', json: false, native: false, prompt: null as string | null, waitSeconds: 600 };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]!;
     const value = () => { const v = argv[i + 1]; i += 1; return v ?? null; };
@@ -57,11 +64,15 @@ export function parseAdoptArgs(argv: readonly string[]): AdoptOptions | { error:
     else if (arg === '--thread') out.threadId = value();
     else if (arg === '--project') out.projectId = value();
     else if (arg === '--model') out.model = value() ?? 'auto';
+    else if (arg === '--native') out.native = true;
+    else if (arg === '--prompt') out.prompt = value();
+    else if (arg === '--wait') { const n = Number(value()); if (!Number.isFinite(n) || n < 0) return { error: '--wait <секунды>' }; out.waitSeconds = n; }
     else return { error: `неизвестный аргумент ${arg}` };
   }
   const modes = [out.stuck, out.threadId !== null, out.projectId !== null].filter(Boolean).length;
   if (modes !== 1) return { error: 'укажите ровно одно: --stuck, --thread <id> или --project <id>' };
-  return { stuck: out.stuck, threadId: out.threadId, projectId: out.projectId, dryRun: out.dryRun, model: out.model, providerId: '' };
+  if (out.native && !out.threadId) return { error: '--native переводит один тред: укажите --thread <id>' };
+  return { stuck: out.stuck, threadId: out.threadId, projectId: out.projectId, dryRun: out.dryRun, model: out.model, providerId: '', native: out.native, prompt: out.prompt, waitSeconds: out.waitSeconds };
 }
 
 /** ID нового треда из вывода Handoff (`thr_…` в последней строке с ним). */

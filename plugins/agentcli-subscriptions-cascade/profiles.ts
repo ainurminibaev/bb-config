@@ -4,6 +4,7 @@
 import { AUTO_MODEL_ID, type CascadeConfig, type DiscoveredAccount, type Profile, type QuotaState, type Step, type TestQuotaEntry } from './contract.ts';
 import { buildPlan, explainProfile, profileSteps, stepConfirm, type Attempt, type Decision, type HealthLookup, type ThreadCascadeState } from './engine.ts';
 import type { StepHealth } from './limits.ts';
+import { pinnedEntries, type BlockedModel } from './pins.ts';
 
 const PROVIDER_SHORT: Record<string, string> = { 'claude-code': 'Claude', codex: 'Codex', 'gemini-cli': 'Gemini' };
 export const providerShort = (id: string) => PROVIDER_SHORT[id] ?? id;
@@ -164,7 +165,25 @@ export interface ProviderModel {
  * включённые профили с подсказкой — иначе BB отвечает «No models available»
  * и тред на каскаде создать нельзя.
  */
-export function providerModels(config: CascadeConfig, accounts: readonly DiscoveredAccount[]): ProviderModel[] {
+/** Предел списка моделей провайдера у BB 0.50 (`PROVIDER_FALLBACK_MODELS_MAX`). */
+export const PROVIDER_MODELS_MAX = 64;
+
+/**
+ * Пункты списка моделей провайдера «Каскад»: сначала профили, потом закреплённые
+ * ступени («Tru · Codex · GPT-6.2»). Выбор модели BB 0.50.1 групп и вложенности
+ * не умеет (одна вкладка провайдера, плоский список с поиском), поэтому список
+ * плоский; всего не больше 64 пунктов — лишние закреплённые не показываются.
+ */
+export function providerModels(config: CascadeConfig, accounts: readonly DiscoveredAccount[], blocked?: BlockedModel): ProviderModel[] {
+  const profiles = profileModels(config, accounts);
+  const pinned = pinnedEntries(config, accounts, blocked).map((e): ProviderModel => ({
+    id: e.id, model: e.id, displayName: e.label, description: e.description,
+    isDefault: false, defaultReasoningEffort: 'medium', supportedReasoningEfforts: EFFORTS.map(x => ({ ...x })),
+  }));
+  return [...profiles, ...pinned].slice(0, PROVIDER_MODELS_MAX);
+}
+
+function profileModels(config: CascadeConfig, accounts: readonly DiscoveredAccount[]): ProviderModel[] {
   const entry = (p: Profile, description: string, isDefault: boolean): ProviderModel => ({
     id: p.id, model: p.id, displayName: p.name, description,
     isDefault, defaultReasoningEffort: 'medium', supportedReasoningEfforts: EFFORTS.map(e => ({ ...e })),
@@ -252,7 +271,8 @@ export function previewText(config: CascadeConfig, decision: Decision, attempts:
   switch (decision.kind) {
     case 'run': return `сейчас ход пошёл бы на: ${label(decision.stepId, decision.modelId)}`;
     case 'confirm': return `сейчас ход пошёл бы на: ${label(decision.stepId, decision.modelId)} — после подтверждения`;
-    case 'wait': return decision.reason === 'exhausted'
+    case 'wait': if (decision.reason === 'busy') return `ступень занята (${decision.running ?? '—'} ход.) — ждёт освобождения`;
+      return decision.reason === 'exhausted'
       ? `всё исчерпано — ждать сброса до ${formatTime(decision.until, now)}`
       : `квота неизвестна — перепроверка в ${formatTime(decision.until, now)}`;
     case 'ask-owner': return 'всё исчерпано, сброс не скоро — спросить владельца';

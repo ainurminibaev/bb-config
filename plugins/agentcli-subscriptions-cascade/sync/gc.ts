@@ -6,8 +6,9 @@
 // Основная папка проекта (единица = ID проекта) gc не касается.
 import type { CascadeConfig, Machine } from '../contract.ts';
 import { MUTAGEN_LABEL, labelValue } from './mutagen.ts';
-import type { ProjectSyncState } from './orchestrator.ts';
-import { buildContext, parseUnitId, syncUnitId } from './service.ts';
+import { writerThreads, type ProjectSyncState } from './orchestrator.ts';
+import { buildContext, parseUnitId, syncUnitId, type SeenMachine } from './service.ts';
+import { machineSchema } from '../contract.ts';
 
 export interface UnitRecord { unitId: string; projectId: string; workspace: string; threads?: string[] }
 export interface ThreadRecord { threadId: string; projectId: string; workspace: string | null }
@@ -38,7 +39,8 @@ export function judgeUnit(unit: UnitRecord, owners: ReadonlySet<string>, live: R
   if (owners.size === 0) return { action: 'keep', reason: 'владелец неизвестен — не трогаю' };
   const alive = [...owners].filter(t => live.has(t));
   if (alive.length) return { action: 'keep', reason: `живой тред ${alive.join(', ')}` };
-  if (state?.writer && live.has(state.writer.threadId)) return { action: 'keep', reason: `блокировка писателя живого треда ${state.writer.threadId}` };
+  const liveWriter = state?.writer ? Object.keys(writerThreads(state.writer)).find(t => live.has(t)) : undefined;
+  if (liveWriter) return { action: 'keep', reason: `блокировка писателя живого треда ${liveWriter}` };
   const anchorTurn = Object.keys(state?.anchorTurns ?? {}).find(t => live.has(t));
   if (anchorTurn) return { action: 'keep', reason: `идёт ход ${anchorTurn} на опоре` };
   const lock = state?.writer ? ` (блокировка брошенного хода ${state.writer.threadId} на ${state.writer.hostId}: его изменения уйдут в карантин)` : '';
@@ -46,12 +48,12 @@ export function judgeUnit(unit: UnitRecord, owners: ReadonlySet<string>, live: R
 }
 
 /** Где лежат реплики единицы: исполнители (не опора, не нативный Windows) и имя папки. */
-export function replicaTargets(config: CascadeConfig, unit: UnitRecord, onlyHost: string | null): { machine: Machine; base: string; name: string; key: string }[] {
+export function replicaTargets(config: CascadeConfig, unit: UnitRecord, onlyHost: string | null, retired: readonly Machine[] = []): { machine: Machine; base: string; name: string; key: string }[] {
   const { projectId, suffix } = parseUnitId(unit.unitId);
   if (!suffix) return [];
   const ctx = buildContext({ config, projectId, projectName: projectId, anchorSource: unit.workspace, ssh: new Map(), unitId: unit.unitId, unitSuffix: suffix });
   const anchor = config.machines.find(m => m.anchor);
-  return config.machines
+  return [...config.machines, ...retired.filter(r => !config.machines.some(m => m.hostId === r.hostId))]
     .filter(m => !m.anchor && m.hostId !== anchor?.hostId && m.platform !== 'windows' && !m.pathTranslation)
     .filter(m => onlyHost === null || m.hostId === onlyHost)
     .map(m => {
@@ -76,8 +78,9 @@ export function formatGc(report: GcReport): string {
   const lines: string[] = [report.dryRun ? 'Сборка реплик — предпросмотр (ничего не удалено):' : 'Сборка реплик:'];
   const retire = report.units.filter(u => u.verdict.action === 'retire');
   const keep = report.units.filter(u => u.verdict.action === 'keep');
-  for (const u of retire) {
-    lines.push(`✗ ${u.unitId} — ${u.verdict.reason}`);
+  const retiredOnly = keep.filter(u => u.machines.length > 0);
+  for (const u of [...retire, ...retiredOnly]) {
+    lines.push(u.verdict.action === 'retire' ? `✗ ${u.unitId} — ${u.verdict.reason}` : `↺ ${u.unitId} — реплики машин, выбывших из каскада (единица остаётся: ${u.verdict.reason})`);
     for (const m of u.machines) {
       if (m.error) { lines.push(`    ${m.label} ${m.name}: ошибка — ${m.error}`); continue; }
       const what = m.exists ? `файлов ${m.files}, после последнего хода изменено ${m.changed}, удалено ${m.deleted}${m.hadSnapshot ? '' : ' (снимка нет — в карантин вся реплика)'}` : 'реплики нет';
@@ -104,6 +107,8 @@ export interface GcPorts {
   /** Живые (не архивные, не удалённые) треды среди переданных — одним вызовом на 200 ID. */
   liveThreads(threadIds: readonly string[]): Promise<Set<string>>;
   call: import('./orchestrator.ts').SyncHostCall;
+  /** Выбывшие исполнители (выключены или убраны из каскада, 0.3.1): их реплики собираются при любых владельцах. */
+  retiredMachines?(): Promise<SeenMachine[]>;
   forgetUnit(unitId: string): Promise<void>;
   log?(line: string): void;
 }
@@ -121,8 +126,14 @@ export async function runGc(ports: GcPorts, options: GcOptions): Promise<GcRepor
   const report: GcReport = { dryRun: options.dryRun, units: [], unknownReplicas: [], errors: [] };
   const onlyHost = options.hostId ?? null;
 
+  // Выбывшие исполнители (0.3.1): ход туда больше не пойдёт — их реплики собираются
+  // так же, как реплики архивных тредов (карантин изменённого, удаление).
+  const retired: Machine[] = (await ports.retiredMachines?.().catch(error => { report.errors.push(`выбывшие машины: ${String(error)}`); return [] as SeenMachine[]; }) ?? [])
+    .map(m => machineSchema.parse({ hostId: m.hostId, label: m.label, sharedPath: m.sharedPath, platform: m.platform, pathTranslation: m.pathTranslation ?? false, enabled: false }));
+  const retiredIds = new Set(retired.map(m => m.hostId));
   // Сессии каскада и реплики — по одному вызову на машину.
-  const machines = config.machines.filter(m => !m.anchor && m.enabled && m.platform !== 'windows' && !m.pathTranslation && (onlyHost === null || m.hostId === onlyHost));
+  const machines = [...config.machines.filter(m => !m.anchor && m.enabled), ...retired]
+    .filter(m => m.platform !== 'windows' && !m.pathTranslation && (onlyHost === null || m.hostId === onlyHost));
   const sessionsBy = new Map<string, Map<string, string[]>>();
   const replicasBy = new Map<string, Set<string>>();
   for (const m of machines) {
@@ -142,14 +153,26 @@ export async function runGc(ports: GcPorts, options: GcOptions): Promise<GcRepor
 
   const known = new Map<string, Set<string>>();
   for (const { unit, owners } of scoped) {
-    const verdict = judgeUnit(unit, owners, live, await ports.unitState(unit.unitId).catch(() => undefined));
+    const state = await ports.unitState(unit.unitId).catch(() => undefined);
+    const verdict = judgeUnit(unit, owners, live, state);
     const result: GcUnitResult = { unitId: unit.unitId, workspace: unit.workspace, owners: [...owners], verdict, machines: [] };
-    for (const t of replicaTargets(config, unit, onlyHost)) known.set(t.machine.hostId, (known.get(t.machine.hostId) ?? new Set()).add(t.name));
+    const targets = replicaTargets(config, unit, onlyHost, retired);
+    for (const t of targets) known.set(t.machine.hostId, (known.get(t.machine.hostId) ?? new Set()).add(t.name));
     report.units.push(result);
-    if (verdict.action !== 'retire') continue;
+    // Единица жива — собираются только реплики выбывших машин без открытой там блокировки
+    // писателя (её сначала закрывает ход: правки возвращаются на опору).
+    const retiredOnly = verdict.action !== 'retire';
+    if (retiredOnly && !targets.some(t => retiredIds.has(t.machine.hostId))) continue;
     let clean = true;
-    for (const t of replicaTargets(config, unit, onlyHost)) {
-      if (!t.machine.enabled) continue;
+    for (const t of targets) {
+      const isRetired = retiredIds.has(t.machine.hostId);
+      if (!t.machine.enabled && !isRetired) continue;
+      if (retiredOnly && !isRetired) continue;
+      if (isRetired && state?.writer?.hostId === t.machine.hostId) {
+        result.machines.push({ hostId: t.machine.hostId, label: t.machine.label, name: t.name, sessions: 0, exists: true, files: 0, changed: 0, deleted: 0, hadSnapshot: false, quarantined: null, removed: false, error: 'на машине открыт выход писателя — сначала его закроет ход треда (правки вернутся на опору)' });
+        clean = false;
+        continue;
+      }
       const row: GcMachineResult = { hostId: t.machine.hostId, label: t.machine.label, name: t.name, sessions: sessionsBy.get(t.machine.hostId)?.get(labelValue(unit.unitId))?.length ?? 0, exists: false, files: 0, changed: 0, deleted: 0, hadSnapshot: false, quarantined: null, removed: false, error: null };
       try {
         if (!options.dryRun && row.sessions > 0) {
@@ -165,6 +188,10 @@ export async function runGc(ports: GcPorts, options: GcOptions): Promise<GcRepor
         clean = false;
       }
       result.machines.push(row);
+    }
+    if (retiredOnly) {
+      ports.log?.(`gc ${unit.unitId}: реплики выбывших машин ${options.dryRun ? '(предпросмотр)' : clean ? 'собраны' : 'частично'}`);
+      continue;
     }
     if (!options.dryRun && clean) await ports.forgetUnit(unit.unitId).catch(error => report.errors.push(`запись ${unit.unitId}: ${String(error)}`));
     ports.log?.(`gc ${unit.unitId}: ${options.dryRun ? 'предпросмотр' : clean ? 'собрана' : 'частично'} — ${verdict.reason}`);

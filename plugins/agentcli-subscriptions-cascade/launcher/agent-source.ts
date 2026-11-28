@@ -45,6 +45,27 @@ function rootSafeArgs(args) {
   }
   return out;
 }
+// Окружение CLI ступени: из окружения терминала BB этой машины остаются только
+// её собственный адрес сервера и путь bb (BB_SERVER_URL, BB_CLI,
+// BB_HOST_DAEMON_PORT); тред (BB_THREAD_ID, BB_PROJECT_ID, BB_ENVIRONMENT_ID)
+// приходит от запускателя. Хранилище треда — папка этой машины:
+// <данные BB>/thread-storage/<тред> (данные BB — по пути bb, иначе ~/.bb).
+const MACHINE_BB = new Set(['BB_SERVER_URL', 'BB_CLI', 'BB_HOST_DAEMON_PORT']);
+function bbDataDir(env) {
+  const m = /^(.*)[\/]npm[\/]lib[\/]node_modules[\/]/.exec(env.BB_CLI || '');
+  return m ? m[1] : path.join(os.homedir(), '.bb');
+}
+function stageEnv(base, extra) {
+  const env = {};
+  for (const [k, v] of Object.entries(base)) if (!/^(BB_|CASCADE_)/.test(k) || MACHINE_BB.has(k)) env[k] = v;
+  for (const [k, v] of Object.entries(extra)) if (!MACHINE_BB.has(k)) env[k] = v;
+  delete env.BB_THREAD_STORAGE;
+  if (env.BB_THREAD_ID && /^thr_[a-z0-9]+$/.test(env.BB_THREAD_ID)) {
+    const dir = path.join(bbDataDir(env), 'thread-storage', env.BB_THREAD_ID);
+    try { fs.mkdirSync(dir, { recursive: true }); env.BB_THREAD_STORAGE = dir; } catch {}
+  }
+  return env;
+}
 function start() {
   const h = header;
   if (!fs.existsSync(h.cwd)) return fail('нет папки ' + h.cwd + ' на этой машине');
@@ -66,10 +87,7 @@ function start() {
     }
   }
   putParts = [];
-  const env = {};
-  for (const [k, v] of Object.entries(process.env)) if (!/^(BB_|CASCADE_)/.test(k)) env[k] = v;
-  Object.assign(env, h.env || {});
-  child = spawn(h.command, rootSafeArgs(h.args), { cwd: h.cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+  child = spawn(h.command, rootSafeArgs(h.args), { cwd: h.cwd, env: stageEnv(process.env, h.env || {}), stdio: ['pipe', 'pipe', 'pipe'] });
   child.on('error', e => fail('не удалось запустить ' + h.command + ': ' + e.message));
   child.stdout.on('data', d => { for (let i = 0; i < d.length; i += CHUNK) out('O ' + (seq++) + ' ' + b64(d.subarray(i, i + CHUNK))); });
   child.stderr.on('data', d => { for (let i = 0; i < d.length; i += CHUNK) out('E ' + b64(d.subarray(i, i + CHUNK))); });

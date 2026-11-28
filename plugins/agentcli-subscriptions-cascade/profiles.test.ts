@@ -22,10 +22,12 @@ test('подпись профиля: первая ступень и правил
 
 test('список моделей провайдера = включённые профили в порядке владельца', () => {
   const c = config();
-  const models = providerModels(c, ACCOUNTS);
+  // Сначала профили, за ними закреплённые ступени (pin:…, 0.3.0).
+  const models = providerModels(c, ACCOUNTS).filter(m => !m.id.startsWith('pin:'));
   assert.deepEqual(models.map(m => [m.id, m.displayName]), c.profiles.map(p => [p.id, p.name]));
   assert.deepEqual(models.map(m => m.isDefault), [true, false, false, false, false, false]);
   assert.ok(models.every(m => m.description.startsWith('Старт: ')));
+  assert.deepEqual(providerModels(c, ACCOUNTS).slice(0, models.length).map(m => m.id), models.map(m => m.id), 'профили — первыми');
   // «Авто» выключено — по умолчанию следующий профиль; профиль без ступеней не показывается.
   c.profiles = c.profiles.map(p => p.id === 'auto' ? { ...p, enabled: false } : p);
   c.models = c.models.map(r => r.key === 'fable-5.2' ? { ...r, cells: Object.fromEntries(c.machines.map(m => [m.hostId, { modelId: null, source: 'none' as const }])) } : r);

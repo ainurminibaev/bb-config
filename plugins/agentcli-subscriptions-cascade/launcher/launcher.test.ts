@@ -48,8 +48,16 @@ test('аргументы Claude: сессия, модель ступени, ло
   const { args, dropped } = remoteArgs(['-p', '--mcp-config', '/tmp/x.json', '--settings={"a":1}', '--strict-mcp-config', '--model', 'm']);
   assert.deepEqual(args, ['-p', '--model', 'm']);
   assert.deepEqual(dropped, ['--mcp-config', '--settings', '--strict-mcp-config']);
-  const env = remoteEnv({ CLAUDE_CODE_ENTRYPOINT: 'sdk', CLAUDE_CODE_OAUTH_TOKEN: 'secret', ANTHROPIC_BASE_URL: 'https://gw', MAX_THINKING_TOKENS: '100', HOME: '/x', BB_THREAD_ID: 't' });
+  const env = remoteEnv({ CLAUDE_CODE_ENTRYPOINT: 'sdk', CLAUDE_CODE_OAUTH_TOKEN: 'secret', ANTHROPIC_BASE_URL: 'https://gw', MAX_THINKING_TOKENS: '100', HOME: '/x', BB_SERVER_URL: 'http://127.0.0.1:1', BB_CLI: '/root/.bb/bin/bb', BB_HOST_DAEMON_PORT: '1' });
   assert.deepEqual(env, { CLAUDE_CODE_ENTRYPOINT: 'sdk', MAX_THINKING_TOKENS: '100' });
+});
+
+test('0.3.0 п.7: тред BB уезжает на машину ступени — ID треда, проекта, окружения, хранилище; адрес сервера и bb — нет', () => {
+  const env = remoteEnv({
+    BB_THREAD_ID: 'thr_abc', BB_PROJECT_ID: 'proj_x', BB_ENVIRONMENT_ID: 'env_y', BB_THREAD_STORAGE: '/root/.bb-machines/z/thread-storage/thr_abc',
+    BB_SERVER_URL: 'http://127.0.0.1:4999', BB_CLI: '/root/.bb/bin/bb', BB_HOST_DAEMON_PORT: '38889', BB_API_TOKEN: 'secret', CLAUDE_CODE_OAUTH_TOKEN: 'secret',
+  });
+  assert.deepEqual(env, { BB_THREAD_ID: 'thr_abc', BB_PROJECT_ID: 'proj_x', BB_ENVIRONMENT_ID: 'env_y', BB_THREAD_STORAGE: '/root/.bb-machines/z/thread-storage/thr_abc' });
 });
 
 test('событие лимита Claude: rejected со сбросом в мс', () => {
@@ -163,6 +171,34 @@ test('удалённый запуск: нет папки на машине ст�
     api: fakeTerminalApi(fx.env, { truncate: true }), hostId: 'h', cwd: fx.cwd, command: 'claude', args: [], env: {}, session: null,
     stdin: new PassThrough(), stdout: collect(), stderr: collect(), pollMs: 10, idlePollMs: 20,
   }), (error: unknown) => error instanceof RemoteRunError && error.kind === 'transport');
+});
+
+test('0.3.0 п.7: агент на машине ступени — свой адрес сервера и bb, тред от запускателя, хранилище треда на этой машине', async () => {
+  const fx = remoteFixture();
+  const bin = join(fx.root, 'bin-env');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'showenv'), `#!/bin/sh\nenv | grep -E '^(BB_|CASCADE_)' | sort\n`);
+  chmodSync(join(bin, 'showenv'), 0o755);
+  const home = join(fx.root, 'mac-home');
+  const bbCli = join(home, '.bb', 'npm', 'lib', 'node_modules', 'bb-app', 'host-daemon', 'dist', 'bb');
+  // Окружение терминала BB на машине ступени: свой сервер, свой bb, чужой ID терминала.
+  const terminalEnv = { ...fx.env, PATH: `${bin}:${fx.env.PATH}`, HOME: home, BB_SERVER_URL: 'http://127.0.0.1:49729', BB_CLI: bbCli, BB_HOST_DAEMON_PORT: '38889', BB_TERMINAL_SESSION_ID: 'term_x', CASCADE_FEED_SOCKET: '/tmp/s' };
+  const stdout = collect();
+  const stdin = new PassThrough();
+  stdin.end();
+  const result = await runRemote({
+    api: fakeTerminalApi(terminalEnv), hostId: 'host_mac', cwd: fx.cwd, command: 'showenv', args: [],
+    env: { ...remoteEnv({ BB_THREAD_ID: 'thr_abc', BB_PROJECT_ID: 'proj_x', BB_ENVIRONMENT_ID: 'env_y', BB_THREAD_STORAGE: '/root/.bb-machines/z/thread-storage/thr_abc', BB_SERVER_URL: 'http://127.0.0.1:4999' }), BB_CASCADE_PROFILE: 'auto', BB_CASCADE_STEP: 'host_mac:claude-code:*' },
+    session: null, stdin, stdout, stderr: collect(), pollMs: 10, idlePollMs: 20, sleep: ms => new Promise(r => setTimeout(r, Math.min(ms, 20))),
+  });
+  assert.equal(result.code, 0);
+  const seen = Object.fromEntries(stdout.text().trim().split('\n').map(l => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+  const storage = join(home, '.bb', 'thread-storage', 'thr_abc');
+  assert.deepEqual(seen, {
+    BB_CASCADE_PROFILE: 'auto', BB_CASCADE_STEP: 'host_mac:claude-code:*', BB_CLI: bbCli, BB_ENVIRONMENT_ID: 'env_y', BB_HOST_DAEMON_PORT: '38889',
+    BB_PROJECT_ID: 'proj_x', BB_SERVER_URL: 'http://127.0.0.1:49729', BB_THREAD_ID: 'thr_abc', BB_THREAD_STORAGE: storage,
+  });
+  assert.ok(existsSync(storage), 'хранилище треда создано на машине ступени');
 });
 
 // ---- Запускатель целиком: фальшивый сервер каскада, локальная ступень ----
@@ -534,7 +570,7 @@ test('Codex app-server: тред и адрес сервера — через с�
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
 
-test('P0 песочница: app-server на ступени запускается с конфигом workspace-write без сети', async () => {
+test('песочница как у штатного (0.3.0): app-server на ступени запускается без добавок каскада к песочнице и сети', async () => {
   const fx = remoteFixture();
   const bin = join(fx.root, 'bin-codex2');
   mkdirSync(bin);
@@ -548,7 +584,6 @@ test('P0 песочница: app-server на ступени запускаетс
   });
   assert.equal(code, 0);
   const args = readFileSync(marker, 'utf8').trim();
-  assert.match(args, /^app-server /u);
-  assert.match(args, /sandbox_mode="workspace-write"/u);
-  assert.match(args, /sandbox_workspace_write\.network_access=false/u);
+  assert.equal(args, 'app-server');
+  assert.doesNotMatch(args, /sandbox/u);
 });

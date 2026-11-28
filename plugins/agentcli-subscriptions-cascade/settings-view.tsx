@@ -228,6 +228,16 @@ function StepRow({ step, index, total, machine, accountLabel, account, limits: s
               <option value="try">Пробовать</option>
             </select>
           </label>
+          <label className="asc-field"><span>Одновременных ходов</span>
+            <input type="number" min={1} max={64} placeholder="без лимита" value={step.maxConcurrent ?? ''}
+              onChange={e => { const n = Number.parseInt(e.target.value, 10); onChange({ ...step, maxConcurrent: Number.isFinite(n) && n >= 1 ? Math.min(n, 64) : null }); }} />
+          </label>
+          <label className="asc-field"><span>Ступень занята</span>
+            <select value={step.onBusy} disabled={step.maxConcurrent === null} onChange={e => onChange({ ...step, onBusy: e.target.value as Step['onBusy'] })}>
+              <option value="wait">Ждать места</option>
+              <option value="next">Следующая ступень</option>
+            </select>
+          </label>
           <div className="asc-row asc-span">
             <Switch checked={step.confirm} label="Спрашивать перед входом" onChange={v => onChange({ ...step, confirm: v })} />
             <span>Спрашивать перед входом</span>

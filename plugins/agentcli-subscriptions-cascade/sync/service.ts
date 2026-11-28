@@ -24,6 +24,8 @@ export interface SyncService {
   gc(options: GcOptions): Promise<GcReport>;
   prepareTurn(thread: SyncThreadInput, step: SyncStepRef, progress?: SyncProgress): Promise<SyncResult>;
   finishTurn(thread: SyncThreadInput, step: SyncStepRef): Promise<SyncResult>;
+  /** Кто сейчас пишет рабочую папку треда на исполнителе: машина и треды (0.3.0). */
+  writerOf(thread: SyncThreadInput): Promise<{ hostId: string; threadIds: string[] } | null>;
   applyMode(projectId: string): Promise<SyncResult>;
   teardown(projectId: string, options?: { removeMount?: boolean }): Promise<SyncResult>;
   status(projectId: string): Promise<ProjectSyncState & { mode: SyncModeExt }>;
@@ -79,7 +81,23 @@ export function machineAnchorSsh(machine: Pick<Machine, 'anchorSsh'>): string | 
   return machine.anchorSsh && SSH_TARGET.test(machine.anchorSsh) ? machine.anchorSsh : null;
 }
 
-export function buildContext(args: { config: CascadeConfig; projectId: string; projectName: string; anchorSource: string | null; ssh: ReadonlyMap<string, string>; unitId?: string; unitSuffix?: string | null }): SyncProjectContext {
+/** Машина-исполнитель, которую каскад видел (kv `sync:machine:<hostId>`): нужна, когда её уберут из настроек. */
+export interface SeenMachine { hostId: string; label: string; sharedPath: string; platform: string; pathTranslation?: boolean }
+
+/**
+ * Выбывшие исполнители (0.3.1): выключенные в настройках и убранные из них
+ * (по записям `sync:machine:*`). Опора, включённые исполнители и нативный Windows — нет.
+ */
+export function retiredMachines(config: CascadeConfig, seen: readonly SeenMachine[]): SeenMachine[] {
+  const anchor = config.machines.find(m => m.anchor)?.hostId;
+  const active = new Set(config.machines.filter(m => m.enabled).map(m => m.hostId));
+  const out = new Map<string, SeenMachine>();
+  for (const m of config.machines) if (!m.enabled && !m.anchor) out.set(m.hostId, { hostId: m.hostId, label: m.label, sharedPath: m.sharedPath, platform: m.platform, pathTranslation: m.pathTranslation });
+  for (const m of seen) if (!out.has(m.hostId) && !config.machines.some(c => c.hostId === m.hostId)) out.set(m.hostId, m);
+  return [...out.values()].filter(m => m.hostId !== anchor && !active.has(m.hostId) && m.platform !== 'windows' && !m.pathTranslation);
+}
+
+export function buildContext(args: { config: CascadeConfig; projectId: string; projectName: string; anchorSource: string | null; ssh: ReadonlyMap<string, string>; unitId?: string; unitSuffix?: string | null; seen?: readonly SeenMachine[] }): SyncProjectContext {
   const { config, projectId } = args;
   const anchor = config.machines.find(m => m.anchor) ?? null;
   if (!anchor) throw new Error('В каскаде не выбрана опорная машина');
@@ -96,6 +114,7 @@ export function buildContext(args: { config: CascadeConfig; projectId: string; p
     anchorRealPath: real,
     anchor: toSyncMachine(anchor),
     executors: config.machines.filter(m => m.enabled && !m.anchor).map(toSyncMachine),
+    retired: retiredMachines(config, args.seen ?? []).map(m => ({ hostId: m.hostId, label: m.label, sharedPath: m.sharedPath, platform: m.platform, pathTranslation: m.pathTranslation ?? false })),
     mode: syncModeOf(config, projectId),
     ignores: syncIgnores(config),
     symlinkMode: symlinkModeFor([anchor, ...config.machines.filter(m => m.enabled && !m.anchor)]),
@@ -172,7 +191,27 @@ export function createSyncService(bb: BbPluginApi, loadConfig: () => Promise<{ c
     }
     const name = (project as { name?: unknown } | null)?.name;
     const anchorSource = unit ? unit.workspace : anchor ? projectSourceOn(project, anchor.hostId) : null;
-    return buildContext({ config, projectId, projectName: typeof name === 'string' ? name : projectId, anchorSource, ssh, unitId, unitSuffix: suffix });
+    return buildContext({ config, projectId, projectName: typeof name === 'string' ? name : projectId, anchorSource, ssh, unitId, unitSuffix: suffix, seen: await seenMachines() });
+  }
+
+  const MACHINE_KEY = (hostId: string) => `sync:machine:${hostId}`;
+  async function seenMachines(): Promise<SeenMachine[]> {
+    const keys = await bb.storage.kv.list('sync:machine:').catch(() => [] as string[]);
+    const out: SeenMachine[] = [];
+    for (const key of keys) {
+      const m = await bb.storage.kv.get<SeenMachine>(key).catch(() => undefined);
+      if (m && typeof m.hostId === 'string' && typeof m.sharedPath === 'string') out.push(m);
+    }
+    return out;
+  }
+  /** Запомнить исполнителя хода: если его уберут из настроек, каскад закроет его блокировки и соберёт реплики. */
+  async function rememberMachine(hostId: string): Promise<void> {
+    const { config } = await loadConfig();
+    const m = config.machines.find(x => x.hostId === hostId && !x.anchor);
+    if (!m) return;
+    const rec: SeenMachine = { hostId: m.hostId, label: m.label, sharedPath: m.sharedPath, platform: m.platform, pathTranslation: m.pathTranslation };
+    const prev = await bb.storage.kv.get<SeenMachine>(MACHINE_KEY(hostId)).catch(() => undefined);
+    if (JSON.stringify(prev) !== JSON.stringify(rec)) await bb.storage.kv.set(MACHINE_KEY(hostId), rec);
   }
 
   const orchestrator = new SyncOrchestrator({
@@ -222,6 +261,7 @@ export function createSyncService(bb: BbPluginApi, loadConfig: () => Promise<{ c
       }
       return live;
     },
+    async retiredMachines() { const { config } = await loadConfig(); return retiredMachines(config, await seenMachines()); },
     call,
     async forgetUnit(unitId) { await bb.storage.kv.delete(UNIT_KEY(unitId)); await bb.storage.kv.delete(STATE_KEY(unitId)); },
     log: line => bb.log.info(line),
@@ -232,8 +272,12 @@ export function createSyncService(bb: BbPluginApi, loadConfig: () => Promise<{ c
       const { config } = await loadConfig();
       return runGc(gcPorts, { ...options, ignores: options.ignores ?? syncIgnores(config) });
     },
-    prepareTurn: async (thread, step, progress) => orchestrator.prepareTurn(await unitOf(thread), step, progress),
+    prepareTurn: async (thread, step, progress) => {
+      await rememberMachine(step.hostId).catch(() => undefined);
+      return orchestrator.prepareTurn(await unitOf(thread), step, progress);
+    },
     finishTurn: async (thread, step) => orchestrator.finishTurn(await unitOf(thread), step),
+    writerOf: async thread => orchestrator.writerOf((await unitOf(thread)).projectId),
     applyMode: projectId => orchestrator.applyMode(projectId),
     teardown: (projectId, options) => orchestrator.teardown(projectId, options),
     async status(projectId) {

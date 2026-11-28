@@ -158,3 +158,25 @@ test('retireReplica на настоящей ФС: изменения после 
     await chmod(join(locked, 'secret.txt'), 0o600);
   }
 });
+
+test('0.3.1 п.12: реплики машин, выбывших из каскада (выключена или убрана), собираются и у живой единицы; открытый выход писателя — не трогать', async () => {
+  const OLD = 'host_old';
+  const alive = unit('thr_alive');
+  const locked = unit('thr_locked');
+  const fx = ports({ units: [alive, locked], live: ['thr_alive', 'thr_locked'] });
+  fx.p.retiredMachines = async () => [
+    { hostId: UA, label: 'UA', sharedPath: '/opt/bbfs', platform: 'linux' },
+    { hostId: OLD, label: 'Старый Mac', sharedPath: '/opt/bbfs', platform: 'macos' },
+  ];
+  fx.p.unitState = async id => (id === locked.unitId ? { version: 1, writer: { hostId: OLD, threadId: 'thr_locked', since: 0, env600: [] }, anchorTurns: {} } : undefined);
+  const report = await runGc(fx.p, { dryRun: false });
+  const a = report.units.find(u => u.unitId === alive.unitId)!;
+  assert.equal(a.verdict.action, 'keep', 'единица жива');
+  assert.deepEqual(a.machines.map(m => [m.hostId, m.removed]), [[UA, true], [OLD, true]], 'собраны только выбывшие машины');
+  assert.ok(fx.calls.includes(`${UA} syncMutagen sync terminate`) && fx.calls.includes(`${OLD} syncMutagen sync terminate`));
+  assert.ok(!fx.calls.some(c => c.startsWith(`${MAC} syncRetireReplica`)), 'включённый исполнитель не тронут');
+  const l = report.units.find(u => u.unitId === locked.unitId)!;
+  assert.match(l.machines.find(m => m.hostId === OLD)!.error ?? '', /открыт выход писателя/u);
+  assert.deepEqual(fx.forgot, [], 'живые единицы не забываются');
+  assert.match(formatGc(report), /↺ .* — реплики машин, выбывших из каскада/u);
+});
