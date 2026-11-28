@@ -1,7 +1,11 @@
 // Умолчания и нормализация конфигурации. Чистые функции, без SDK.
 import type { Stage } from './adapter.ts';
 import { defaultProfiles } from './profiles.ts';
-import { configSchema, stepSchema, type CascadeConfig, type Machine, type ModelRow, type Platform, type Step } from './contract.ts';
+import { autoCodexChildrenProfile } from './subthreads.ts';
+import { AUTO_CODEX_CHILDREN_ID, configSchema, stepSchema, type CascadeConfig, type Machine, type ModelRow, type Platform, type Step } from './contract.ts';
+
+/** Встроенные профили, которые добавляются в уже существующие настройки (один раз). */
+const OFFERED_BUILTINS = [{ id: AUTO_CODEX_CHILDREN_ID, make: autoCodexChildrenProfile }] as const;
 
 export const DEFAULT_SHARED_PATH = '/opt/bbfs';
 export const DEFAULT_WINDOWS_SHARED_PATH = 'C:\\bbfs';
@@ -101,8 +105,17 @@ export function normalizeConfig(input: unknown): CascadeConfig {
   // Профили по умолчанию — только если поля нет (конфигурация до профилей).
   // Пустой список, оставленный владельцем, не заполняется заново.
   const hasProfiles = typeof input === 'object' && input !== null && Array.isArray((input as { profiles?: unknown }).profiles);
-  const profiles = hasProfiles ? uniqueBy(config.profiles, p => p.id) : defaultProfiles({ models });
-  return { ...config, machines: anchored, steps, models, profiles };
+  let profiles = hasProfiles ? uniqueBy(config.profiles, p => p.id) : defaultProfiles({ models });
+  // Встроенные профили новых версий (0.3.4: «Авто · подтреды на Codex») — один раз
+  // в существующие настройки; удалённый владельцем профиль не возвращается.
+  const offered = new Set(config.offeredProfiles);
+  for (const builtin of OFFERED_BUILTINS) {
+    if (offered.has(builtin.id)) continue;
+    offered.add(builtin.id);
+    // Пустой список владельца остаётся пустым.
+    if (hasProfiles && profiles.length > 0 && !profiles.some(p => p.id === builtin.id)) profiles = [...profiles, builtin.make()];
+  }
+  return { ...config, machines: anchored, steps, models, profiles, offeredProfiles: [...offered] };
 }
 
 function uniqueBy<T>(items: readonly T[], key: (item: T) => string): T[] {

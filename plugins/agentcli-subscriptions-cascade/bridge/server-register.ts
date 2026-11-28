@@ -50,6 +50,7 @@ export interface ExecutorDeps {
 }
 
 const STATE_KEY = (threadId: string) => `exec:thread:${threadId}`;
+const NOTES_KEY = (threadId: string) => `exec:notes:${threadId}`;
 const CONSENTS_KEY = (projectId: string) => `exec:consents:${projectId}`;
 
 /**
@@ -263,6 +264,17 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
       deps.observeLimit(config, step, { type: 'rate_limit_event', rate_limit_info: observation.raw ?? { status: observation.status, resetsAt: observation.resetsAt ? observation.resetsAt / 1000 : undefined, rateLimitType: observation.windowType ?? undefined } });
     },
     threadInfo,
+    // 0.3.4: строки для ленты родителя подтреда («Codex недоступен … — подтред на Claude»).
+    pushThreadNote: async (threadId, message) => {
+      const list = (await bb.storage.kv.get<string[]>(NOTES_KEY(threadId))) ?? [];
+      await bb.storage.kv.set(NOTES_KEY(threadId), [...(Array.isArray(list) ? list : []), message].slice(-20));
+    },
+    takeThreadNotes: async threadId => {
+      const list = await bb.storage.kv.get<string[]>(NOTES_KEY(threadId));
+      if (!Array.isArray(list) || list.length === 0) return [];
+      await bb.storage.kv.delete(NOTES_KEY(threadId));
+      return list.filter((m): m is string => typeof m === 'string');
+    },
     load: async threadId => bb.storage.kv.get<StoredThreadState>(STATE_KEY(threadId)),
     save: async (threadId, state) => {
       if (state.lastRun) threadProvider.set(threadId, state.lastRun.providerId);

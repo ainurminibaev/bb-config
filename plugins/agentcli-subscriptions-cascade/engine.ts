@@ -13,6 +13,7 @@ import { AUTO_MODEL_ID, MODEL_ID_PREFIX, type CascadeConfig, type DiscoveredAcco
 import type { StepHealth } from './limits.ts';
 import { effectiveModelId } from './models.ts';
 import { isPinId, pinnedProfile, stepTitle } from './pins.ts';
+import { isSubthreadCodexId, subthreadCodexProfile } from './subthreads.ts';
 
 export type { StepHealth } from './limits.ts';
 export type HealthLookup = (stepId: string, modelId: string | null) => StepHealth;
@@ -101,8 +102,10 @@ export function resolveProfile(config: CascadeConfig, requestedModel: string): P
   if (found) return found.enabled ? found : { kind: 'unavailable', reason: 'profile-disabled' };
   // Закреплённая ступень `pin:<stepId>[:<модель>]` (0.3.0): только эта ступень.
   if (isPinId(requestedModel)) return pinnedProfile(config, requestedModel) ?? { kind: 'unavailable', reason: 'unknown-profile' };
+  // «Подтред · Codex» (0.3.4): синтетический, строится из ступеней каскада.
+  if (isSubthreadCodexId(requestedModel)) return subthreadCodexProfile(config);
   if (requestedModel.startsWith(MODEL_ID_PREFIX)) {
-    return { id: requestedModel, name: requestedModel, enabled: true, policy: 'only', modelKey: requestedModel.slice(MODEL_ID_PREFIX.length), stepOrder: null, excludedSteps: [], excludedProviders: [], confirm: {} };
+    return { id: requestedModel, name: requestedModel, enabled: true, policy: 'only', modelKey: requestedModel.slice(MODEL_ID_PREFIX.length), stepOrder: null, excludedSteps: [], excludedProviders: [], confirm: {}, subthreads: 'same' };
   }
   return { kind: 'unavailable', reason: requestedModel === AUTO_MODEL_ID ? 'profile-disabled' : 'unknown-profile' };
 }
@@ -150,7 +153,8 @@ export function buildPlan(input: PlanInput): Attempt[] | Unavailable {
   const account = (hostId: string, providerId: string) => accounts.find(a => a.hostId === hostId && a.providerId === providerId);
   const steps = profileSteps(config, profile);
   // Закреплённую ступень выбрал владелец явно — запрет «подтред только на машине родителя» на неё не действует.
-  const pinned = isPinId(profile.id);
+  // «Подтред · Codex» (0.3.4) идёт на Codex любой машины — S11 тоже не действует.
+  const pinned = isPinId(profile.id) || isSubthreadCodexId(profile.id);
   // S11 действует, только пока машина родителя есть среди ступеней каскада (0.3.1):
   // машину убрали или выключили — подтред идёт по общему профилю.
   const homeInCascade = parentHomeInCascade(config, thread.homeHostId);

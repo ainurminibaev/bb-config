@@ -31,6 +31,7 @@ test('профили из коробки: названия, политики и 
   assert.deepEqual(config().profiles.map(p => [p.id, p.name, p.policy, p.modelKey, p.excludedProviders]), [
     ['auto', 'Авто', 'any', null, []],
     ['auto-no-codex', 'Авто · без Codex', 'any', null, ['codex']],
+    ['auto-codex-children', 'Авто · подтреды на Codex', 'any', null, []],
     ['opus-then-auto', 'Opus → Авто', 'prefer-then-any', 'opus-5.5', []],
     ['fable-then-auto', 'Fable → Авто', 'prefer-then-any', 'fable-5.2', []],
     ['only-opus-5.5', 'Только Opus 5.5', 'only', 'opus-5.5', []],

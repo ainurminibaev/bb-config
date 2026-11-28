@@ -1,0 +1,30 @@
+{
+  "id": "subscriptions-cascade-0-3-4",
+  "title": "Каскад подписок 0.3.4 — профиль «Авто · подтреды на Codex»: подтреды на Codex с проверкой задания из 4 частей и правилом приёмки",
+  "component": "agentcli-subscriptions-cascade",
+  "where": "server",
+  "kind": "command",
+  "applies": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "applicable",
+    "agentcli-subscriptions-cascade",
+    "0.3.4"
+  ],
+  "apply": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "apply",
+    "agentcli-subscriptions-cascade",
+    "0.3.4"
+  ],
+  "verify": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "check",
+    "agentcli-subscriptions-cascade",
+    "0.3.4"
+  ],
+  "rerun": "Актуальная работающая версия проходит проверку без установки.",
+  "rollback": "Установите предыдущий тег agentcli-subscriptions-cascade/v0.3.3."
+}

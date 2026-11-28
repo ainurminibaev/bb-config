@@ -5,6 +5,7 @@
 // включённых ступеней и таблицы моделей при каждом выборе. Чистые функции.
 import type { CascadeConfig, DiscoveredAccount, ModelRow, Profile, Step } from './contract.ts';
 import { effectiveModelId } from './models.ts';
+import { SUBTHREAD_CODEX_NAME, isSubthreadCodexId } from './subthreads.ts';
 
 export const PIN_PREFIX = 'pin:';
 
@@ -67,12 +68,13 @@ export function pinnedProfile(config: CascadeConfig, id: string): Profile | null
     id, name: pinLabel(config, pin.step, row ?? (pin.modelKey ? { displayName: pin.modelKey } : null)), enabled: true,
     policy: pin.modelKey ? 'only' : 'any', modelKey: pin.modelKey,
     stepOrder: [pin.step.id], excludedSteps: config.steps.filter(s => s.id !== pin.step.id).map(s => s.id),
-    excludedProviders: [], confirm: { [pin.step.id]: false },
+    excludedProviders: [], confirm: { [pin.step.id]: false }, subthreads: 'same',
   };
 }
 
 /** Имя профиля по ID: из настроек, закреплённой ступени или сам ID. */
 export function profileName(config: CascadeConfig, id: string): string {
+  if (isSubthreadCodexId(id)) return SUBTHREAD_CODEX_NAME;
   return config.profiles.find(p => p.id === id)?.name ?? pinnedProfile(config, id)?.name ?? id;
 }
 
