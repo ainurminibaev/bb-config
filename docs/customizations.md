@@ -3857,6 +3857,8 @@ proxy-manager 0.3.6: свой значок «Прокси».
   лучшей модели); 402 «лимит» — исчерпание на час, «тариф» — недоступна на ступени
   на сутки; профили названы по модели (ID прежние); квота Codex через app-server
   `account/rateLimits/read`, если `usageLimits` даёт 403. Шаг — `subscriptions-cascade-0-4-0`.
+- Thread Account Usage 0.3.5: квота Codex при 403 от `usageLimits` — у самого Codex на
+  машине (хост-RPC `codexResets` отдаёт `rateLimits`). Шаг — `thread-account-usage-0-3-5`.
 
 Опирается на BB 0.50.1: плоский каталог моделей (≤ 64), `threads.spawn({ pluginMetadata,
 environment: reuse })`, `threads.getPluginMetadata`, `providerThreadId` в событиях треда,

@@ -15,6 +15,25 @@ export function usageWindows(usage: unknown): { ok: boolean; windows: QuotaWindo
   return { ok, windows };
 }
 
+/**
+ * 0.3.5: окна квоты Codex из ответа самого Codex (`account/rateLimits/read` → rateLimits:
+ * primary/secondary, usedPercent в процентах, resetsAt в секундах). Нужны, когда
+ * `system.usageLimits` отвечает 403 (машина с российским IP читает квоту не тем маршрутом).
+ */
+export function codexAppServerWindows(rateLimits: unknown): QuotaWindow[] {
+  const r = rateLimits !== null && typeof rateLimits === 'object' ? rateLimits as Record<string, unknown> : {};
+  const out: QuotaWindow[] = [];
+  for (const slot of ['primary', 'secondary']) {
+    const w = r[slot] !== null && typeof r[slot] === 'object' ? r[slot] as Record<string, unknown> : null;
+    if (!w || typeof w.usedPercent !== 'number' || !Number.isFinite(w.usedPercent)) continue;
+    const minutes = typeof w.windowDurationMins === 'number' ? w.windowDurationMins : null;
+    const kind: QuotaWindow['kind'] = minutes === 300 ? 'five-hour' : minutes === 10_080 ? 'weekly' : 'other';
+    const resets = typeof w.resetsAt === 'number' && Number.isFinite(w.resetsAt) ? new Date(w.resetsAt * 1000).toISOString() : null;
+    out.push({ label: kind === 'five-hour' ? '5h limit' : kind === 'weekly' ? 'Weekly limit' : `${minutes ?? '?'} min limit`, kind, usedPercent: w.usedPercent, resetsAt: resets });
+  }
+  return out;
+}
+
 /** Израсходованная доля пакета VClaude в процентах (0–100). */
 export function vclaudeUsedPercent(usage: { limitUnits: number; remainingUnits: number }): number {
   return Math.max(0, Math.min(100, 100 * (1 - usage.remainingUnits / usage.limitUnits)));
