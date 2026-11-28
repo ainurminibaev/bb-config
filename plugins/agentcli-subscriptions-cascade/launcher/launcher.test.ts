@@ -499,3 +499,37 @@ test('Codex app-server без BB_THREAD_ID: тред от моста → routeTu
   assert.equal(existsSync(marker), false, 'локальный codex не запускался');
   assert.notEqual(code, 0);
 });
+
+test('Codex app-server без BB_SERVER_URL и BB_THREAD_ID: оба от моста (запасные CASCADE_*) → routeTurn на этот адрес', async () => {
+  const fx = remoteFixture();
+  const seen: string[] = [];
+  const route = { action: 'refuse', retryable: true, message: 'тест: маршрут получен', notes: [] };
+  const fetchImpl = (async (url: string, init: RequestInit) => {
+    seen.push(`${String(url)} ${String(init.body ?? '')}`);
+    return new Response(JSON.stringify({ ok: true, result: String(url).endsWith('/routeTurn') ? route : { note: null } }), { status: 200 });
+  }) as unknown as typeof fetch;
+  const code = await runLauncher({
+    env: { PATH: '/usr/bin:/bin', CASCADE_LAUNCHER_PROVIDER: 'codex', CASCADE_THREAD_ID: 'thr_s3', CASCADE_SERVER_URL: 'http://127.0.0.1:4999' },
+    argv: ['app-server'], cwd: fx.cwd, fetch: fetchImpl, stdin: new PassThrough(), stdout: collect(), stderr: collect(), now: Date.now,
+  });
+  assert.equal(code, 75, 'маршрут ответил отказом — запускатель его передал');
+  const call = seen.find(s => s.includes('/rpc/routeTurn'));
+  assert.ok(call?.startsWith('http://127.0.0.1:4999/api/v1/plugins/'), seen.join('\n'));
+  assert.match(call!, /"threadId":"thr_s3"/u);
+});
+
+test('Codex app-server: тред и адрес сервера — через сокет моста ({whoami:"codex"})', async t => {
+  const { createServer } = await import('node:net');
+  const { askBridgeThread } = await import('./main.ts');
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'cxw-')));
+  const path = join(dir, 'b.sock');
+  const server = createServer(socket => {
+    socket.setEncoding('utf8');
+    socket.on('data', chunk => { if (String(chunk).includes('"whoami":"codex"')) socket.end(`${JSON.stringify({ threadId: 'thr_s3', serverUrl: 'http://127.0.0.1:4999' })}\n`); });
+  });
+  const ok = await new Promise<boolean>(resolve => { server.on('error', () => resolve(false)); server.listen(path, () => resolve(true)); });
+  if (!ok) { t.skip('unix-сокеты недоступны в этой среде'); return; }
+  try {
+    assert.deepEqual(await askBridgeThread({ env: { CASCADE_FEED_SOCKET: path } }), { threadId: 'thr_s3', serverUrl: 'http://127.0.0.1:4999' });
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});

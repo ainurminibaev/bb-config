@@ -158,6 +158,7 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
   const noteCodexStart = (threadId: string) => {
     codexThread = { threadId, at: Date.now() };
     process.env.CASCADE_THREAD_ID = threadId; // запасной путь, если сокета нет
+    if (serverEnv.BB_SERVER_URL) process.env.CASCADE_SERVER_URL = serverEnv.BB_SERVER_URL;
   };
   // Адрес сервера BB: у процесса моста BB_SERVER_URL может не быть — берём его из
   // envVars запросов runtime (model/list, thread/*, turn/*). Без него peekProvider
@@ -166,7 +167,7 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
   const server: ServerPort = options.server ?? httpServerPort(serverEnv, () => context?.pluginId ?? 'agentcli-subscriptions-cascade');
   const learnServerUrl = (params: Json) => {
     for (const vars of [rec(params.envVars), rec(rec(params.options).envVars)]) {
-      if (typeof vars.BB_SERVER_URL === 'string' && vars.BB_SERVER_URL) { serverEnv.BB_SERVER_URL = vars.BB_SERVER_URL; return; }
+      if (typeof vars.BB_SERVER_URL === 'string' && vars.BB_SERVER_URL) { serverEnv.BB_SERVER_URL = vars.BB_SERVER_URL; process.env.CASCADE_SERVER_URL = vars.BB_SERVER_URL; return; }
     }
   };
 
@@ -307,7 +308,9 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
     // сессию Codex. Нет такого — «maintenance» (служебный app-server без треда).
     if (message.whoami === 'codex') {
       const threadId = codexThread && Date.now() - codexThread.at < 10 * 60_000 ? codexThread.threadId : null;
-      socket.end(`${JSON.stringify(threadId ? { threadId } : { maintenance: true })}\n`);
+      // Адрес сервера BB тоже: штатный мост Codex не передаёт app-server и BB_SERVER_URL.
+      const serverUrl = serverEnv.BB_SERVER_URL ?? null;
+      socket.end(`${JSON.stringify(threadId ? { threadId, serverUrl } : { maintenance: true, serverUrl })}\n`);
       return;
     }
     if (typeof message.threadId !== 'string') return;
