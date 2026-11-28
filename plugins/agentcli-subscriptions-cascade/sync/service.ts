@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { syncIgnores } from '../config.ts';
 import type { CascadeConfig, Machine } from '../contract.ts';
 import { syncHostContract } from './contract.ts';
+import { runGc, type GcOptions, type GcPorts, type GcReport, type ThreadRecord, type UnitRecord } from './gc.ts';
 import { symlinkModeFor, type SyncModeExt } from './mutagen.ts';
 import { projectSlug, SyncOrchestrator, type ProjectSyncState, type SyncHostCall, type SyncMachine, type SyncProgress, type SyncProjectContext, type SyncResult, type SyncStepRef, type SyncThreadRef } from './orchestrator.ts';
 
@@ -19,6 +20,8 @@ import { projectSlug, SyncOrchestrator, type ProjectSyncState, type SyncHostCall
 export interface SyncThreadInput { threadId: string; projectId: string; workspace?: string | null }
 
 export interface SyncService {
+  /** Сборка брошенных реплик единиц-worktree (gc). */
+  gc(options: GcOptions): Promise<GcReport>;
   prepareTurn(thread: SyncThreadInput, step: SyncStepRef, progress?: SyncProgress): Promise<SyncResult>;
   finishTurn(thread: SyncThreadInput, step: SyncStepRef): Promise<SyncResult>;
   applyMode(projectId: string): Promise<SyncResult>;
@@ -145,7 +148,12 @@ export function createSyncService(bb: BbPluginApi, loadConfig: () => Promise<{ c
     const anchor = config.machines.find(m => m.anchor);
     const projectDefault = anchor ? projectSourceOn(await projectOf(thread.projectId), anchor.hostId) : null;
     const unitId = syncUnitId(thread.projectId, thread.workspace, projectDefault);
-    if (unitId !== thread.projectId) await bb.storage.kv.set(UNIT_KEY(unitId), { projectId: thread.projectId, workspace: thread.workspace });
+    if (unitId !== thread.projectId) {
+      // Треды единицы — для gc (единица живёт, пока жив хоть один её тред).
+      const prev = await bb.storage.kv.get<{ threads?: string[] }>(UNIT_KEY(unitId)).catch(() => undefined);
+      const threads = [...new Set([...(prev?.threads ?? []), thread.threadId])].slice(-50);
+      if (!prev || threads.length !== (prev.threads?.length ?? 0)) await bb.storage.kv.set(UNIT_KEY(unitId), { projectId: thread.projectId, workspace: thread.workspace, threads });
+    }
     return { threadId: thread.threadId, projectId: unitId };
   }
 
@@ -177,7 +185,53 @@ export function createSyncService(bb: BbPluginApi, loadConfig: () => Promise<{ c
     threadActive: async threadId => threadActiveFrom(await bb.sdk.threads.get({ threadId }).catch(error => (isNotFound(error) ? { missing: true } : undefined))),
   });
 
+  const gcPorts: GcPorts = {
+    loadConfig: async () => (await loadConfig()).config,
+    async units() {
+      const keys = await bb.storage.kv.list('sync:unit:');
+      const out: UnitRecord[] = [];
+      for (const key of keys) {
+        const rec = await bb.storage.kv.get<{ projectId?: string; workspace?: string; threads?: string[] }>(key).catch(() => undefined);
+        if (rec?.projectId && rec.workspace) out.push({ unitId: key.slice('sync:unit:'.length), projectId: rec.projectId, workspace: rec.workspace, threads: rec.threads ?? [] });
+      }
+      return out;
+    },
+    async threads() {
+      const keys = await bb.storage.kv.list('exec:thread:');
+      const out: ThreadRecord[] = [];
+      for (const key of keys) {
+        const st = await bb.storage.kv.get<{ workspace?: string | null; engine?: { projectId?: string } }>(key).catch(() => undefined);
+        if (st?.engine?.projectId) out.push({ threadId: key.slice('exec:thread:'.length), projectId: st.engine.projectId, workspace: st.workspace ?? null });
+      }
+      return out;
+    },
+    async projectDefault(projectId) {
+      const { config } = await loadConfig();
+      const anchor = config.machines.find(m => m.anchor);
+      return anchor ? projectSourceOn(await projectOf(projectId), anchor.hostId) : null;
+    },
+    unitState: unitId => bb.storage.kv.get<ProjectSyncState>(STATE_KEY(unitId)),
+    async liveThreads(ids) {
+      const live = new Set<string>();
+      for (let i = 0; i < ids.length; i += 200) {
+        const raw = await bb.sdk.threads.list({ threadIds: ids.slice(i, i + 200), archived: false, includeHidden: true } as never) as unknown;
+        const items = Array.isArray(raw) ? raw : Array.isArray((raw as { threads?: unknown[] })?.threads) ? (raw as { threads: unknown[] }).threads : [];
+        for (const item of items as { id?: unknown; archivedAt?: unknown; deletedAt?: unknown }[]) {
+          if (typeof item.id === 'string' && !item.archivedAt && !item.deletedAt) live.add(item.id);
+        }
+      }
+      return live;
+    },
+    call,
+    async forgetUnit(unitId) { await bb.storage.kv.delete(UNIT_KEY(unitId)); await bb.storage.kv.delete(STATE_KEY(unitId)); },
+    log: line => bb.log.info(line),
+  };
+
   return {
+    gc: async options => {
+      const { config } = await loadConfig();
+      return runGc(gcPorts, { ...options, ignores: options.ignores ?? syncIgnores(config) });
+    },
     prepareTurn: async (thread, step, progress) => orchestrator.prepareTurn(await unitOf(thread), step, progress),
     finishTurn: async (thread, step) => orchestrator.finishTurn(await unitOf(thread), step),
     applyMode: projectId => orchestrator.applyMode(projectId),

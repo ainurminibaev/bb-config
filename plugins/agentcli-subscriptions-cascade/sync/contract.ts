@@ -59,6 +59,23 @@ export const syncHostContract = defineRpcContract({
     input: z.object({ target: z.string().min(1) }),
     output: z.object({ unmounted: z.boolean(), removed: z.boolean() }),
   },
+  /** Реплики единиц-worktree в общем пути машины: имена `<проект>-w<хеш>` (только чтение). */
+  syncReplicaList: {
+    input: z.object({ base: z.string().min(1) }),
+    output: z.object({ names: z.array(z.string()) }),
+  },
+  /**
+   * Убрать реплику брошенной единицы на исполнителе (gc). Изменения после снимка
+   * последнего хода (снимка нет — всё дерево) — сначала в карантин; затем папка
+   * удаляется. Только `<base>/<имя>-w<8 hex>`, не точка монтирования. dryRun — только посчитать.
+   */
+  syncRetireReplica: {
+    input: z.object({ base: z.string().min(1), name: z.string().min(1), key: z.string().min(1), ignores: z.array(z.string()), quarantineBase: z.string().min(1), dryRun: z.boolean() }),
+    output: z.object({
+      exists: z.boolean(), files: z.number(), changed: z.number(), deleted: z.number(), hadSnapshot: z.boolean(),
+      quarantined: z.string().nullable(), removed: z.boolean(),
+    }),
+  },
 });
 
 export type SyncHostContract = typeof syncHostContract;

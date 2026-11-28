@@ -293,3 +293,73 @@ export async function removeBindMount(target: string) {
   const removed = await rmdir(dst).then(() => true, () => false);
   return { unmounted, removed };
 }
+
+// ---- Сборка брошенных реплик (gc) ----
+
+/** Имя реплики единицы-worktree: `<проект>-w<8 hex>`; ничего другого gc не трогает. */
+export const REPLICA_NAME = /^[A-Za-z0-9._-]+-w[0-9a-f]{8}$/u;
+
+export async function listReplicas(base: string): Promise<{ names: string[] }> {
+  const names = await readdir(base).catch(() => [] as string[]);
+  const out: string[] = [];
+  for (const name of names) {
+    if (!REPLICA_NAME.test(name)) continue;
+    const info = await lstat(join(base, name)).catch(() => null);
+    if (info?.isDirectory()) out.push(name);
+  }
+  return { names: out.sort() };
+}
+
+async function isMountPoint(path: string): Promise<boolean> {
+  if (process.platform === 'linux') {
+    const mounts = parseMountPoints(await readFile('/proc/self/mountinfo', 'utf8').catch(() => ''));
+    return mounts.has(path);
+  }
+  const [self, parent] = await Promise.all([stat(path).catch(() => null), stat(dirname(path)).catch(() => null)]);
+  return !!self && !!parent && self.dev !== parent.dev;
+}
+
+export async function retireReplica(dataDir: string, input: { base: string; name: string; key: string; ignores: readonly string[]; quarantineBase: string; dryRun: boolean }) {
+  if (!REPLICA_NAME.test(input.name)) throw new Error(`не реплика каскада: ${input.name}`);
+  const base = resolve(input.base);
+  const root = join(base, input.name);
+  if (dirname(root) !== base) throw new Error('путь вне общего пути');
+  const info = await lstat(root).catch(() => null);
+  const none = { exists: false, files: 0, changed: 0, deleted: 0, hadSnapshot: false, quarantined: null, removed: false };
+  if (!info) return none;
+  if (!info.isDirectory()) throw new Error(`${root}: не папка`);
+  // Опора подключает проект bind mount — точку монтирования gc не трогает никогда.
+  if (await isMountPoint(root)) throw new Error(`${root}: точка монтирования (опора) — не трогаю`);
+  const before = await readSnapshot(dataDir, input.key);
+  const now = await walk(root, input.ignores);
+  const changed = before ? [...now].filter(([rel, entry]) => { const old = before.get(rel); return !old || !same(old, entry); }).map(([rel]) => rel) : [...now.keys()];
+  const deleted = before ? [...before.keys()].filter(rel => !now.has(rel)) : [];
+  const result = { exists: true, files: now.size, changed: changed.length, deleted: deleted.length, hadSnapshot: before !== null, quarantined: null as string | null, removed: false };
+  if (input.dryRun) return result;
+  if (changed.length || deleted.length) {
+    const dir = join(expandHome(input.quarantineBase), `${stamp()}-gc`);
+    await mkdir(dir, { recursive: true });
+    const failed: string[] = [];
+    for (const rel of changed) {
+      const to = join(dir, rel);
+      const entry = now.get(rel)!;
+      try {
+        await mkdir(dirname(to), { recursive: true });
+        if (entry.link !== undefined) await symlink(entry.link, to);
+        else await copyFile(join(root, rel), to);
+      } catch { failed.push(rel); }
+    }
+    // Не всё скопировано в карантин — реплику не стираем: изменения потерялись бы.
+    if (failed.length) {
+      await writeFile(join(dir, '_unreadable.txt'), `${failed.join('\n')}\n`).catch(() => undefined);
+      throw new Error(`не скопировано в карантин ${failed.length} файл(ов), реплика оставлена: ${dir}`);
+    }
+    if (deleted.length) await writeFile(join(dir, '_deleted.txt'), `${deleted.join('\n')}\n`);
+    if (!before) await writeFile(join(dir, '_no-snapshot.txt'), 'Снимка последнего хода не было: в карантин скопирована вся реплика.\n');
+    result.quarantined = dir;
+  }
+  await rm(root, { recursive: true, force: true });
+  await rm(snapshotFile(dataDir, input.key), { force: true }).catch(() => undefined);
+  result.removed = true;
+  return result;
+}

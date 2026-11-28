@@ -3,7 +3,7 @@
 //   handlers: { probe, ...syncHostHandlers },
 import type { ExperimentalHostRpcHandlers } from '@get-bb/plugin-sdk/host';
 import type { SyncHostContract } from './contract.ts';
-import { chmodFiles, ensureBindMount, envModes, expandHome, gitLocks, mutagen, prepareBeta, quarantine, removeBindMount, removeGitFiles, writeSnapshot } from './host-ops.ts';
+import { chmodFiles, ensureBindMount, envModes, expandHome, gitLocks, listReplicas, mutagen, prepareBeta, quarantine, removeBindMount, removeGitFiles, retireReplica, writeSnapshot } from './host-ops.ts';
 
 export const syncHostHandlers: ExperimentalHostRpcHandlers<SyncHostContract> = {
   syncMutagen: ({ args, timeoutMs }) => mutagen(args, timeoutMs),
@@ -16,4 +16,6 @@ export const syncHostHandlers: ExperimentalHostRpcHandlers<SyncHostContract> = {
   syncRemoveGitFiles: ({ root, paths }) => removeGitFiles(root, paths),
   syncEnsureBindMount: ({ source, target }) => ensureBindMount(source, target),
   syncRemoveBindMount: ({ target }) => removeBindMount(target),
+  syncReplicaList: ({ base }) => listReplicas(base),
+  syncRetireReplica: (input, ctx) => retireReplica(ctx.experimental_paths.dataDir, input),
 };

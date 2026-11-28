@@ -9,6 +9,7 @@
 //   `bb subscriptions-cascade adopt --stuck|--thread <id>|--project <id> [--dry-run]`;
 // - фоновая проверка штатных мостов (digest, версия) — для providerOptions и настроек.
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
+import { formatGc, type GcOptions, type GcReport } from '../sync/gc.ts';
 import { formatThreadTestQuota, parseTestQuotaSpec, withThreadTestQuota } from '../test-quota.ts';
 import type { CascadeConfig, DiscoveredAccount, Step, TestQuotaEntry, WizardMachineState } from '../contract.ts';
 import type { HealthLookup } from '../engine.ts';
@@ -22,6 +23,8 @@ import { createRouteService, type RouteDeps, type RouteService, type StoredThrea
 export interface ExecutorDeps {
   providerId: string;
   loadConfig(): Promise<CascadeConfig>;
+  /** Сборка брошенных реплик единиц-worktree (sync/gc.ts). */
+  gc?(options: GcOptions): Promise<GcReport>;
   /** Пометить модель недоступной на аккаунте машины (видно в таблице моделей). */
   blockModel?(hostId: string, modelId: string, reason: string): Promise<void>;
   /** Мастер «Настроить» на сервере (CLI setup, ленивая настройка при ходе). */
@@ -189,7 +192,32 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
   let disposed = false;
   const timer = setInterval(() => { if (!disposed) void refreshNativeBridges().catch(() => {}); }, 10 * 60_000);
   timer.unref?.();
-  bb.onDispose(() => { disposed = true; clearInterval(timer); });
+  // Сборка брошенных реплик: после архивации/удаления треда каскада (через минуту,
+  // пачкой) и раз в сутки. Один вызов списка тредов за запуск (AGENTS.md).
+  const gcThreads = new Set<string>();
+  let gcTimer: ReturnType<typeof setTimeout> | null = null;
+  const runAutoGc = (threads: string[] | null) => {
+    if (disposed || !deps.gc) return;
+    void deps.loadConfig().then(async config => {
+      if (!config.files.autoGc) return;
+      const report = await deps.gc!({ dryRun: false, ...(threads ? { onlyThreads: threads } : {}) });
+      const retired = report.units.filter(u => u.verdict.action === 'retire');
+      if (retired.length || report.errors.length) bb.log.info(`gc${threads ? ` (${threads.join(', ')})` : ' (сутки)'}: собрано ${retired.length}${report.errors.length ? `, ошибки: ${report.errors.join('; ')}` : ''}`);
+    }).catch(error => bb.log.warn(`gc: ${String(error)}`));
+  };
+  const onGone = (payload: { thread?: { id?: unknown; providerId?: unknown } }) => {
+    const thread = payload.thread;
+    if (!thread || typeof thread.id !== 'string' || thread.providerId !== deps.providerId) return;
+    gcThreads.add(thread.id);
+    if (gcTimer) return;
+    gcTimer = setTimeout(() => { gcTimer = null; const ids = [...gcThreads]; gcThreads.clear(); runAutoGc(ids); }, 60_000);
+    gcTimer.unref?.();
+  };
+  bb.events.on('thread.archived', onGone as never);
+  bb.events.on('thread.deleted', onGone as never);
+  const dailyGc = setInterval(() => runAutoGc(null), 24 * 3_600_000);
+  dailyGc.unref?.();
+  bb.onDispose(() => { disposed = true; clearInterval(timer); clearInterval(dailyGc); if (gcTimer) clearTimeout(gcTimer); });
 
   // Окружение треда приходит только с include: без него hostId пуст, и ход в
   // worktree на опоре ушёл бы в основную папку проекта (живой S1 на 0.1.7).
@@ -304,6 +332,7 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
       { name: 'status', summary: 'Ступень, машина и копия файлов треда', usage: 'bb subscriptions-cascade status --thread <id> [--json]' },
       { name: 'test-quota', summary: 'Тестовая квота ступеней для одного треда (сценарии S1–S13)', usage: "bb subscriptions-cascade test-quota --thread <id> [--set '<ступень>=exhausted|ok|unknown|unavailable[,<сброс ISO|+30m>];…'] [--clear] [--json]" },
       { name: 'setup', summary: 'Мастер «Настроить»: продолжить, перепроверить, настроить с нуля; разрешить вход на опору по ключу', usage: 'bb subscriptions-cascade setup [--machine <hostId|имя>] [--recheck] [--reset] [--allow-ssh] [--dry-run] [--json]' },
+      { name: 'gc', summary: 'Убрать реплики и сессии Mutagen архивированных и удалённых тредов (опора не трогается)', usage: 'bb subscriptions-cascade gc [--dry-run] [--machine <hostId|имя>] [--json]' },
       { name: 'test-bridge', summary: 'Приёмка S13: считать штатный мост несовместимым (без правки BB)', usage: 'bb subscriptions-cascade test-bridge --incompatible|--compatible' },
       { name: 'adopt', summary: 'Перевести треды в каскад (Handoff) и снять автоповтор у исходных', usage: 'bb subscriptions-cascade adopt --stuck|--thread <id>|--project <id> [--dry-run] [--model <профиль>] [--json]' },
     ],
@@ -343,6 +372,18 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
         if (rest.includes('--json')) return { exitCode: 0, stdout: `${JSON.stringify(result)}\n` };
         return { exitCode: result.wizard.some(w => Object.values(w.steps).some(st => st.status === 'failed')) ? 1 : 0, stdout: formatSetup(config, result) };
       }
+      if (command === 'gc') {
+        if (!deps.gc) return { exitCode: 2, stderr: 'сборка недоступна\n' };
+        const config = await deps.loadConfig();
+        const i = rest.indexOf('--machine');
+        const ref = i !== -1 ? rest[i + 1] : undefined;
+        const machine = ref ? config.machines.find(m => m.hostId === ref || m.label.toLowerCase() === ref.toLowerCase()) : undefined;
+        if (ref && !machine) return { exitCode: 2, stderr: `машина «${ref}» не найдена в каскаде\n` };
+        if (machine?.anchor) return { exitCode: 2, stderr: `${machine.label} — опора: реплик там нет, gc её не трогает\n` };
+        const report = await deps.gc({ dryRun: rest.includes('--dry-run'), hostId: machine?.hostId ?? null });
+        if (rest.includes('--json')) return { exitCode: 0, stdout: `${JSON.stringify(report)}\n` };
+        return { exitCode: report.units.some(u => u.machines.some(m => m.error)) ? 1 : 0, stdout: formatGc(report) };
+      }
       if (command === 'test-bridge') {
         const on = rest.includes('--incompatible');
         if (!on && !rest.includes('--compatible')) return { exitCode: 0, stdout: `Тестовый переключатель S13: мост ${bridgeIncompatible ? 'несовместим' : 'совместим'}.\n` };
@@ -360,7 +401,7 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
         if (rest.includes('--json')) return { exitCode: items.some(i => i.error) ? 1 : 0, stdout: `${JSON.stringify({ dryRun: options.dryRun, items })}\n` };
         return { exitCode: items.some(i => i.error) ? 1 : 0, stdout: formatAdopt(items, options.dryRun) };
       }
-      return { exitCode: 2, stderr: 'команды: status, setup, test-quota, test-bridge, adopt\n' };
+      return { exitCode: 2, stderr: 'команды: status, setup, gc, test-quota, test-bridge, adopt\n' };
     },
   });
 

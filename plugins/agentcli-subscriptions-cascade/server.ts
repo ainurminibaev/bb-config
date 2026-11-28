@@ -58,6 +58,7 @@ export default function plugin(bb: BbPluginApi) {
     providerId: PROVIDER_ID,
     loadConfig: async () => (await loadConfig()).config,
     setup: input => setup(input),
+    gc: options => fileSync.gc(options),
     blockModel: async (hostId, modelId, reason) => {
       modelBlocks = Object.fromEntries(Object.entries(modelBlocks).filter(([, b]) => b.until > Date.now()));
       modelBlocks[`${hostId}|${modelId}`] = { until: Date.now() + 24 * 3_600_000, reason: reason.slice(0, 200) };

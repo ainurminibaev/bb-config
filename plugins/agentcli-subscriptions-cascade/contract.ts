@@ -111,6 +111,11 @@ export const filesSchema = z.object({
   projectSyncModes: z.record(z.string(), syncModeSchema).default({}),
   syncEnv: z.boolean().default(true),
   ignores: z.array(z.string().min(1)).default([...DEFAULT_SYNC_IGNORES]),
+  /**
+   * Сборка брошенных реплик сама: после архивации или удаления треда каскада
+   * (через минуту) и раз в сутки. Вручную — `bb subscriptions-cascade gc`.
+   */
+  autoGc: z.boolean().default(true),
 });
 export type FilesConfig = z.infer<typeof filesSchema>;
 

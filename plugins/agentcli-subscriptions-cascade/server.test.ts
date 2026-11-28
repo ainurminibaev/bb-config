@@ -115,9 +115,9 @@ test('перезагрузка плагина: таймер прежнего э�
   globalThis.clearInterval = ((t: Parameters<typeof clearInterval>[0]) => { live.delete(t); realClear(t); }) as typeof clearInterval;
   try {
     const fake = setup();
-    assert.equal(live.size, 1, 'проверка штатных мостов по таймеру');
+    assert.equal(live.size, 2, 'проверка штатных мостов и суточная сборка реплик');
     const next = await fake.harness.reload(plugin);
-    assert.equal(live.size, 1, 'после перезагрузки таймер прежнего экземпляра снят');
+    assert.equal(live.size, 2, 'после перезагрузки таймеры прежнего экземпляра сняты');
     await next.harness.dispose();
     assert.equal(live.size, 0, 'после выключения таймеров нет');
   } finally {
