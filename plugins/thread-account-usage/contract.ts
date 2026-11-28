@@ -37,6 +37,9 @@ export const snapshotSchema = z.object({
   exhausted: z.object({ title: z.string(), detail: z.string(), link: z.string().nullable() }).nullable().optional(),
   // Тред «Каскада подписок»: кольцо показано по его текущей ступени (провайдер, машина, аккаунт).
   cascade: z.object({ profileId: z.string().nullable(), kind: z.enum(['subscription', 'gateway']) }).nullable().optional(),
+  // Claude Code of the thread's machine goes to a gateway: `account` is its package (VClaude).
+  // Тред каскада на ступени VClaude — тоже `gateway: 'vclaude'` (0.3.1).
+  gateway: z.enum(['vclaude']).nullable().optional(),
 });
 export const rpcContract = defineRpcContract({
   comparison: { input: z.object({ refresh: z.boolean().default(false) }), output: comparisonSchema },

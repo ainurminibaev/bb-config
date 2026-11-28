@@ -39,6 +39,16 @@ of the whole queue (latest possible), its tick measures from the running
 package's start; the tooltip and the VClaude tab list the queue. Do not read
 `nearest_expiry` as the end of the paid term.
 
+A Claude Code thread on a machine routed to VClaude (0.2.4) gets its header from
+the package, not from `usageLimits` (which answers `unauthenticated` there):
+the `thread` RPC returns `gateway: "vclaude"`, the account is the VClaude row,
+and the header reads «VClaude» with the package left, e.g. «380,73 млн из
+405 млн · до 27 дек» (level: ≤10 % left — warning, 0 — blocked). Click opens
+«Аккаунты и объёмы» on the VClaude tab (`/plugins/thread-account-usage/accounts/vclaude`).
+Cabinet unreadable — «VClaude · остаток неизвестен», never «Лимиты не
+подтверждены». The route comes from `claudeRoute` of the thread's machine,
+re-asked at most every 2 minutes; other threads keep the usual rings.
+
 Inspect live installation with `bb plugin list --json`. Source, refresh behavior,
 identity limitations, DOM anchors and restoration are described in the plugin
 README.md. After changing source, run TypeScript, `node --test logic.test.ts`,
@@ -47,4 +57,6 @@ installed plugin directory. Build alone does not update the running bundle.
 
 ## Каскад подписок
 
-Тред «Каскада подписок»: кольцо показывает квоту текущей ступени (провайдер, машина, аккаунт из паспорта каскада, у шлюза vclaude — пакет VClaude), в снимке есть поле `cascade`. Каскад не ответил — как раньше. Код: `cascade-passport.ts`, `cascade-step.ts`.
+Тред «Каскада подписок»: кольцо показывает квоту текущей ступени (провайдер, машина, аккаунт из паспорта каскада), в снимке есть поле `cascade`. Каскад не ответил — как раньше. Код: `cascade-passport.ts`, `cascade-step.ts`.
+
+Ступень на VClaude (0.3.1) получает ту же шапку, что тред Claude Code на машине с маршрутом VClaude: `gateway: "vclaude"`, остаток пакета вместо колец. Главный признак — ступень `kind: "gateway"`, `accountKey: "vclaude"`; запасной — ступень-подписка `claude-code`, у машины которой `claudeRoute` указывает на `vclaude.ru`. В панели подпись «ступень каскада» и пояснение «Ступень каскада идёт через шлюз VClaude».

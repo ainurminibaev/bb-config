@@ -38,3 +38,22 @@ test('ступень через шлюз: пакет VClaude, иначе — п�
   assert.equal(cascadeSnapshot('t', gw, null, 'Mac', account({ providerId: 'vclaude', email: null })).binding, 'host-cli');
   assert.match(cascadeSnapshot('t', gw, null, 'Mac', null).message!, /шлюз/);
 });
+
+test('ступень VClaude — шапка пакета, как у треда машины на VClaude (gateway главнее, маршрут — запасной)', () => {
+  const gw = { ...sub, providerId: 'claude-code' as const, kind: 'gateway' as const, accountKey: 'vclaude' };
+  const pkg = account({ key: 'vclaude', providerId: 'vclaude', providerName: 'VClaude', email: null });
+  const s = cascadeSnapshot('t', gw, 'auto', 'Mac', pkg);
+  assert.equal(s.gateway, 'vclaude'); assert.equal(s.binding, 'host-cli'); assert.equal(s.message, null);
+  assert.deepEqual(s.cascade, { profileId: 'auto', kind: 'gateway' });
+  // Кабинет не прочитан — честный «недоступно», шапка остаётся шапкой пакета.
+  const none = cascadeSnapshot('t', gw, null, 'Mac', null);
+  assert.equal(none.gateway, 'vclaude'); assert.equal(none.account?.status, 'unavailable'); assert.match(none.message!, /шлюз VClaude/);
+  // Запасной путь: ступень-подписка, но Claude Code машины направлен на VClaude.
+  const claudeSub = { ...sub, providerId: 'claude-code' as const };
+  const routed = cascadeSnapshot('t', claudeSub, null, 'Mac', pkg, true);
+  assert.equal(routed.gateway, 'vclaude'); assert.equal(routed.cascade?.kind, 'subscription');
+  // Без признака VClaude — обычное кольцо подписки, поля gateway нет.
+  assert.equal(cascadeSnapshot('t', claudeSub, null, 'Mac', account()).gateway, undefined);
+  // Другой шлюз (не VClaude) без аккаунта — прежнее пояснение.
+  assert.match(cascadeSnapshot('t', { ...gw, accountKey: 'other' }, null, 'Mac', null).message!, /остаток считает каскад/);
+});

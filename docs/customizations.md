@@ -3498,6 +3498,24 @@ RPC agent-roster 0.5.0 `roster_list`, поля `kind` и `active.threadId` дл�
 ответа `/api/cabinet/tariff/usage`; без них — прежнее поведение по
 `nearest_expiry`. Тесты — `vclaude.test.ts`, `logic.test.ts`.
 
+Шапка треда VClaude (0.2.4). Тред `claude-code` на машине, где Claude Code
+маршрутизирован на `vclaude.ru`, раньше показывал «не подтверждён» и «Лимиты не
+подтверждены»: `usageLimits` для такого Claude отвечает `unauthenticated`.
+Теперь RPC `thread` по маршруту машины (`claudeRoute`, не чаще раза в 2 минуты)
+отдаёт `gateway: "vclaude"` и аккаунтом — строку VClaude. Шапка: «VClaude»
+вместо имени аккаунта и остаток пакета вместо колец, например «380,73 млн из
+405 млн · до 27 дек»; уровень по остатку (≤10 % — предупреждение, 0 — исчерпан).
+Клик открывает «Аккаунты и объёмы» на вкладке VClaude (subPath `vclaude`).
+Кабинет недоступен — «VClaude · остаток неизвестен». Остальные треды без
+изменений. Опора: метод `claudeRoute` машины, поле `meter` и окно «Тариф» строки
+VClaude, `toPluginPanel(path, { subPath })` SDK. Тесты — `logic.test.ts`
+(`vclaudeThreadSnapshot`, `vclaudeHeadline`). В 0.3.1 сведено с
+совместимостью каскада (0.3.0): тред каскада на ступени `kind: gateway` VClaude
+получает ту же шапку пакета (`gateway: "vclaude"`, поле `cascade` сохраняется);
+ступень каскада главнее, маршрут машины — запасной признак (ступень-подписка
+`claude-code` на машине с маршрутом VClaude). Тесты — `cascade-step.test.ts`.
+Шаг релиза — `next/thread-account-usage-cascade-vclaude`.
+
 Сессия хранится с правами 0600 в `$XDG_STATE_HOME/bb-vclaude/session.json`
 (по умолчанию `~/.local/state/bb-vclaude/session.json`). Для автоматического
 повторного входа серверу нужен файл `login.json` с полями `email` и `password`
@@ -3881,7 +3899,7 @@ bb plugin install ./plugins/agentcli-subscriptions-cascade --yes
 
 ## Совместимость с «Каскадом подписок»: паспорт треда (27 ноября 2026)
 
-limit-guard 0.10.0, thread-account-usage 0.3.0, codex-delegation-watch 0.3.0,
+limit-guard 0.10.0, thread-account-usage 0.3.1, codex-delegation-watch 0.3.0,
 file-local-open 0.4.0, project-open 0.4.0 и git-thread-provenance 0.2.0
 узнают тред каскада по `providerId` `subscriptions-cascade` и мягко
 читают его паспорт: RPC `agentcli-subscriptions-cascade.threadStatus`
@@ -3896,4 +3914,5 @@ Claude Code и Codex каскад не спрашивают вовсе. Что �
 (сборка плагина не берёт файлы соседних папок; правьте копии вместе).
 Проверка: тесты `cascade-*.test.ts` в каждом плагине, в каждом есть случай
 «без каскада всё как раньше». Восстановление и обновление — как у этих
-плагинов (шаги `docs/releases/next/*-cascade.*`).
+плагинов (шаги `docs/releases/next/*-cascade.*`; у thread-account-usage —
+`thread-account-usage-cascade-vclaude`, вместе с шапкой VClaude).
