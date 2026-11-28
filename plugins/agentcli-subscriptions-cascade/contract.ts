@@ -13,6 +13,17 @@ export const AUTO_MODEL_ID = 'auto';
  * Такой ID читается как профиль «только X», чтобы старые треды не ломались.
  */
 export const MODEL_ID_PREFIX = 'm:';
+/**
+ * 0.3.4: профиль «Авто · подтреды на Codex». Сам тред ходит как «Авто», а его
+ * подтреды каскада — только по ступеням Codex (см. subthreads.ts).
+ */
+export const AUTO_CODEX_CHILDREN_ID = 'auto-codex-children';
+/**
+ * 0.3.4: синтетический профиль подтреда «Подтред · Codex»: только ступени Codex,
+ * любая машина, без подтверждения входа; Codex недоступен — «Авто». В настройках
+ * не хранится и в списке моделей не показывается.
+ */
+export const SUBTHREAD_CODEX_ID = 'subthread-codex';
 
 /** Платформа машины. `windows` — нативный Windows, `wsl` — Linux внутри WSL. */
 export const platformSchema = z.enum(['linux', 'macos', 'wsl', 'windows', 'unknown']);
@@ -184,6 +195,13 @@ export const profileSchema = z.object({
   excludedProviders: z.array(z.string()).default([]),
   /** stepId → «спрашивать при входе» поверх настройки ступени. */
   confirm: z.record(z.string(), z.boolean()).default({}),
+  /**
+   * 0.3.4: куда идут подтреды треда на этом профиле. `same` — как раньше (по
+   * своему профилю); `codex` — только ступени Codex на любой машине, без
+   * подтверждения, задание проверяется (4 части); Codex недоступен — «Авто».
+   * На сам тред не влияет. Нет поля (настройки до 0.3.4) — `same`.
+   */
+  subthreads: z.enum(['same', 'codex']).optional(),
 });
 export type Profile = z.infer<typeof profileSchema>;
 
@@ -229,6 +247,12 @@ export const configSchema = z.object({
   models: z.array(modelRowSchema).default([]),
   /** Профили каскада; пусто после удаления владельцем — пусто, умолчания только при отсутствии поля. */
   profiles: z.array(profileSchema).default([]),
+  /**
+   * 0.3.4: встроенные профили, уже предложенные этой установке. Новый встроенный
+   * профиль добавляется в существующие настройки один раз; удалил владелец — не
+   * возвращается.
+   */
+  offeredProfiles: z.array(z.string()).default([]),
   policies: policiesSchema.default(policiesSchema.parse({})),
   files: filesSchema.default(filesSchema.parse({})),
   testQuota: testQuotaSchema.default(testQuotaSchema.parse({})),

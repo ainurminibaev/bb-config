@@ -8,6 +8,10 @@ import type { CascadeConfig, DiscoveredAccount, Step } from '../contract.ts';
 import { BUSY_RECHECK_MS, explainNoSteps, explainProfile, parentHomeMissing, nextThreadState, selectStep, type Decision, type HealthLookup, type ThreadCascadeState } from '../engine.ts';
 import { previewText, usesTestQuota } from '../profiles.ts';
 import { buildHandoff, type ThreadEventRow } from './handoff.ts';
+import { briefRefusalText, briefTextFromEvents, checkBrief, BRIEF_PART_TITLES } from '../brief.ts';
+import { SUBTHREAD_CODEX_ID } from '../contract.ts';
+import { SUBTHREAD_FALLBACK_PROFILE_ID, codexFallbackReason, codexUnavailableLine, isSubthreadCodexId, parentSendsChildrenToCodex } from '../subthreads.ts';
+import { subthreadsPreview } from '../profiles.ts';
 import type {
   AnswerConfirmationInput, AnswerConfirmationOutput, ConfirmPrompt, FinishTurnInput, LimitObservation, NativeProvider, NativeSessions,
   RetryAvailability, RouteNote, RouteTurnInput, RouteTurnOutput, StageLabel, ThreadStatus,
@@ -75,6 +79,10 @@ export interface StoredThreadState {
    * треда. `done` — ход Claude с ней завершился успешно, копия больше не нужна.
    */
   seed?: { sessionId: string; sourceThreadId: string; done: boolean } | null;
+  /** 0.3.4: задание Codex-подтреда проверено (или проверка пропущена) — больше не проверяется. */
+  briefAccepted?: boolean;
+  /** 0.3.4: Codex-подтред сейчас идёт на «Авто» (Codex недоступен) — строка в ленту только при переходе. */
+  codexFallback?: boolean;
 }
 
 export interface RouteDeps {
@@ -121,6 +129,12 @@ export interface RouteDeps {
   threadTitle?(threadId: string): Promise<string | null>;
   /** Посев `adopt --native` для нового треда (одноразовый ключ в метаданных треда → хранилище плагина). */
   adoptSeed?(threadId: string): Promise<{ sourceSessionId: string; sourceThreadId: string } | null>;
+  /**
+   * 0.3.4: строки для ленты другого треда (родителя подтреда) — показываются
+   * в его следующем ходе. Нет портов — очередь в памяти сервера.
+   */
+  pushThreadNote?(threadId: string, message: string): Promise<void>;
+  takeThreadNotes?(threadId: string): Promise<string[]>;
 }
 
 /** Что сделать владельцу, если ход не начался (рядом со строкой отказа). */
@@ -274,7 +288,7 @@ export interface RouteService {
   /** Ответ provider-retry после ошибки лимита: можно ли повторить ход сейчас (S2, S14). */
   retryAvailability(threadId: string): Promise<RetryAvailability>;
   /** Схема профиля треда для метки ступени (timeline.provideScheme): тот же движок и то же состояние. */
-  threadScheme(threadId: string): Promise<{ name: string; text: string; test: boolean; attempts: unknown[]; config: unknown } | null>;
+  threadScheme(threadId: string): Promise<{ name: string; text: string; test: boolean; attempts: unknown[]; config: unknown; subthreads?: { attempts: unknown[]; text: string; note: string } } | null>;
 }
 
 /**
@@ -327,6 +341,40 @@ export function createRouteService(deps: RouteDeps): RouteService {
     return deps.projectConsents(projectId).catch(error => { warn(`правила «навсегда»: ${String(error)}`); return []; });
   }
 
+  // Строки для ленты другого треда (0.3.4): порт хранилища или очередь в памяти.
+  const memoryNotes = new Map<string, string[]>();
+  async function pushThreadNote(threadId: string, message: string): Promise<void> {
+    if (deps.pushThreadNote) { await deps.pushThreadNote(threadId, message).catch(error => warn(`строка для треда ${threadId}: ${String(error)}`)); return; }
+    memoryNotes.set(threadId, [...(memoryNotes.get(threadId) ?? []), message].slice(-20));
+  }
+  async function takeThreadNotes(threadId: string): Promise<string[]> {
+    if (deps.takeThreadNotes) return deps.takeThreadNotes(threadId).catch(error => { warn(`строки треда ${threadId}: ${String(error)}`); return []; });
+    const out = memoryNotes.get(threadId) ?? [];
+    memoryNotes.delete(threadId);
+    return out;
+  }
+
+  /**
+   * 0.3.4: подтред треда, чей профиль отправляет подтреды на Codex. Решает
+   * сохранённый профиль родителя в каскаде; родитель без каскада — нет.
+   */
+  async function codexChildOf(config: CascadeConfig, info: ThreadInfo | null): Promise<boolean> {
+    if (!info?.parentThreadId) return false;
+    const parent = await deps.load(info.parentThreadId).catch(() => undefined);
+    return parentSendsChildrenToCodex(config, parent?.profileId);
+  }
+
+  /**
+   * Выбор ступени по профилю с откатом «Подтред · Codex» → «Авто» (0.3.4):
+   * Codex исчерпан, выключен или квота неизвестна — ход по «Авто».
+   */
+  function selectWithFallback(input: Omit<Parameters<typeof selectStep>[0], 'requestedModel'>, profileId: string): { decision: Decision; profileId: string; fallback: string | null } {
+    const decision = selectStep({ ...input, requestedModel: profileId });
+    const reason = isSubthreadCodexId(profileId) ? codexFallbackReason(decision, utcTime) : null;
+    if (!reason) return { decision, profileId, fallback: null };
+    return { decision: selectStep({ ...input, requestedModel: SUBTHREAD_FALLBACK_PROFILE_ID }), profileId: SUBTHREAD_FALLBACK_PROFILE_ID, fallback: codexUnavailableLine(reason) };
+  }
+
   /** Машина дома треда: у подтреда — машина родителя; у обычного — машина моста. */
   async function homeOf(info: ThreadInfo | null, stored: StoredThreadState, bridgeHost: string | null): Promise<{ hostId: string | null; refuse: boolean }> {
     if (!info?.parentThreadId) return { hostId: stored.engine.homeHostId ?? bridgeHost, refuse: false };
@@ -368,9 +416,9 @@ export function createRouteService(deps: RouteDeps): RouteService {
       const config = await deps.loadConfig();
       lastConfig = config;
       const info = await deps.threadInfo(input.threadId).catch(() => null);
-      const stored = (await deps.load(input.threadId).catch(() => undefined)) ?? freshState(input.threadId, info);
+      let stored = (await deps.load(input.threadId).catch(() => undefined)) ?? freshState(input.threadId, info);
       const now = deps.now();
-      const profileId = input.requestedModel ?? stored.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto';
+      const requestedProfileId = input.requestedModel ?? stored.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto';
       const projectId = input.projectId ?? info?.projectId ?? stored.engine.projectId;
       const bridgeHost = info?.hostId ?? stored.engine.homeHostId;
 
@@ -389,6 +437,30 @@ export function createRouteService(deps: RouteDeps): RouteService {
       if (config.policies.executionMode !== 'provider') {
         const message = refusalText('настройки', 'каскад выключен (режим исполнения «Выключено»). Включите «Свой провайдер» в «Дополнительно» или выберите штатный провайдер.');
         return { action: 'refuse', retryable: false, message, notes: [{ kind: 'problem', message: message.slice(0, 300), note: REFUSAL_ACTIONS }] };
+      }
+
+      // 0.3.4: подтред треда на профиле «подтреды на Codex» ходит по своему профилю
+      // «Подтред · Codex» (не по профилю родителя: правило не идёт вглубь). Подтреды
+      // родителей на других профилях — как раньше, по своему профилю.
+      const codexChild = await codexChildOf(config, info);
+      let profileId = codexChild ? SUBTHREAD_CODEX_ID : requestedProfileId;
+      // Первый ход такого подтреда — только с заданием из 4 частей.
+      if (codexChild && stored.lastRun === null && !stored.briefAccepted) {
+        const events = deps.threadEvents ? await deps.threadEvents(input.threadId, 0).catch(error => { warn(`задание подтреда ${input.threadId}: ${String(error)}`); return null; }) : null;
+        const text = events ? briefTextFromEvents(events) : null;
+        if (text !== null) {
+          const check = checkBrief(text);
+          if (!check.ok) {
+            const message = briefRefusalText(check);
+            const short = `Задание Codex-подтреда не принято — не хватает: ${check.missing.map(part => BRIEF_PART_TITLES[part].split(' — ')[0]).join(', ')}`;
+            return { action: 'refuse', retryable: false, message, notes: [{ kind: 'problem', message: short.slice(0, 300), note: 'Пришлите подтреду полное задание: /goal, «Контекст», «Как делать», «Критерии приёмки»' }] };
+          }
+        } else {
+          // Задание не прочитать (нет порта, сбой чтения событий) — ход не блокируется.
+          warn(`задание подтреда ${input.threadId} не прочитано — проверка пропущена`);
+        }
+        stored = { ...stored, briefAccepted: true };
+        await deps.save(input.threadId, stored).catch(error => warn(`состояние треда: ${String(error)}`));
       }
 
       const plannedSteps = config.steps.filter(s => s.enabled);
@@ -427,14 +499,32 @@ export function createRouteService(deps: RouteDeps): RouteService {
         config, requestedModel: profileId, accounts: deps.accounts(), thread: { ...engine, skippedStepIds: [...cardSkipped, ...skipped], consents: [...engine.consents, ...forever] }, health: withObserved(deps.health(config, input.threadId), stored.observed, at, stored.modelBlocks), now: at,
         running: stepId => activeTurns.count(stepId, input.threadId, at),
       });
-      let decision: Decision = decide(now);
-      if (preferHostId && (decision.kind === 'run' || decision.kind === 'confirm') && decision.hostId !== anchorNow && decision.hostId !== preferHostId) {
-        prefer = preferHostId;
-        decision = decide(now);
+      const pick = (): Decision => {
+        prefer = null;
+        let d = decide(now);
+        if (preferHostId && (d.kind === 'run' || d.kind === 'confirm') && d.hostId !== anchorNow && d.hostId !== preferHostId) {
+          prefer = preferHostId;
+          d = decide(now);
+        }
+        return d;
+      };
+      let decision: Decision = pick();
+      // «Подтред · Codex»: Codex исчерпан, выключен или квота неизвестна — ход по «Авто»
+      // (0.3.4). Занятая ступень (maxConcurrent) — не повод: подтред ждёт места, как все.
+      let codexFallback: string | null = null;
+      const codexRouted = isSubthreadCodexId(profileId);
+      if (codexRouted) {
+        const reason = codexFallbackReason(decision, utcTime);
+        if (reason) {
+          codexFallback = codexUnavailableLine(reason);
+          profileId = SUBTHREAD_FALLBACK_PROFILE_ID;
+          decision = pick();
+        }
       }
       const busyNotes: RouteNote[] = [];
+      if (codexFallback && !stored.codexFallback) busyNotes.push({ kind: 'notice', message: codexFallback.slice(0, 300) });
       // Машина родителя ушла из каскада — правило S11 не держит подтред (0.3.1).
-      if (parentHomeMissing(config, engine)) {
+      if (!isSubthreadCodexId(profileId) && parentHomeMissing(config, engine)) {
         const home = engine.homeHostId!;
         const name = config.machines.find(m => m.hostId === home)?.label ?? deps.hostName?.(home) ?? home;
         busyNotes.push({ kind: 'notice', message: `Машина родителя ${name} не в каскаде — иду по профилю.` });
@@ -644,6 +734,13 @@ export function createRouteService(deps: RouteDeps): RouteService {
         return { action: 'refuse', retryable: false, message, notes };
       }
       notes.unshift(...busyNotes);
+      // Строки, оставленные этому треду другими (0.3.4: «подтред на Claude» от подтреда).
+      const inbox = await takeThreadNotes(input.threadId);
+      notes.unshift(...inbox.map((message): RouteNote => ({ kind: 'notice', message: message.slice(0, 300) })));
+      if (codexFallback && !stored.codexFallback && info?.parentThreadId) {
+        const title = await deps.threadTitle?.(input.threadId).catch(() => null);
+        await pushThreadNote(info.parentThreadId, `Подтред ${title ? `«${title.slice(0, 60)}»` : input.threadId}: ${codexFallback}`);
+      }
       activeTurns.start(decision.stepId, input.threadId, deps.now());
       notes.push({ kind: 'run', stage: to, stepId: decision.stepId });
       notes.push({ kind: 'state', phase: 'running', stage: to, stepId: decision.stepId, profileId });
@@ -656,6 +753,7 @@ export function createRouteService(deps: RouteDeps): RouteService {
         workspace,
         carryConsent: stored.carryConsent && stored.carryConsent.stepId === decision.stepId ? null : stored.carryConsent ?? null,
         ...(seed ? { seed } : {}),
+        ...(codexRouted ? { codexFallback: codexFallback !== null } : {}),
       });
       // Тред знает, что он на каскаде, через окружение CLI ступени (0.3.0), а не через
       // промпт: начало запроса не меняется, кэш промптов не теряется.
@@ -802,12 +900,14 @@ export function createRouteService(deps: RouteDeps): RouteService {
     const profileId = stored.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto';
     const now = deps.now();
     const explained = explainProfile({ config, requestedModel: profileId, accounts: deps.accounts(), thread: stored.engine, health: withObserved(deps.health(config, threadId), stored.observed, now), now });
+    const subthreads = subthreadsPreview(config, profileId, deps.accounts(), withObserved(deps.health(config, threadId), null, now), now);
     return {
       name: profileName(config, profileId),
       text: previewText(config, explained.decision, explained.attempts, now),
       test: usesTestQuota(config, threadId),
       attempts: explained.attempts,
       config,
+      ...(subthreads ? { subthreads } : {}),
     };
   }
 
@@ -831,10 +931,11 @@ export function createRouteService(deps: RouteDeps): RouteService {
       const config = await deps.loadConfig();
       if (config.policies.executionMode !== 'provider') return { kind: 'not-routed' };
       const now = deps.now();
-      const decision = selectStep({
-        config, requestedModel: stored.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto', accounts: deps.accounts(),
+      // «Подтред · Codex» без Codex идёт на «Авто» (0.3.4) — повтор готов, если готово «Авто».
+      const { decision } = selectWithFallback({
+        config, accounts: deps.accounts(),
         thread: { ...stored.engine, turnId: `retry-${now}` }, health: withObserved(deps.health(config, threadId), stored.observed, now, stored.modelBlocks), now,
-      });
+      }, stored.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto');
       switch (decision.kind) {
         case 'run':
         case 'confirm': return { kind: 'ready' };
@@ -914,17 +1015,19 @@ export function createRouteService(deps: RouteDeps): RouteService {
     const [info, stored] = await Promise.all([deps.threadInfo(input.threadId).catch(() => null), deps.load(input.threadId).catch(() => undefined)]);
     const state = stored ?? freshState(input.threadId, info);
     const projectId = input.projectId ?? info?.projectId ?? state.engine.projectId;
-    const profileId = input.requestedModel ?? state.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto';
+    const requested = input.requestedModel ?? state.profileId ?? config.profiles.find(p => p.enabled)?.id ?? 'auto';
+    // 0.3.4: подтред родителя на «подтреды на Codex» — тот же выбор, что у routeTurn.
+    const profileId = (await codexChildOf(config, info)) ? SUBTHREAD_CODEX_ID : requested;
     const now = deps.now();
     const forever = await projectConsentsOf(projectId);
     const turnId = `peek-${now}`;
     // Согласие «на ход», перенесённое на автоповтор, действует и здесь: мост выберет Codex сразу.
     const carry = state.carryConsent && state.carryConsent.until > now ? config.steps.find(st => st.id === state.carryConsent!.stepId) : undefined;
     if (carry) forever.push(grant('turn', { stepId: carry.id, bindingEpoch: bindingEpoch(carry), threadId: input.threadId, turnId, projectId, now }, null));
-    const decision = selectStep({
-      config, requestedModel: profileId, accounts: deps.accounts(), health: withObserved(deps.health(config, input.threadId), state.observed, now, state.modelBlocks), now,
+    const { decision } = selectWithFallback({
+      config, accounts: deps.accounts(), health: withObserved(deps.health(config, input.threadId), state.observed, now, state.modelBlocks), now,
       thread: { ...state.engine, projectId, homeHostId: state.engine.homeHostId ?? info?.hostId ?? null, turnId, skippedStepIds: [], consents: [...state.engine.consents, ...forever] },
-    });
+    }, profileId);
     // Только решённый ход: при «нужно подтверждение» мост остаётся на текущем провайдере,
     // карточку покажет его ход, а сессия другого провайдера откроется уже после «Да».
     if (decision.kind !== 'run') return none;

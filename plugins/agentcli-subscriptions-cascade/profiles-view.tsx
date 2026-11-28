@@ -67,7 +67,7 @@ export function ProfilesView({ state, draft, set, now, initialInfo = null, initi
                   onClick={() => setInfo(info === profile.id ? null : profile.id)} title="Схема каскада" aria-label={`Схема каскада «${profile.name}»`}>i</button>
               </div>
               {info === profile.id && preview && (
-                <CascadeDiagram name={profile.name} attempts={preview.attempts} text={preview.text} draft={draft} test={draft.testQuota.enabled} onClose={() => setInfo(null)} />
+                <CascadeDiagram name={profile.name} attempts={preview.attempts} text={preview.text} draft={draft} test={draft.testQuota.enabled} onClose={() => setInfo(null)} subthreads={preview.subthreads} />
               )}
               {isOpen && preview && (
                 <ProfileCard profile={profile} draft={draft} description={description} preview={preview.text}
@@ -185,15 +185,11 @@ export function ModelPriority({ draft, set }: { draft: CascadeConfig; set(patch:
 }
 
 /** Схема «i»: попытки профиля слева направо, лимит цветом, «ход сейчас», исключённые — серые. */
-export function CascadeDiagram({ name, attempts: all, text, draft, test, onClose }: {
+export function CascadeDiagram({ name, attempts, text, draft, test, onClose, subthreads }: {
   name: string; attempts: readonly ExplainedAttempt[]; text: string; draft: CascadeConfig; test: boolean; onClose(): void;
+  /** 0.3.4: вторая цепочка — куда пошёл бы подтред (профиль «подтреды на Codex»). */
+  subthreads?: { attempts: readonly ExplainedAttempt[]; text: string; note: string } | null;
 }) {
-  // Ступени другого провайдера без модели профиля (Codex в фазе «Opus») — шум: не показываем.
-  // Остальное — план движка как есть, включая исключённые ступени и «нет модели» у своего провайдера.
-  const attempts = all.filter(a => {
-    if (a.skip !== 'no-model' || !a.rowKey) return true;
-    return draft.models.find(r => r.key === a.rowKey)?.providerId === a.providerId;
-  });
   return (
     <div className="asc-diagram" role="region" aria-label={`Схема каскада «${name}»`}>
       <div className="asc-diagram-head">
@@ -201,6 +197,28 @@ export function CascadeDiagram({ name, attempts: all, text, draft, test, onClose
         <span className="asc-legend"><i className="asc-st-available" />есть <i className="asc-st-exhausted" />исчерпан <i className="asc-st-unknown" />неизвестен <i className="asc-st-skip" />пропуск</span>
         <button type="button" className="asc-link" onClick={onClose}>Закрыть</button>
       </div>
+      <DiagramFlow attempts={attempts} draft={draft} />
+      <p className="asc-muted asc-small-text">{text}.</p>
+      {subthreads && (
+        <>
+          <p className="asc-small-text"><b>Подтреды:</b> {subthreads.note}.</p>
+          <DiagramFlow attempts={subthreads.attempts} draft={draft} />
+          <p className="asc-muted asc-small-text">{subthreads.text}.</p>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Цепочка попыток схемы «i». */
+function DiagramFlow({ attempts: all, draft }: { attempts: readonly ExplainedAttempt[]; draft: CascadeConfig }) {
+  // Ступени другого провайдера без модели профиля (Codex в фазе «Opus») — шум: не показываем.
+  // Остальное — план движка как есть, включая исключённые ступени и «нет модели» у своего провайдера.
+  const attempts = all.filter(a => {
+    if (a.skip !== 'no-model' || !a.rowKey) return true;
+    return draft.models.find(r => r.key === a.rowKey)?.providerId === a.providerId;
+  });
+  return (
       <div className="asc-flow">
         {attempts.map((a, i) => {
           const step = draft.steps.find(s => s.id === a.stepId);
@@ -219,8 +237,6 @@ export function CascadeDiagram({ name, attempts: all, text, draft, test, onClose
           );
         })}
       </div>
-      <p className="asc-muted asc-small-text">{text}.</p>
-    </div>
   );
 }
 

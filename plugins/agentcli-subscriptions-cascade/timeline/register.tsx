@@ -50,7 +50,8 @@ function ThreadScheme({ threadId, fallback, onClose }: { threadId: string; fallb
   if (scheme === null) return <ChainScheme from={null} to={fallback} />;
   return (
     <CascadeDiagram name={scheme.name} text={scheme.text} test={scheme.test} onClose={onClose}
-      attempts={scheme.attempts as unknown as ExplainedAttempt[]} draft={scheme.config as unknown as CascadeConfig} />
+      attempts={scheme.attempts as unknown as ExplainedAttempt[]} draft={scheme.config as unknown as CascadeConfig}
+      subthreads={scheme.subthreads ? { ...scheme.subthreads, attempts: scheme.subthreads.attempts as unknown as ExplainedAttempt[] } : null} />
   );
 }
 

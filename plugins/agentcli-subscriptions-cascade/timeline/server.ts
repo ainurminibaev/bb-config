@@ -7,7 +7,7 @@ import type { AskResult, CardInteraction } from './emitter.ts';
 import { ERROR_TINT, stageShort } from './presentation.ts';
 
 /** Ответ RPC threadScheme: данные для CascadeDiagram (profiles-view.tsx). */
-export interface ThreadScheme { name: string; text: string; test: boolean; attempts: unknown[]; config: unknown }
+export interface ThreadScheme { name: string; text: string; test: boolean; attempts: unknown[]; config: unknown; subthreads?: { attempts: unknown[]; text: string; note: string } }
 export type ThreadSchemeProvider = (threadId: string) => Promise<ThreadScheme | null> | ThreadScheme | null;
 
 export interface TimelineServer {

@@ -223,6 +223,8 @@ export const timelineRpcContract = defineRpcContract({
       test: z.boolean(),
       attempts: z.array(z.json()),
       config: z.json(),
+      /** 0.3.4: куда пошёл бы подтред (профиль «подтреды на Codex»). */
+      subthreads: z.object({ attempts: z.array(z.json()), text: text(400), note: text(400) }).optional(),
     }).nullable(),
   },
 });

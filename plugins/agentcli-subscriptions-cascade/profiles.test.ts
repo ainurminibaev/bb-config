@@ -25,7 +25,7 @@ test('список моделей провайдера = включённые п
   // Сначала профили, за ними закреплённые ступени (pin:…, 0.3.0).
   const models = providerModels(c, ACCOUNTS).filter(m => !m.id.startsWith('pin:'));
   assert.deepEqual(models.map(m => [m.id, m.displayName]), c.profiles.map(p => [p.id, p.name]));
-  assert.deepEqual(models.map(m => m.isDefault), [true, false, false, false, false, false]);
+  assert.deepEqual(models.map(m => m.isDefault), [true, false, false, false, false, false, false]);
   assert.ok(models.every(m => m.description.startsWith('Старт: ')));
   assert.deepEqual(providerModels(c, ACCOUNTS).slice(0, models.length).map(m => m.id), models.map(m => m.id), 'профили — первыми');
   // «Авто» выключено — по умолчанию следующий профиль; профиль без ступеней не показывается.
@@ -39,7 +39,7 @@ test('список моделей провайдера = включённые п
 
 test('умолчания только для конфигурации без профилей; пустой список владельца сохраняется', () => {
   const legacy = normalizeConfig({ machines: [], steps: [], models: [{ key: 'opus-5.5', displayName: 'Opus 5.5', providerId: 'claude-code' }] });
-  assert.deepEqual(legacy.profiles.map(p => p.id), ['auto', 'auto-no-codex', 'opus-then-auto', 'only-opus-5.5']);
+  assert.deepEqual(legacy.profiles.map(p => p.id), ['auto', 'auto-no-codex', 'auto-codex-children', 'opus-then-auto', 'only-opus-5.5']);
   assert.deepEqual(normalizeConfig({ ...legacy, profiles: [] }).profiles, []);
 });
 
@@ -101,7 +101,7 @@ test('схема «i» строится из движка: отмеченная 
       checked++;
     }
   }
-  assert.equal(checked, 6 * 128);
+  assert.equal(checked, 7 * 128);
 });
 
 test('тестовая квота своего треда: главнее общей, действует без общего флага, исчерпание с прошедшим сбросом — «лимит есть»', () => {
