@@ -22,13 +22,20 @@ import { digestMap, nativeBridgeStatus, type NativeBridgeStatus } from './digest
 import { executorRpcContract, PROVIDER_RETRY_AVAILABILITY, retryAvailabilityContract, type LimitObservation } from './route-contract.ts';
 import type { Consent } from '../consent.ts';
 import type { ThreadEventRow } from './handoff.ts';
-import { bypassLine, createRouteService, rememberMachineLabels, type RouteDeps, type RouteService, type StoredThreadState, type SyncPort, type ThreadInfo } from './route-service.ts';
+import { RETIRED, bypassLine, createRouteService, rememberMachineLabels, type RouteDeps, type RouteService, type StoredThreadState, type SyncPort, type ThreadInfo } from './route-service.ts';
 
 export interface ExecutorDeps {
   providerId: string;
   loadConfig(): Promise<CascadeConfig>;
+  /**
+   * 0.3.7: экземпляр плагина отозван (переустановка/reload: «stale API handle»). Сервер
+   * снимает регистрацию провайдера и фоновые циклы, чтобы ходы обслуживал новый экземпляр.
+   */
+  onRetired?(): void;
+  /** 0.3.7: настройки пусты и копии нет — работает каскад по умолчанию (настройки могут вот-вот появиться). */
+  configSeeded?(): Promise<boolean>;
   /** 0.3.5: `limits` — по каждой ступени состояние, процент/остаток, источник, причина unknown. */
-  limits?(): Promise<StepLimitLine[]>;
+  limits?(options?: { refresh?: boolean }): Promise<StepLimitLine[]>;
   /** 0.3.5: `check` — готовность ступеней (по ступени или машине). */
   check?(filter: { stepIds?: string[]; hostIds?: string[] }): Promise<StepCheck[]>;
   /** Сборка брошенных реплик единиц-worktree (sync/gc.ts). */
@@ -197,6 +204,8 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
       });
     });
     bridgesAt = Date.now();
+    // Отозванный экземпляр (переустановка): дальше не опрашиваем и снимаем регистрацию (0.3.7).
+    if (bridges.some(b => b.problem && RETIRED.test(b.problem))) { retire(); return bridges; }
     for (const b of bridges) if (b.problem) bb.log.warn(`штатный мост ${b.providerId}: ${b.problem}`);
     return bridges;
   }
@@ -207,6 +216,13 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
   let disposed = false;
   const timer = setInterval(() => { if (!disposed) void refreshNativeBridges().catch(() => {}); }, 10 * 60_000);
   timer.unref?.();
+  /** Остановить таймеры и фоновые циклы этого экземпляра (dispose или отзыв handle). */
+  function retire(): void {
+    if (disposed) return;
+    disposed = true;
+    clearInterval(timer); clearInterval(dailyGc); if (gcTimer) clearTimeout(gcTimer);
+    deps.onRetired?.();
+  }
   // Сборка брошенных реплик: после архивации/удаления треда каскада (через минуту,
   // пачкой) и раз в сутки. Один вызов списка тредов за запуск (AGENTS.md).
   const gcThreads = new Set<string>();
@@ -248,7 +264,7 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
   bb.events.on('thread.deleted', onGone as never);
   const dailyGc = setInterval(() => runAutoGc(null), 24 * 3_600_000);
   dailyGc.unref?.();
-  bb.onDispose(() => { disposed = true; clearInterval(timer); clearInterval(dailyGc); if (gcTimer) clearTimeout(gcTimer); });
+  bb.onDispose(() => retire());
 
   // Окружение треда приходит только с include: без него hostId пуст, и ход в
   // worktree на опоре ушёл бы в основную папку проекта (живой S1 на 0.1.7).
@@ -281,8 +297,12 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     rememberMachineLabels(found);
   };
   void loadRetiredLabels();
+  // 0.3.7: профиль треда из выбора модели (BB зовёт deriveProviderOptions до запуска CLI).
+  const profileHints = new Map<string, string>();
   const routes = createRouteService({
     adoptSeed,
+    profileHint: threadId => profileHints.get(threadId) ?? null,
+    configSeeded: deps.configSeeded,
     hostName: hostId => deps.hosts?.().find(h => h.hostId === hostId)?.name ?? null,
     threadTitle: async threadId => {
       const r = rec(await bb.sdk.threads.get({ threadId }).catch(() => null));
@@ -460,7 +480,7 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
       { name: 'gc', summary: 'Убрать реплики и сессии Mutagen архивированных и удалённых тредов (опора не трогается)', usage: 'bb subscriptions-cascade gc [--dry-run] [--machine <hostId|имя>] [--json]' },
       { name: 'test-bridge', summary: 'Приёмка S13: считать штатный мост несовместимым (без правки BB)', usage: 'bb subscriptions-cascade test-bridge --incompatible|--compatible' },
       { name: 'resolve', summary: 'Просьба «Codex 6.2 на Tru», «на аккаунте vclaude» → закреплённая ступень каскада (pin:…), кандидаты или запасной путь', usage: 'bb subscriptions-cascade resolve "<просьба>" [--json]' },
-      { name: 'limits', summary: 'Лимиты по ступеням: состояние, процент или остаток, источник, причина «неизвестно» — то, что видит каскад', usage: 'bb subscriptions-cascade limits [--json]' },
+      { name: 'limits', summary: 'Лимиты по ступеням: состояние, процент или остаток, источник, причина «неизвестно» — то, что видит каскад', usage: 'bb subscriptions-cascade limits [--refresh] [--json]' },
       { name: 'check', summary: 'Готовность ступеней: машина, CLI и вход, лимиты и сверка с Thread Account Usage, модели, общий путь, Mutagen, SSH', usage: 'bb subscriptions-cascade check [--step <id>|--host <id|имя>] [--json]' },
       { name: 'adopt', summary: 'Перевести треды в каскад (Handoff) и снять автоповтор у исходных', usage: 'bb subscriptions-cascade adopt --stuck|--thread <id>|--project <id> [--dry-run] [--model <профиль>] [--json] · --native --thread <id> [--model <профиль>] [--prompt <текст>] [--wait <сек>] [--dry-run] — та же сессия Claude в треде каскада, то же окружение' },
     ],
@@ -533,7 +553,7 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
       }
       if (command === 'limits') {
         if (!deps.limits) return { exitCode: 2, stderr: 'отчёт о лимитах недоступен\n' };
-        const lines = await deps.limits();
+        const lines = await deps.limits({ refresh: rest.includes('--refresh') });
         if (rest.includes('--json')) return { exitCode: 0, stdout: `${JSON.stringify({ steps: lines })}\n` };
         return { exitCode: 0, stdout: formatLimits(lines) };
       }
@@ -578,6 +598,11 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     refreshTestFlags,
     deriveProviderOptions(ctx) {
       if (!disposed && Date.now() - bridgesAt > 10 * 60_000) void refreshNativeBridges().catch(() => {});
+      if (ctx.threadId && ctx.model) {
+        profileHints.delete(ctx.threadId);
+        profileHints.set(ctx.threadId, ctx.model);
+        if (profileHints.size > 500) profileHints.delete(profileHints.keys().next().value!);
+      }
       return {
         ...claudeBridgeKnobs(ctx.promptMode),
         requestedModel: ctx.model,

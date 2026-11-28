@@ -8,7 +8,7 @@ import plugin from './server.ts';
 const NOW_ISO = new Date().toISOString();
 const inHour = new Date(Date.now() + 3_600_000).toISOString();
 
-function setup() {
+function setup(pluginsList: () => Promise<unknown> = async () => ({ plugins: [] })) {
   const fake = createFakePluginHost({
     pluginId: 'agentcli-subscriptions-cascade',
     experimental_callHostRpc: call => ({ platform: call.hostId === 'host_mac' ? 'macos' : 'linux', isRoot: call.hostId !== 'host_mac', user: 'u', sharedPathExists: false, sharedPathWritable: false, mutagenVersion: null }),
@@ -34,7 +34,7 @@ function setup() {
         })) as never,
       },
       plugins: {
-        list: (async () => ({ plugins: [] })) as never,
+        list: pluginsList as never,
         callRpc: (async () => ({ usage: { fetchedAt: NOW_ISO, limitUnits: 405_000_000, remainingUnits: 380_730_000, endsAt: '2026-12-27T00:00:00Z' }, error: null })) as never,
       },
       projects: { list: async () => [] },
@@ -123,6 +123,26 @@ test('перезагрузка плагина: таймер прежнего э�
     assert.equal(live.size, 2, 'после перезагрузки таймеры прежнего экземпляра сняты');
     await next.harness.dispose();
     assert.equal(live.size, 0, 'после выключения таймеров нет');
+  } finally {
+    for (const t of live) realClear(t as Parameters<typeof clearInterval>[0]);
+    globalThis.setInterval = realSet;
+    globalThis.clearInterval = realClear;
+  }
+});
+
+test('0.3.7: экземпляр, чей handle отозван («stale API handle»), сам останавливает таймеры и снимает регистрацию провайдера', async () => {
+  const live = new Set<unknown>();
+  const realSet = globalThis.setInterval;
+  const realClear = globalThis.clearInterval;
+  globalThis.setInterval = ((fn: () => void, ms?: number) => { const t = realSet(fn, ms); live.add(t); return t; }) as typeof setInterval;
+  globalThis.clearInterval = ((t: Parameters<typeof clearInterval>[0]) => { live.delete(t); realClear(t); }) as typeof clearInterval;
+  try {
+    // Хост не вызвал onDispose (живой случай после переустановки), а handle уже отравлен:
+    // список плагинов отвечает «stale API handle».
+    const fake = setup(async () => { throw new Error('plugin used a stale API handle — it was reloaded or disabled'); });
+    await new Promise(r => setTimeout(r, 30));
+    void fake;
+    assert.equal(live.size, 0, 'таймеры отозванного экземпляра остановлены');
   } finally {
     for (const t of live) realClear(t as Parameters<typeof clearInterval>[0]);
     globalThis.setInterval = realSet;

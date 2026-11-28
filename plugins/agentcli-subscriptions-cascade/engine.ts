@@ -39,7 +39,15 @@ export interface ThreadCascadeState {
   consents: readonly Consent[];
   /** «Пропустить ступень» в карточке: исключить на текущий выбор. */
   skippedStepIds: readonly string[];
+  /**
+   * 0.3.7: когда закончился последний ход треда на `currentStepId` (мс). Ступень, на
+   * которой тред работал недавно, при «квота неизвестна» не покидается.
+   */
+  lastRunAt?: number | null;
 }
+
+/** 0.3.7: сколько минут после хода ступень треда остаётся «своей» при неизвестной квоте. */
+export const STICKY_UNKNOWN_MS = 60 * 60_000;
 
 export interface PlanInput {
   config: CascadeConfig;
@@ -256,7 +264,16 @@ export function selectStep(input: SelectInput): Decision {
   if (all.length === 0) return { kind: 'unavailable', reason: 'no-steps' };
   const resolved = resolveProfile(config, input.requestedModel);
   const onUnknown = 'kind' in resolved ? undefined : resolved.onUnknown;
-  const freeAll = all.filter(c => isReady(c, onUnknown) && !thread.skippedStepIds.includes(c.stepId));
+  // 0.3.7: ступень, на которой тред работал недавно, с неизвестной квотой — готова
+  // («липкая»): прерванный ход или устаревшее показание не уводят тред на другую машину.
+  // Исчерпание и недоступность — как раньше.
+  const sticky = (c: Candidate) => c.stepId === thread.currentStepId && c.health.available && !c.health.exhausted && c.health.unknown
+    && thread.lastRunAt != null && now - thread.lastRunAt <= STICKY_UNKNOWN_MS;
+  let freeAll = all.filter(c => (isReady(c, onUnknown) || sticky(c)) && !thread.skippedStepIds.includes(c.stepId));
+  // 0.3.7: готовых нет, но есть ступени с неизвестной квотой (не исчерпаны, машина на
+  // связи) — пробуем их по порядку профиля (`onUnknown: skip` значит «сначала известные»).
+  // Ожидание сброса и вопрос владельцу — только когда всё действительно исчерпано.
+  if (freeAll.length === 0) freeAll = all.filter(c => c.health.available && !c.health.exhausted && c.health.unknown && !thread.skippedStepIds.includes(c.stepId));
   const onWriterHost = input.preferHostId ? freeAll.filter(c => c.hostId === input.preferHostId) : [];
   const free = onWriterHost.length > 0 ? onWriterHost : freeAll;
 

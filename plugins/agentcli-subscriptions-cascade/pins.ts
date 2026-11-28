@@ -68,7 +68,9 @@ export function pinnedProfile(config: CascadeConfig, id: string): Profile | null
     id, name: pinLabel(config, pin.step, row ?? (pin.modelKey ? { displayName: pin.modelKey } : null)), enabled: true,
     policy: pin.modelKey ? 'only' : 'any', modelKey: pin.modelKey,
     stepOrder: [pin.step.id], excludedSteps: config.steps.filter(s => s.id !== pin.step.id).map(s => s.id),
-    excludedProviders: [], confirm: { [pin.step.id]: false },
+    // 0.3.7: владелец выбрал ступень сам — неизвестная квота не повод ждать: ход пробуется,
+    // лимит придёт из хода (у Codex на части машин usageLimits всегда отвечает 403).
+    excludedProviders: [], confirm: { [pin.step.id]: false }, onUnknown: 'try',
   };
 }
 
