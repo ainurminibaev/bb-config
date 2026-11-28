@@ -115,7 +115,13 @@ class RestoreTests(unittest.TestCase):
         commands = restore.plan(True)
         self.assertIn(['bb', 'plugin', 'install', 'inbox@bb-community', '--yes'], commands)
         self.assertIn(['bb', 'plugin', 'install', 'handoff@bb-community', '--yes'], commands)
-        self.assertIn(['bb', 'plugin', 'install', 'path:' + str(restore.ROOT / 'plugins/handoff-button'), '--yes'], commands)
+        # Собственный плагин ставится из папки репозитория или, если личный снимок
+        # перевёл его на Git-источник, из тега `handoff-button/vX.Y.Z`.
+        self.assertTrue(
+            ['bb', 'plugin', 'install', 'path:' + str(restore.ROOT / 'plugins/handoff-button'), '--yes'] in commands
+            or any(c[:3] == ['bb', 'plugin', 'install'] and c[3].startswith('git:') and 'handoff-button/' in c
+                   for c in commands),
+            'handoff-button is not installed by the plan')
         for command in commands:
             self.assertNotEqual(command[:2], ['bb', 'proxy-manager'])
             if command[:3] == ['bb', 'plugin', 'config']:
