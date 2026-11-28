@@ -4,10 +4,11 @@ import { join } from 'node:path';
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
 import { rpcContract, type Account, type QuotaWindow, type Snapshot } from './contract';
-import { appliesToModel, carryModelWindows, claudeProfilePlan, classifyWindow, dedupeAccounts, riskyOverride, routedHosts, vclaudeNote, vclaudeRouted, vclaudeThreadSnapshot } from './logic';
+import { appliesToModel, carryModelWindows, claudeProfilePlan, classifyWindow, dedupeAccounts, riskyOverride, vclaudeNote, vclaudeRouted, vclaudeThreadSnapshot } from './logic';
 import { hostContract } from './host-contract';
 import { createVClaudeReader, origin as vclaudeOrigin } from './vclaude';
 import { createComparisonReader } from './vclaude-comparison';
+import { parseVClaudeLabels, validVClaudeLabels, vclaudeAccountOf, vclaudeGroups, type VClaudeRoute } from './vclaude-accounts';
 import { googleComparison, short, volumeFor, type VolumeInputs } from './volumes';
 import { accumulate, type MeterReading, type MeterSums } from './token-meter';
 import { CASCADE_PLUGIN_ID, CASCADE_STATUS_METHOD, isCascadeProvider, passportCache } from './cascade-passport';
@@ -35,6 +36,10 @@ export default function plugin(bb: BbPluginApi) {
     usdRub: { type: 'number', label: 'Курс ₽ за $ для сравнения цены пакетов в рублях', default: 100 },
     discussProjectId: { type: 'string', label: 'Проект для треда «Обсудить объёмы» (пусто — bb-config)', default: '' },
     discussHostId: { type: 'string', label: 'Машина для треда «Обсудить объёмы» (пусто — машина «сравнения», иначе первая подключённая)', default: '' },
+    vclaudeLabels: { type: 'string', label: 'Метки аккаунтов VClaude: JSON {"<ID>": "<метка>"}',
+      description: 'ID — 8 символов из подписи «VClaude · <ID>» (хеш ключа машины). Метка, равная почте кабинета, связывает аккаунт с кабинетом на сервере BB.',
+      experimental_multiline: true, default: '',
+      experimental_schema: z.string().refine(validVClaudeLabels, 'Нужен JSON-объект {"<ID>": "<метка>"}') },
   });
   const readVClaude = createVClaudeReader();
   const readComparison = createComparisonReader(join(homedir(), '.claude', 'projects'),
@@ -56,36 +61,45 @@ export default function plugin(bb: BbPluginApi) {
     async () => (await readVClaude(false)).usage?.conversionRates ?? {},
   );
   // Claude Code route per machine (host of ANTHROPIC_BASE_URL), kept from the last answer of each machine.
-  const claudeRoutes = new Map<string, { name: string; baseHost: string | null }>();
+  const claudeRoutes = new Map<string, VClaudeRoute>();
   const routeAt = new Map<string, number>();
   const vclaudeHost = new URL(vclaudeOrigin).hostname;
   // Route of one machine for a thread header: asked at most every 2 minutes, last known kept.
   async function hostRoute(hostId: string, hostName: string): Promise<string | null> {
     if (!claudeRoutes.has(hostId) || Date.now() - (routeAt.get(hostId) ?? 0) > 120_000) {
       const route = await hostClient.call('claudeRoute', null, { hostId, signal: AbortSignal.timeout(5_000) }).catch(() => null);
-      if (route) { claudeRoutes.set(hostId, { name: hostName, baseHost: route.baseHost }); routeAt.set(hostId, Date.now()); }
+      if (route) { claudeRoutes.set(hostId, { name: hostName, baseHost: route.baseHost, keyId: route.keyId ?? null }); routeAt.set(hostId, Date.now()); }
     }
     return claudeRoutes.get(hostId)?.baseHost ?? null;
   }
   // `hosts` — BB's current host list: current names, removed machines dropped.
-  async function vclaudeAccount(refresh: boolean, hosts?: readonly { id: string; name: string }[]): Promise<Account | null> {
-    const { usage, error } = await readVClaude(refresh);
-    if (!usage && !error) return null;
-    // Machines whose Claude Code spends this package (the quota itself is read on the BB server).
-    const routed = routedHosts(claudeRoutes, vclaudeHost, hosts);
-    return {
-      key: 'vclaude', providerId: 'vclaude', providerName: 'VClaude', hostIds: routed.ids, hostNames: routed.names,
-      email: null, plan: null, status: error ? (usage ? 'stale' : 'unavailable') : 'ok',
-      message: error ?? (usage?.limitUnits === 0 ? 'Действующий тариф отсутствует.' : null),
-      fetchedAt: usage?.fetchedAt ?? null, resetCount: null,
-      meter: usage && usage.limitUnits > 0 ? { total: usage.limitUnits, left: usage.remainingUnits, tokensPerUnit: 1 / 0.8 } : null,
-      note: usage && usage.limitUnits > 0 ? vclaudeNote(usage.remainingUnits, usage.limitUnits, usage.conversionRates, usage.queue) : null,
-      windows: usage && usage.limitUnits > 0 ? [{
-        // endsAt — end of the whole queue; the tick measures from the running package's start.
-        kind: 'other', label: 'Тариф', endsAt: usage.endsAt, startsAt: usage.startedAt, resetsAt: null,
-        usedPercent: Math.max(0, Math.min(100, 100 * (1 - usage.remainingUnits / usage.limitUnits))),
-      }] : [],
-    };
+  // One row per VClaude account (hash of the machine's key); the server's cabinet quota
+  // belongs to one of them (0.3.2). No cabinet on the server — no rows, as before.
+  async function vclaudeAccounts(refresh: boolean, hosts?: readonly { id: string; name: string }[]): Promise<Account[]> {
+    const { usage, error, email } = await readVClaude(refresh);
+    if (!usage && !error) return [];
+    const labels = parseVClaudeLabels((await settings.get()).vclaudeLabels);
+    const groups = vclaudeGroups(claudeRoutes, vclaudeHost, hosts, { cabinetEmail: email, labels });
+    return groups.map(group => {
+      const base = { key: group.key, providerId: 'vclaude', providerName: 'VClaude', hostIds: group.hostIds, hostNames: group.hostNames,
+        email: group.cabinet ? email : null, label: group.label, accountId: group.id, plan: null, resetCount: null };
+      if (!group.cabinet) return { ...base, status: 'unavailable' as const, fetchedAt: null, windows: [],
+        message: `Кабинет этого аккаунта не подключён на сервере BB (ID ${group.id}).` };
+      return { ...base, status: error ? (usage ? 'stale' as const : 'unavailable' as const) : 'ok' as const,
+        message: error ?? (usage?.limitUnits === 0 ? 'Действующий тариф отсутствует.' : null),
+        fetchedAt: usage?.fetchedAt ?? null,
+        meter: usage && usage.limitUnits > 0 ? { total: usage.limitUnits, left: usage.remainingUnits, tokensPerUnit: 1 / 0.8 } : null,
+        note: usage && usage.limitUnits > 0 ? vclaudeNote(usage.remainingUnits, usage.limitUnits, usage.conversionRates, usage.queue) : null,
+        windows: usage && usage.limitUnits > 0 ? [{
+          // endsAt — end of the whole queue; the tick measures from the running package's start.
+          kind: 'other' as const, label: 'Тариф', endsAt: usage.endsAt, startsAt: usage.startedAt, resetsAt: null,
+          usedPercent: Math.max(0, Math.min(100, 100 * (1 - usage.remainingUnits / usage.limitUnits))),
+        }] : [] };
+    });
+  }
+  // The VClaude account of the machine a turn runs on (thread header).
+  async function vclaudeAccount(refresh: boolean, hostId: string | null): Promise<Account | null> {
+    return vclaudeAccountOf(await vclaudeAccounts(refresh), hostId);
   }
   // Cache in memory only. No account identities or usage history persisted.
   const cache = new Map<string, { at: number; accounts: Account[] }>();
@@ -118,7 +132,7 @@ export default function plugin(bb: BbPluginApi) {
           // Older host bundles lack this method: the last known route stays.
           hostClient.call('claudeRoute', null, { hostId, signal: AbortSignal.timeout(5_000) }).catch(() => null),
         ]);
-        if (route) { claudeRoutes.set(hostId, { name: hostName, baseHost: route.baseHost }); routeAt.set(hostId, Date.now()); }
+        if (route) { claudeRoutes.set(hostId, { name: hostName, baseHost: route.baseHost, keyId: route.keyId ?? null }); routeAt.set(hostId, Date.now()); }
         const at = new Date().toISOString();
         const accounts = providers.map(provider => {
           const usage = record(raw[provider.id]);
@@ -182,7 +196,9 @@ export default function plugin(bb: BbPluginApi) {
       // Главное — ступень `kind: 'gateway'` VClaude; запасной путь — Claude Code машины ступени направлен на VClaude.
       const viaVClaude = isVClaudeStep(step) || (step.kind === 'subscription'
         && vclaudeRouted(step.providerId, await hostRoute(step.hostId, hostName ?? step.hostId), vclaudeHost));
-      const account = viaVClaude ? await vclaudeAccount(refresh).catch(() => null)
+      // Аккаунт VClaude — тот, чьим ключом ходит машина ступени (маршрут с хешем ключа).
+      if (viaVClaude) await hostRoute(step.hostId, hostName ?? step.hostId);
+      const account = viaVClaude ? await vclaudeAccount(refresh, step.hostId).catch(() => null)
         : step.kind === 'subscription' ? (await readHost(step.hostId, hostName ?? step.hostId, refresh)).find(a => a.providerId === step.providerId) ?? null
         : null;
       return cascadeSnapshot(threadId, step, passport.profileId, hostName, account, viaVClaude);
@@ -203,7 +219,7 @@ export default function plugin(bb: BbPluginApi) {
     base.model = string(record(record(requested[0]?.data).execution).model);
     // Claude Code of this machine goes to VClaude: the package is the thread's quota, not a subscription.
     if (vclaudeRouted(thread.providerId, baseHost, vclaudeHost)) {
-      const routed = vclaudeThreadSnapshot(base, baseHost, vclaudeHost, await vclaudeAccount(refresh).catch(() => null));
+      const routed = vclaudeThreadSnapshot(base, baseHost, vclaudeHost, await vclaudeAccount(refresh, host.id).catch(() => null));
       if (routed) return routed;
     }
     const entries = record(resolved[0]?.data).entries;
@@ -258,8 +274,8 @@ export default function plugin(bb: BbPluginApi) {
       return readHost(host.id, host.name, refresh);
     }))).flat();
     await extra;
-    const vclaude = await vclaudeAccount(false, hosts);
-    return [...dedupeAccounts(accounts.filter(a => a.email !== null || a.windows.length > 0)), ...(vclaude ? [vclaude] : [])];
+    const vclaude = await vclaudeAccounts(false, hosts);
+    return [...dedupeAccounts(accounts.filter(a => a.email !== null || a.windows.length > 0)), ...vclaude];
   }
   const codexVolumes = new Map<string, Awaited<ReturnType<typeof hostClient.call<'codexVolume'>>>>();
   let lastComparison: Awaited<ReturnType<typeof readComparison>> | null = null;
@@ -289,7 +305,7 @@ export default function plugin(bb: BbPluginApi) {
     const now = Date.now();
     const accounts = await allAccounts(false);
     const rows: Sample[] = accounts.filter(a => a.status === 'ok').flatMap(a => a.windows.map(w =>
-      [now, a.key, a.providerId === 'vclaude' ? 'VClaude' : `${a.providerName} · ${a.email?.split('@')[0] ?? a.key}`, w.label, Math.round(w.usedPercent * 10) / 10] as Sample));
+      [now, a.key, a.providerId === 'vclaude' ? a.label ?? a.email ?? 'VClaude' : `${a.providerName} · ${a.email?.split('@')[0] ?? a.key}`, w.label, Math.round(w.usedPercent * 10) / 10] as Sample));
     await meterTokens(now, accounts);
     const key = `history:${day(now)}`;
     const known = (await bb.storage.kv.get<Sample[]>(key)) ?? [];
@@ -371,7 +387,7 @@ export default function plugin(bb: BbPluginApi) {
     history: async ({ days }) => readHistory(days),
     discuss: async ({ text }) => discuss(text),
     details: async ({ key }) => {
-      if (key === 'vclaude') return { account: await vclaudeAccount(false), threads: [] };
+      if (key === 'vclaude' || key.startsWith('vclaude:')) return { account: (await vclaudeAccounts(false)).find(a => a.key === key) ?? null, threads: [] };
       const account = dedupeAccounts([...cache.values()].flatMap(c => c.accounts)).find(a => a.key === key) ?? null;
       if (!account) return { account: null, threads: [] };
       const batches = await Promise.all(account.hostIds.map(async (hostId, index) => {

@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { vclaudeUsageSchema, type ConversionRate, type VClaudeUsage } from './vclaude-contract.ts';
+import { cabinetEmail } from './vclaude-accounts.ts';
 
 export const origin = 'https://vclaude.ru';
 const quotaPath = '/api/cabinet/tariff/usage';
@@ -106,7 +107,8 @@ export function parseVClaudeUsage(input: unknown, fetchedAt: string): VClaudeUsa
 const sessionSchema = z.object({ cookie: z.string().min(1), expiresAt: z.string().optional() });
 const loginSchema = z.object({ email: z.email(), password: z.string().min(1) });
 type Session = z.infer<typeof sessionSchema>;
-type Result = { usage: VClaudeUsage | null; error: string | null };
+// email — почта аккаунта кабинета (ответ кабинета или login.json), только в памяти.
+type Result = { usage: VClaudeUsage | null; error: string | null; email: string | null };
 
 async function privateJson(path: string): Promise<unknown> {
   const info = await lstat(path);
@@ -127,6 +129,7 @@ export function createVClaudeReader(directory = join(process.env.XDG_STATE_HOME 
   const sessionFile = join(directory, 'session.json');
   const loginFile = join(directory, 'login.json');
   let lastLogin: number | null = null;
+  let email: string | null = null;
   let cached: { at: number; result: Result } | null = null;
   let pending: Promise<Result> | null = null;
 
@@ -137,7 +140,9 @@ export function createVClaudeReader(directory = join(process.env.XDG_STATE_HOME 
   async function sessionExpiry(cookie: string) {
     const response = await request('/api/auth/session', { headers: { Cookie: cookie, Accept: 'application/json' } });
     if (!response.ok) return undefined;
-    const parsed = z.object({ expires_at: z.string() }).safeParse(await response.json());
+    const body: unknown = await response.json();
+    email = cabinetEmail(body) ?? email;
+    const parsed = z.object({ expires_at: z.string() }).safeParse(body);
     return parsed.success && Number.isFinite(Date.parse(parsed.data.expires_at)) ? parsed.data.expires_at : undefined;
   }
 
@@ -149,6 +154,7 @@ export function createVClaudeReader(directory = join(process.env.XDG_STATE_HOME 
       throw error;
     }));
     lastLogin = now();
+    email = credentials.email;
     const response = await request('/api/auth/login', {
       method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', Origin: origin, Referer: origin + '/login' },
       body: JSON.stringify(credentials),
@@ -164,6 +170,12 @@ export function createVClaudeReader(directory = join(process.env.XDG_STATE_HOME 
     return session;
   }
 
+  // Почта входа кабинета: только поле email, пароль не сохраняется. Нет файла — null.
+  async function loginEmail(): Promise<string | null> {
+    const parsed = z.object({ email: z.email() }).safeParse(await privateJson(loginFile).catch(() => null));
+    return parsed.success ? parsed.data.email : null;
+  }
+
   async function read(): Promise<Result> {
     try {
       let session: Session;
@@ -171,7 +183,7 @@ export function createVClaudeReader(directory = join(process.env.XDG_STATE_HOME 
       catch (error) {
         if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
         try { await lstat(loginFile); } catch (loginError) {
-          if ((loginError as NodeJS.ErrnoException)?.code === 'ENOENT') return { usage: null, error: null };
+          if ((loginError as NodeJS.ErrnoException)?.code === 'ENOENT') return { usage: null, error: null, email: null };
           throw loginError;
         }
         session = await renew();
@@ -195,11 +207,14 @@ export function createVClaudeReader(directory = join(process.env.XDG_STATE_HOME 
         response = await quota(session.cookie);
       }
       if (!response.ok) throw new Error(`VClaude: кабинет вернул HTTP ${response.status}.`);
-      return { usage: parseVClaudeUsage(await response.json(), new Date(now()).toISOString()), error: null };
+      const body: unknown = await response.json();
+      const usage = parseVClaudeUsage(body, new Date(now()).toISOString());
+      email = cabinetEmail(body) ?? email ?? await loginEmail();
+      return { usage, error: null, email };
     } catch (error) {
       const message = error instanceof Error && error.message.startsWith('VClaude:')
         ? error.message : 'VClaude: данные кабинета временно недоступны.';
-      return { usage: cached?.result.usage ?? null, error: message };
+      return { usage: cached?.result.usage ?? null, error: message, email: email ?? cached?.result.email ?? null };
     }
   }
 

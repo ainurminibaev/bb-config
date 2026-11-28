@@ -8,6 +8,7 @@ import { hostContract } from './host-contract';
 import { createAntigravityReader } from './antigravity';
 import { createCodexVolumeReader } from './codex-volume';
 import { claudeBaseHost } from './logic';
+import { vclaudeKeyId } from './vclaude-accounts';
 const readCodexVolume = createCodexVolumeReader();
 
 const readAntigravity = createAntigravityReader();
@@ -65,11 +66,13 @@ async function readClaudeProfile(): Promise<{ email: string | null; organization
       rateLimitTier: text(account.organizationRateLimitTier) ?? text(account.userRateLimitTier) };
   } catch { return empty; }
 }
-// Where Claude Code on this machine sends requests (user settings.json → env). Host name only.
-async function readClaudeRoute(): Promise<{ baseHost: string | null }> {
+// Where Claude Code on this machine sends requests (user settings.json → env). Host name and
+// a short hash of the gateway key (which VClaude account), never the key itself.
+async function readClaudeRoute(): Promise<{ baseHost: string | null; keyId: string | null }> {
   const file = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'settings.json');
   const settings: unknown = await readFile(file, 'utf8').then(text => JSON.parse(text) as unknown).catch(() => null);
-  return { baseHost: claudeBaseHost(settings, process.env.ANTHROPIC_BASE_URL) };
+  const baseHost = claudeBaseHost(settings, process.env.ANTHROPIC_BASE_URL);
+  return { baseHost, keyId: baseHost ? vclaudeKeyId(settings, process.env) : null };
 }
 export default experimental_defineHostEntry({ contract: hostContract, handlers: {
   codexResets: readCodexResets, claudeProfile: readClaudeProfile, claudeRoute: readClaudeRoute,

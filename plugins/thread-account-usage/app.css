@@ -223,3 +223,6 @@
 .tau-inline-window .tau-pair-bars .tau-bar[data-thin=true]{height:2px}
 .tau-bar[data-thin=true] .tau-pace{top:-1px;bottom:-1px}
 .tau-bar[data-thin=true] .tau-pace[data-ahead=true]{width:2px;margin-left:-1px;top:-2px;bottom:-2px}
+/* VClaude (0.3.2): отметка шлюза рядом с подписью аккаунта в шапке треда и в карточке. */
+.tau-owner-mark{display:inline-block;width:10px;height:10px;margin-right:3px;vertical-align:-1px;flex:none;color:var(--foreground)}
+.tau-account-heading .tau-owner-mark{width:12px;height:12px;margin-right:5px;vertical-align:-1px}

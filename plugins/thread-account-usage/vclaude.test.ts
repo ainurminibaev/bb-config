@@ -52,6 +52,9 @@ test('a rejected session is replaced atomically and concurrent reads share renew
     assert.equal(logins, 1);
     assert.equal(results[0]?.usage?.remainingUnits, fixture.remaining_units);
     assert.equal(results[1]?.error, null);
+    // Почта аккаунта кабинета — из входа (ответ кабинета её не сообщает); пароль не выходит наружу.
+    assert.equal(results[0]?.email, 'tester@example.com');
+    assert.ok(!JSON.stringify(results[0]).includes('test-only'));
     assert.equal(JSON.parse(await readFile(state, 'utf8')).cookie, 'session=new');
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
@@ -81,4 +84,19 @@ test('without package details the term is the cabinet\'s nearest expiry, as befo
   const usage = parseVClaudeUsage({ ...fixture, packages: [] }, date);
   assert.equal(usage.endsAt, date);
   assert.equal(usage.startedAt, null);
+});
+
+test('the cabinet\'s own email wins over the login file; without login no email', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'test-vclaude-'));
+  try {
+    await writeFile(join(directory, 'session.json'), JSON.stringify({ cookie: 'session=ok', expiresAt: '2026-12-28T12:00:00Z' }), { mode: 0o600 });
+    let body: unknown = { ...fixture, user: { email: 'cabinet@example.com' }, unknown_field: { nested: true } };
+    const send: typeof fetch = async () => Response.json(body);
+    const now = () => Date.parse(date);
+    assert.equal((await createVClaudeReader(directory, send, now)(true)).email, 'cabinet@example.com');
+    body = fixture;
+    const plain = await createVClaudeReader(directory, send, now)(true);
+    assert.equal(plain.error, null);
+    assert.equal(plain.email, null);
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

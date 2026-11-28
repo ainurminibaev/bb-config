@@ -3517,6 +3517,29 @@ VClaude, `toPluginPanel(path, { subPath })` SDK. Тесты — `logic.test.ts`
 `claude-code` на машине с маршрутом VClaude). Тесты — `cascade-step.test.ts`.
 Шаг релиза — `next/thread-account-usage-cascade-vclaude`.
 
+Аккаунты VClaude по машинам (0.3.2). Кабинет VClaude на сервере BB один, а
+машины ходят в шлюз своими ключами. Метод машины `claudeRoute` теперь отдаёт и
+`keyId` — первые 8 hex sha256 ключа шлюза (`ANTHROPIC_AUTH_TOKEN`, иначе
+`ANTHROPIC_API_KEY`; источники те же, что у `ANTHROPIC_BASE_URL`). Ключ машину
+не покидает и не хранится. Сервер группирует машины по `keyId`
+(`vclaude-accounts.ts`): одна строка на аккаунт, под ней машины. Подпись —
+настройка `vclaudeLabels` (JSON `{"<ID>": "<метка>"}`, проверяется при
+сохранении, ошибочные записи пропускаются), иначе почта кабинета (поля
+`email|user.email|account.email|profile.email` ответа кабинета, иначе `email`
+из `login.json` — пароль не читается в результат), иначе «VClaude · <ID>».
+Значок — своя «V» (`VClaudeIcon`, `accountMarks` в `provider-icons.tsx`; не
+регистрируется как значок провайдера BB). Квота кабинета относится к
+единственному ключу, при нескольких — к ключу с меткой, равной почте кабинета;
+прочие аккаунты — строки без квоты «Кабинет этого аккаунта не подключён»;
+без сопоставления квота — отдельной строкой без машин. Ключи строк: `vclaude`
+(кабинет; история и ссылки прежние) и `vclaude:<ID>`. Машины без `keyId`
+(хост старше 0.3.2) — в строке кабинета, как раньше. Шапка треда VClaude и
+ступени каскада через VClaude — подпись аккаунта машины хода. Опора: метод
+`claudeRoute` (поле `keyId` необязательное), `bb.settings` типа string с
+`experimental_multiline`/`experimental_schema`. Тесты — `vclaude-accounts.test.ts`,
+`vclaude.test.ts`, `logic.test.ts`. Шаг релиза —
+`next/thread-account-usage-vclaude-accounts`.
+
 Сессия хранится с правами 0600 в `$XDG_STATE_HOME/bb-vclaude/session.json`
 (по умолчанию `~/.local/state/bb-vclaude/session.json`). Для автоматического
 повторного входа серверу нужен файл `login.json` с полями `email` и `password`

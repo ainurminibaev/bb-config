@@ -18,6 +18,8 @@ export const accountSchema = z.object({
   key: z.string(), providerId: z.string(), providerName: z.string(),
   hostIds: z.array(z.string()), hostNames: z.array(z.string()),
   email: z.string().nullable(), plan: z.string().nullable(),
+  // Подпись строки, когда это не почта (VClaude: ручная метка или «VClaude · <id>»), и ID аккаунта (хеш ключа).
+  label: z.string().nullable().optional(), accountId: z.string().nullable().optional(),
   status: z.enum(['ok', 'stale', 'unavailable']), message: z.string().nullable(),
   fetchedAt: z.string().nullable(), windows: z.array(windowSchema),
   resetCount: z.number().int().nonnegative().nullable().default(null),
