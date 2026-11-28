@@ -1,0 +1,100 @@
+[
+ {
+  "id": "evt_sample1",
+  "seq": 1,
+  "type": "client/turn/requested",
+  "createdAt": 1795826323558,
+  "threadId": "thr_sample",
+  "scope": {
+   "kind": "thread"
+  },
+  "data": {
+   "direction": "outbound",
+   "requestId": "creq_x7ev6fqqtd",
+   "source": "spawn",
+   "initiator": "user",
+   "senderThreadId": null,
+   "systemMessageKind": "unlabeled",
+   "systemMessageSubject": null,
+   "input": [
+    {
+     "type": "text",
+     "text": "Приёмка каскада S3. Выполни одну команду в терминале: printf '%s' s3-v3v2xf > cascade-S3.txt && hostname — и ответь одной строкой: выводом hostname. Больше ничего не делай.",
+     "mentions": []
+    }
+   ],
+   "target": {
+    "kind": "thread-start"
+   },
+   "request": {
+    "method": "thread/start",
+    "params": {}
+   },
+   "execution": {
+    "model": "auto",
+    "serviceTier": "default",
+    "reasoningLevel": "medium",
+    "permissionMode": "auto",
+    "source": "client/turn/requested"
+   }
+  }
+ },
+ {
+  "id": "evt_sample27",
+  "seq": 27,
+  "type": "turn/completed",
+  "createdAt": 1795826355180,
+  "threadId": "thr_sample",
+  "scope": {
+   "kind": "turn",
+   "turnId": "da0062462f-t1"
+  },
+  "data": {
+   "providerThreadId": "00000000-0000-4000-8000-000000000001",
+   "status": "failed"
+  }
+ },
+ {
+  "id": "evt_sample28",
+  "seq": 28,
+  "type": "client/turn/requested",
+  "createdAt": 1795826384976,
+  "threadId": "thr_sample",
+  "scope": {
+   "kind": "thread"
+  },
+  "data": {
+   "direction": "outbound",
+   "requestId": "creq_k39ujuhtmz",
+   "retryOfRequestId": "creq_x7ev6fqqtd",
+   "retryAttempt": 2,
+   "source": "tell",
+   "initiator": "system",
+   "senderThreadId": null,
+   "systemMessageKind": "unlabeled",
+   "systemMessageSubject": null,
+   "input": [
+    {
+     "type": "text",
+     "text": "Please continue.",
+     "mentions": [],
+     "visibility": "agent-only"
+    }
+   ],
+   "target": {
+    "kind": "new-turn"
+   },
+   "request": {
+    "method": "turn/start",
+    "params": {}
+   },
+   "execution": {
+    "model": "auto",
+    "serviceTier": "default",
+    "reasoningLevel": "medium",
+    "permissionMode": "auto",
+    "source": "client/turn/requested"
+   }
+  }
+ }
+]

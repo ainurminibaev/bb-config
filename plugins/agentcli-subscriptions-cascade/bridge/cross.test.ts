@@ -176,14 +176,15 @@ test('сводка (первый переход) и дельта (возврат
   assert.match(snap.text, /bb thread messages thr_x --json --after-seq 0/u);
   assert.doesNotMatch(snap.text, /секретные мысли/u);
 
-  const delta = buildHandoff(EVENTS, { threadId: 'thr_x', afterSeq: 12, mode: 'delta', from: 'Codex', to: 'Claude', currentRequestId: 'creq_now' });
+  // Обычный ход: мост передаёт и id, и текст ввода — текущий запрос идёт ходом, в сводку не входит.
+  const delta = buildHandoff(EVENTS, { threadId: 'thr_x', afterSeq: 12, mode: 'delta', from: 'Codex', to: 'Claude', currentRequestId: 'creq_now', currentText: 'текущий запрос' });
   assert.equal(delta.throughSeq, 14, 'текущий запрос (seq 20) не входит, курсор — до него');
   assert.match(delta.text, /^<cascade-delta from="Codex" to="Claude" after-seq="12" through-seq="14">/u);
   assert.match(delta.text, /EDIT-READY[\s\S]*RECEIPT-11/u);
   assert.doesNotMatch(delta.text, /KEEP-COLUMN|текущий запрос/u, 'прежнее не дублируется, текущий запрос — отдельно');
   assert.match(delta.text, /--after-seq 12/u);
   // Пустой интервал — пустой текст, курсор на месте.
-  assert.deepEqual(buildHandoff(EVENTS, { threadId: 'thr_x', afterSeq: 14, mode: 'delta', from: 'Codex', to: 'Claude', currentRequestId: 'creq_now' }), { text: '', throughSeq: 14 });
+  assert.deepEqual(buildHandoff(EVENTS, { threadId: 'thr_x', afterSeq: 14, mode: 'delta', from: 'Codex', to: 'Claude', currentRequestId: 'creq_now', currentText: 'текущий запрос' }), { text: '', throughSeq: 14 });
   // Предел: ранние события — ссылкой.
   const small = buildHandoff(EVENTS, { threadId: 'thr_x', afterSeq: 0, mode: 'snapshot', from: 'Claude', to: 'Codex', currentRequestId: 'creq_now', maxChars: 60 });
   assert.match(small.text, /Ранние события \(seq 1–\d+\) не вошли/u);
@@ -569,4 +570,27 @@ test('автоповтор без известной просьбы: сводк�
   assert.ok(text.startsWith(NO_CONTEXT_BLOCK));
   assert.doesNotMatch(text, /bb thread messages/u);
   await bridge.close();
+});
+
+test('живой формат событий BB (S3 0.2.7): исходная просьба по retryOfRequestId; без id — последнее сообщение; без просьбы — «спроси», не пусто', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { buildHandoff, NO_CONTEXT_BLOCK } = await import('./handoff.ts');
+  const live = JSON.parse(readFileSync(new URL('./fixtures/live-retry-events.json', import.meta.url), 'utf8')) as ThreadEventRow[];
+  const ORIGINAL = /Приёмка каскада S3\. Выполни одну команду/u;
+  const base = { threadId: 'thr_sample', afterSeq: 0, mode: 'snapshot' as const, from: 'Claude', to: 'Codex' };
+  // Путь моста: id автоповтора и «Please continue.».
+  const viaRetry = buildHandoff(live, { ...base, currentRequestId: 'creq_k39ujuhtmz', currentText: 'Please continue.' });
+  assert.match(viaRetry.text, /<current-request seq="1">[\s\S]*автоматический повтор/u);
+  assert.match(viaRetry.text, ORIGINAL);
+  // Без id и текста — последнее сообщение пользователя.
+  const noId = buildHandoff(live, { ...base, currentRequestId: null });
+  assert.match(noId.text, /<current-request seq="1">/u);
+  assert.match(noId.text, ORIGINAL);
+  // id исходного запроса, без текста — сводка не пустая, просьба в блоке.
+  const origin = buildHandoff(live, { ...base, currentRequestId: 'creq_x7ev6fqqtd' });
+  assert.notEqual(origin.text, '');
+  assert.match(origin.text, ORIGINAL);
+  // Просьбы нет вовсе — блок «спроси».
+  const none = buildHandoff([], { ...base, currentRequestId: null });
+  assert.equal(none.text, NO_CONTEXT_BLOCK);
 });
