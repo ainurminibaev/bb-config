@@ -1,0 +1,35 @@
+{
+  "about": "Образцы ответов источников квоты (без личных данных). Общий файл каскада и Thread Account Usage: plugins/agentcli-subscriptions-cascade/fixtures/limits-samples.json и plugins/thread-account-usage/fixtures/limits-samples.json должны совпадать. Новый провайдер или источник квоты — добавьте сюда образец ответа и ожидаемое состояние.",
+  "receivedAt": "2026-11-28T12:00:00.000Z",
+  "usageLimits": {
+    "claude-code": {
+      "response": {
+        "status": "ok", "accountEmail": "user@example.com", "planLabel": "Ultra", "accountKey": "acct-sample",
+        "plan": { "id": "ultra", "multiplier": null },
+        "windows": [
+          { "label": "Current session", "usedPercent": 12, "resetsAt": "2026-11-28T15:00:00.000Z", "kind": "five-hour" },
+          { "label": "Weekly limit", "usedPercent": 64, "resetsAt": "2026-12-01T21:00:00.051Z", "kind": "weekly" },
+          { "label": "Fable", "usedPercent": 79, "resetsAt": "2026-12-01T21:00:00.051Z", "kind": "weekly", "model": "fable" }
+        ]
+      },
+      "expected": { "state": "available", "status": "ok", "windows": { "Current session": 12, "Weekly limit": 64, "Fable": 79 } }
+    },
+    "codex": {
+      "response": {
+        "status": "ok", "accountEmail": "user@example.com", "planLabel": "Promax", "accountKey": "acct-sample",
+        "plan": { "id": "promax", "multiplier": null },
+        "windows": [ { "label": "Weekly limit", "usedPercent": 100, "resetsAt": "2026-12-01T05:33:16.000Z", "kind": "weekly" } ]
+      },
+      "expected": { "state": "exhausted", "status": "ok", "windows": { "Weekly limit": 100 } }
+    }
+  },
+  "vclaude": {
+    "cabinet": {
+      "limit_units": 5000000, "remaining_units": 4000000, "nearest_expiry": "2026-12-20T00:00:00.000Z",
+      "packages": [ { "state": "active", "limit_units": 5000000, "used_units": 1000000, "price_minor": 34900 } ],
+      "models": [], "coefficients": []
+    },
+    "rpc": { "usage": { "fetchedAt": "2026-11-28T11:58:00.000Z", "limitUnits": 5000000, "remainingUnits": 4000000, "endsAt": "2026-12-20T00:00:00.000Z" }, "error": null },
+    "expected": { "state": "available", "status": "ok", "usedPercent": 20, "remainingUnits": 4000000 }
+  }
+}

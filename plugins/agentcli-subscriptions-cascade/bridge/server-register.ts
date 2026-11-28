@@ -14,7 +14,7 @@ import { formatThreadTestQuota, parseTestQuotaSpec, withThreadTestQuota } from '
 import type { CascadeConfig, DiscoveredAccount, Step, TestQuotaEntry, WizardMachineState } from '../contract.ts';
 import type { HealthLookup } from '../engine.ts';
 import { formatAdopt, parseAdoptArgs, runAdopt, type AdoptPorts, type AdoptThread } from './adopt.ts';
-import { formatResolve, resolveRequest } from '../resolve.ts';
+import { formatResolve, lastReasoningLevel, resolveRequest } from '../resolve.ts';
 import { createRouteJobs } from './route-jobs.ts';
 import { DEFAULT_ADOPT_PROMPT, formatNativeAdopt, runNativeAdopt, seedFor, sessionFromEvents, type AdoptSeed, type NativeAdoptPorts, type SeedStore } from './adopt-native.ts';
 import { randomUUID } from 'node:crypto';
@@ -22,11 +22,15 @@ import { digestMap, nativeBridgeStatus, type NativeBridgeStatus } from './digest
 import { executorRpcContract, PROVIDER_RETRY_AVAILABILITY, retryAvailabilityContract, type LimitObservation } from './route-contract.ts';
 import type { Consent } from '../consent.ts';
 import type { ThreadEventRow } from './handoff.ts';
-import { createRouteService, rememberMachineLabels, type RouteDeps, type RouteService, type StoredThreadState, type SyncPort, type ThreadInfo } from './route-service.ts';
+import { bypassLine, createRouteService, rememberMachineLabels, type RouteDeps, type RouteService, type StoredThreadState, type SyncPort, type ThreadInfo } from './route-service.ts';
 
 export interface ExecutorDeps {
   providerId: string;
   loadConfig(): Promise<CascadeConfig>;
+  /** 0.3.5: `limits` — по каждой ступени состояние, процент/остаток, источник, причина unknown. */
+  limits?(): Promise<StepLimitLine[]>;
+  /** 0.3.5: `check` — готовность ступеней (по ступени или машине). */
+  check?(filter: { stepIds?: string[]; hostIds?: string[] }): Promise<StepCheck[]>;
   /** Сборка брошенных реплик единиц-worktree (sync/gc.ts). */
   gc?(options: GcOptions): Promise<GcReport>;
   /** Пометить модель недоступной на аккаунте машины (видно в таблице моделей). */
@@ -48,6 +52,8 @@ export interface ExecutorDeps {
   observeLimit(config: CascadeConfig, step: Step, event: unknown): void;
   sync: SyncPort | null;
 }
+
+import { formatCheck, formatLimits, type StepCheck, type StepLimitLine } from '../readiness.ts';
 
 const STATE_KEY = (threadId: string) => `exec:thread:${threadId}`;
 const NOTES_KEY = (threadId: string) => `exec:notes:${threadId}`;
@@ -222,6 +228,22 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     gcTimer = setTimeout(() => { gcTimer = null; const ids = [...gcThreads]; gcThreads.clear(); runAutoGc(ids); }, 60_000);
     gcTimer.unref?.();
   };
+  // 0.3.5: подтред создан штатным провайдером при установленном каскаде — предупреждение
+  // родителю (на каскаде — строка в следующем ходе; иначе — в замечаниях настроек каскада).
+  const onCreated = (payload: { thread?: { id?: unknown; providerId?: unknown; parentThreadId?: unknown; title?: unknown } }) => {
+    const t = payload.thread;
+    if (!t || typeof t.id !== 'string' || typeof t.parentThreadId !== 'string') return;
+    if (t.providerId !== 'claude-code' && t.providerId !== 'codex') return;
+    const child = { threadId: t.id, parentThreadId: t.parentThreadId, title: typeof t.title === 'string' && t.title ? t.title : null, providerId: t.providerId };
+    void deps.loadConfig().then(async config => {
+      if (config.policies.executionMode !== 'provider') return;
+      const r = await routes.subthreadBypass(child);
+      if (!r.parentOnCascade) bypassIssues.unshift({ at: Date.now(), text: `${bypassLine(child.title ?? child.threadId)} (родитель ${child.parentThreadId} не на каскаде)` });
+      bypassIssues.splice(20);
+    }).catch(error => bb.log.warn(`подтред мимо каскада ${child.threadId}: ${String(error)}`));
+  };
+  const bypassIssues: { at: number; text: string }[] = [];
+  bb.events.on('thread.created', onCreated as never);
   bb.events.on('thread.archived', onGone as never);
   bb.events.on('thread.deleted', onGone as never);
   const dailyGc = setInterval(() => runAutoGc(null), 24 * 3_600_000);
@@ -272,6 +294,9 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     health: deps.health,
     refreshLimits: async (config, steps) => { await deps.ensureDiscovered(); await deps.refreshLimits(config, steps); },
     observeLimit: (config, step, observation: LimitObservation) => {
+      // 0.3.5: уведомление app-server Codex — адаптеру Codex как есть (codexEventReading).
+      const raw = observation.raw as { method?: unknown } | undefined;
+      if (step.providerId === 'codex' && raw && typeof raw === 'object' && raw.method === 'account/rateLimits/updated') { deps.observeLimit(config, step, raw); return; }
       deps.observeLimit(config, step, { type: 'rate_limit_event', rate_limit_info: observation.raw ?? { status: observation.status, resetsAt: observation.resetsAt ? observation.resetsAt / 1000 : undefined, rateLimitType: observation.windowType ?? undefined } });
     },
     threadInfo,
@@ -428,6 +453,8 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
       { name: 'gc', summary: 'Убрать реплики и сессии Mutagen архивированных и удалённых тредов (опора не трогается)', usage: 'bb subscriptions-cascade gc [--dry-run] [--machine <hostId|имя>] [--json]' },
       { name: 'test-bridge', summary: 'Приёмка S13: считать штатный мост несовместимым (без правки BB)', usage: 'bb subscriptions-cascade test-bridge --incompatible|--compatible' },
       { name: 'resolve', summary: 'Просьба «Codex 6.2 на Tru», «на аккаунте vclaude» → закреплённая ступень каскада (pin:…), кандидаты или запасной путь', usage: 'bb subscriptions-cascade resolve "<просьба>" [--json]' },
+      { name: 'limits', summary: 'Лимиты по ступеням: состояние, процент или остаток, источник, причина «неизвестно» — то, что видит каскад', usage: 'bb subscriptions-cascade limits [--json]' },
+      { name: 'check', summary: 'Готовность ступеней: машина, CLI и вход, лимиты и сверка с Thread Account Usage, модели, общий путь, Mutagen, SSH', usage: 'bb subscriptions-cascade check [--step <id>|--host <id|имя>] [--json]' },
       { name: 'adopt', summary: 'Перевести треды в каскад (Handoff) и снять автоповтор у исходных', usage: 'bb subscriptions-cascade adopt --stuck|--thread <id>|--project <id> [--dry-run] [--model <профиль>] [--json] · --native --thread <id> [--model <профиль>] [--prompt <текст>] [--wait <сек>] [--dry-run] — та же сессия Claude в треде каскада, то же окружение' },
     ],
     async run(argv, ctx) {
@@ -491,9 +518,32 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
         // Только чтение настроек, таблицы моделей и уже обнаруженных каталогов — без вызова моделей.
         const text = rest.filter(a => a !== '--json').join(' ').trim();
         if (!text) return { exitCode: 2, stderr: 'укажите просьбу: bb subscriptions-cascade resolve "Codex 6.2 на Tru" [--json]\n' };
-        const result = resolveRequest({ config: await deps.loadConfig(), accounts: deps.accounts(), hosts: deps.hosts?.() ?? [], blocked: deps.blockedModel, text });
+        // effort родителя — из последнего хода треда, откуда вызван resolve (любой тред, не только на каскаде).
+        const parentEffort = ctx.threadId ? lastReasoningLevel(await readThreadEvents(list => bb.sdk.threads.events.list(list as never) as Promise<unknown>, ctx.threadId!, 0).catch(() => [])) : null;
+        const result = resolveRequest({ config: await deps.loadConfig(), accounts: deps.accounts(), hosts: deps.hosts?.() ?? [], blocked: deps.blockedModel, text, parentEffort });
         if (rest.includes('--json')) return { exitCode: 0, stdout: `${JSON.stringify(result)}\n` };
         return { exitCode: 0, stdout: formatResolve(result) };
+      }
+      if (command === 'limits') {
+        if (!deps.limits) return { exitCode: 2, stderr: 'отчёт о лимитах недоступен\n' };
+        const lines = await deps.limits();
+        if (rest.includes('--json')) return { exitCode: 0, stdout: `${JSON.stringify({ steps: lines })}\n` };
+        return { exitCode: 0, stdout: formatLimits(lines) };
+      }
+      if (command === 'check') {
+        if (!deps.check) return { exitCode: 2, stderr: 'проверка недоступна\n' };
+        const config = await deps.loadConfig();
+        const si = rest.indexOf('--step');
+        const hi = rest.indexOf('--host');
+        const stepId = si !== -1 ? rest[si + 1] : undefined;
+        const hostRef = hi !== -1 ? rest[hi + 1] : undefined;
+        if (stepId && !config.steps.some(s => s.id === stepId)) return { exitCode: 2, stderr: `ступень «${stepId}» не найдена (${config.steps.map(s => s.id).join(', ')})\n` };
+        const machine = hostRef ? config.machines.find(m => m.hostId === hostRef || m.label.toLowerCase() === hostRef.toLowerCase()) : undefined;
+        if (hostRef && !machine) return { exitCode: 2, stderr: `машина «${hostRef}» не найдена в каскаде\n` };
+        const checks = await deps.check({ ...(stepId ? { stepIds: [stepId] } : {}), ...(machine ? { hostIds: [machine.hostId] } : {}) });
+        const exitCode = checks.some(c => !c.ready) ? 1 : 0;
+        if (rest.includes('--json')) return { exitCode, stdout: `${JSON.stringify({ steps: checks })}\n` };
+        return { exitCode, stdout: formatCheck(checks) };
       }
       if (command === 'adopt') {
         const parsed = parseAdoptArgs(rest);
@@ -512,7 +562,7 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
         if (rest.includes('--json')) return { exitCode: items.some(i => i.error) ? 1 : 0, stdout: `${JSON.stringify({ dryRun: options.dryRun, items })}\n` };
         return { exitCode: items.some(i => i.error) ? 1 : 0, stdout: formatAdopt(items, options.dryRun) };
       }
-      return { exitCode: 2, stderr: 'команды: status, resolve, setup, gc, test-quota, test-bridge, adopt\n' };
+      return { exitCode: 2, stderr: 'команды: status, resolve, limits, check, setup, gc, test-quota, test-bridge, adopt\n' };
     },
   });
 
@@ -530,6 +580,9 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     nativeBridges: () => bridges,
     scheme: threadId => routes.threadScheme(threadId),
     refreshNativeBridges,
-    issues: () => bridges.filter(b => b.problem && b.providerId === 'claude-code').map(b => `Штатный мост Claude Code: ${b.problem}. Каскад не сможет запускать ходы.`),
+    issues: () => [
+      ...bridges.filter(b => b.problem && b.providerId === 'claude-code').map(b => `Штатный мост Claude Code: ${b.problem}. Каскад не сможет запускать ходы.`),
+      ...bypassIssues.filter(b => Date.now() - b.at < 24 * 3_600_000).map(b => b.text),
+    ],
   };
 }

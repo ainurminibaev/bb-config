@@ -47,6 +47,11 @@ export interface PlanInput {
   requestedModel: string;
   accounts: readonly DiscoveredAccount[];
   thread: Pick<ThreadCascadeState, 'isSubthread' | 'homeHostId'>;
+  /**
+   * 0.3.5: не держать подтред на машине родителя (S11). Откат Codex-подтреда на
+   * «Авто»: маршрут Codex S11 не держит — и откат тоже не должен.
+   */
+  ignoreHome?: boolean;
 }
 
 export interface SelectInput extends PlanInput {
@@ -105,7 +110,7 @@ export function resolveProfile(config: CascadeConfig, requestedModel: string): P
   // «Подтред · Codex» (0.3.4): синтетический, строится из ступеней каскада.
   if (isSubthreadCodexId(requestedModel)) return subthreadCodexProfile(config);
   if (requestedModel.startsWith(MODEL_ID_PREFIX)) {
-    return { id: requestedModel, name: requestedModel, enabled: true, policy: 'only', modelKey: requestedModel.slice(MODEL_ID_PREFIX.length), stepOrder: null, excludedSteps: [], excludedProviders: [], confirm: {}, subthreads: 'same' };
+    return { id: requestedModel, name: requestedModel, enabled: true, policy: 'only', modelKey: requestedModel.slice(MODEL_ID_PREFIX.length), stepOrder: null, excludedSteps: [], excludedProviders: [], confirm: {} };
   }
   return { kind: 'unavailable', reason: requestedModel === AUTO_MODEL_ID ? 'profile-disabled' : 'unknown-profile' };
 }
@@ -154,7 +159,7 @@ export function buildPlan(input: PlanInput): Attempt[] | Unavailable {
   const steps = profileSteps(config, profile);
   // Закреплённую ступень выбрал владелец явно — запрет «подтред только на машине родителя» на неё не действует.
   // «Подтред · Codex» (0.3.4) идёт на Codex любой машины — S11 тоже не действует.
-  const pinned = isPinId(profile.id) || isSubthreadCodexId(profile.id);
+  const pinned = isPinId(profile.id) || isSubthreadCodexId(profile.id) || input.ignoreHome === true;
   // S11 действует, только пока машина родителя есть среди ступеней каскада (0.3.1):
   // машину убрали или выключили — подтред идёт по общему профилю.
   const homeInCascade = parentHomeInCascade(config, thread.homeHostId);
@@ -236,10 +241,10 @@ export function explainNoSteps(input: PlanInput): string {
 
 interface Candidate extends Attempt { step: Step; health: StepHealth }
 
-/** Готова ли попытка к ходу: неизвестная квота — по настройке ступени. */
-function isReady(c: Candidate): boolean {
+/** Готова ли попытка к ходу: неизвестная квота — по профилю (0.3.5), иначе по настройке ступени. */
+function isReady(c: Candidate, profileOnUnknown: Profile['onUnknown']): boolean {
   if (!c.health.available || c.health.exhausted) return false;
-  return !c.health.unknown || c.step.onUnknown === 'try';
+  return !c.health.unknown || (profileOnUnknown ?? c.step.onUnknown) === 'try';
 }
 
 export function selectStep(input: SelectInput): Decision {
@@ -249,7 +254,9 @@ export function selectStep(input: SelectInput): Decision {
   const all: Candidate[] = plan.filter(a => a.skip === null)
     .map(a => ({ ...a, step: config.steps.find(s => s.id === a.stepId)!, health: input.health(a.stepId, a.modelId) }));
   if (all.length === 0) return { kind: 'unavailable', reason: 'no-steps' };
-  const freeAll = all.filter(c => isReady(c) && !thread.skippedStepIds.includes(c.stepId));
+  const resolved = resolveProfile(config, input.requestedModel);
+  const onUnknown = 'kind' in resolved ? undefined : resolved.onUnknown;
+  const freeAll = all.filter(c => isReady(c, onUnknown) && !thread.skippedStepIds.includes(c.stepId));
   const onWriterHost = input.preferHostId ? freeAll.filter(c => c.hostId === input.preferHostId) : [];
   const free = onWriterHost.length > 0 ? onWriterHost : freeAll;
 
@@ -334,6 +341,8 @@ export interface ExplainedAttempt extends Attempt {
   state: AttemptState;
   /** Сюда пошёл бы ход прямо сейчас (run или confirm). */
   chosen: boolean;
+  /** 0.3.5: причина состояния лимита (например, «ступень не готова: …»). */
+  reason?: string | null;
 }
 
 /**
@@ -349,7 +358,7 @@ export function explainProfile(input: SelectInput): { attempts: ExplainedAttempt
     const h = input.health(a.stepId, a.modelId);
     const state: AttemptState = !h.available ? 'unavailable' : h.exhausted ? 'exhausted' : h.unknown ? 'unknown' : 'available';
     const chosen = a.skip === null && picked !== null && picked.stepId === a.stepId && picked.modelId === a.modelId;
-    return { ...a, state, chosen };
+    return { ...a, state, chosen, reason: h.reason };
   });
   return { attempts, decision };
 }

@@ -26,6 +26,12 @@ export function cliInstalled(raw: unknown, providerId: string): boolean | null {
   return typeof entry.installed === 'boolean' ? entry.installed : null;
 }
 
+/** Версия CLI из providerCliStatus (`version`); null — неизвестна. */
+export function cliVersion(raw: unknown, providerId: string): string | null {
+  const entry = rec(rec(raw)[providerId]);
+  return str(entry.version) ?? str(entry.cliVersion);
+}
+
 /** Окно для экрана настроек (упрощённое WindowSample). */
 export function toLimitWindow(w: WindowSample): LimitWindow {
   const kind: LimitWindow['kind'] = w.scope.kind === 'model' ? 'model' : w.scope.kind === 'package' ? 'package'
@@ -57,5 +63,6 @@ export function toDiscoveredAccount(args: {
     limitsStatus: args.reading.kind === 'sample' ? 'ok' : args.reading.reason,
     error: catalog.error,
     fetchedAt: args.now,
+    cliVersion: cliVersion(args.cliStatus, args.providerId),
   };
 }

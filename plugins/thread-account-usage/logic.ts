@@ -1,4 +1,25 @@
 import type { Account, QuotaWindow, Snapshot } from './contract.ts';
+/**
+ * Окна квоты из ответа `system.usageLimits` одного провайдера: `ok` и окна с
+ * названием и процентом. Тот же разбор проверяет тест-контракт каскада подписок
+ * на общих образцах (fixtures/limits-samples.json).
+ */
+export function usageWindows(usage: unknown): { ok: boolean; windows: QuotaWindow[] } {
+  const u = usage !== null && typeof usage === 'object' && !Array.isArray(usage) ? usage as Record<string, unknown> : {};
+  const ok = u.status === 'ok';
+  const windows = ok && Array.isArray(u.windows) ? u.windows.flatMap(item => {
+    const w = item !== null && typeof item === 'object' ? item as Record<string, unknown> : {};
+    if (typeof w.label !== 'string' || typeof w.usedPercent !== 'number' || !Number.isFinite(w.usedPercent)) return [];
+    return [{ label: w.label, kind: classifyWindow(w.label, w.kind), usedPercent: w.usedPercent, resetsAt: typeof w.resetsAt === 'string' && w.resetsAt.length > 0 ? w.resetsAt : null }];
+  }) : [];
+  return { ok, windows };
+}
+
+/** Израсходованная доля пакета VClaude в процентах (0–100). */
+export function vclaudeUsedPercent(usage: { limitUnits: number; remainingUnits: number }): number {
+  return Math.max(0, Math.min(100, 100 * (1 - usage.remainingUnits / usage.limitUnits)));
+}
+
 export function classifyWindow(label: string, kind?: unknown): QuotaWindow['kind'] {
   if (/fable|opus|sonnet|haiku|mythos/i.test(label)) return 'model';
   if (kind === 'five-hour' || /5.?hour|five.?hour|current session/i.test(label)) return 'five-hour';

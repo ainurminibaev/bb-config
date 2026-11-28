@@ -2,7 +2,7 @@
 import type { Stage } from './adapter.ts';
 import { defaultProfiles } from './profiles.ts';
 import { autoCodexChildrenProfile } from './subthreads.ts';
-import { AUTO_CODEX_CHILDREN_ID, configSchema, stepSchema, type CascadeConfig, type Machine, type ModelRow, type Platform, type Step } from './contract.ts';
+import { AUTO_CODEX_CHILDREN_ID, SUBTHREAD_CODEX_ID, configSchema, stepSchema, type CascadeConfig, type Machine, type ModelRow, type Platform, type Step } from './contract.ts';
 
 /** Встроенные профили, которые добавляются в уже существующие настройки (один раз). */
 const OFFERED_BUILTINS = [{ id: AUTO_CODEX_CHILDREN_ID, make: autoCodexChildrenProfile }] as const;
@@ -105,7 +105,12 @@ export function normalizeConfig(input: unknown): CascadeConfig {
   // Профили по умолчанию — только если поля нет (конфигурация до профилей).
   // Пустой список, оставленный владельцем, не заполняется заново.
   const hasProfiles = typeof input === 'object' && input !== null && Array.isArray((input as { profiles?: unknown }).profiles);
-  let profiles = hasProfiles ? uniqueBy(config.profiles, p => p.id) : defaultProfiles({ models });
+  // 0.3.4 → 0.3.5: `subthreads: 'codex'` — правило потомков `descendants: 'subthread-codex'`.
+  let profiles = (hasProfiles ? uniqueBy(config.profiles, p => p.id) : defaultProfiles({ models })).map(p => {
+    if (p.subthreads !== 'codex') return p;
+    const { subthreads: _legacy, ...rest } = p;
+    return { ...rest, descendants: p.descendants ?? SUBTHREAD_CODEX_ID, onDescendantsExhausted: p.onDescendantsExhausted ?? 'wait' };
+  });
   // Встроенные профили новых версий (0.3.4: «Авто · подтреды на Codex») — один раз
   // в существующие настройки; удалённый владельцем профиль не возвращается.
   const offered = new Set(config.offeredProfiles);

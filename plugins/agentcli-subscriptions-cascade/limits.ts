@@ -138,8 +138,11 @@ export interface StepHealth {
   reason: string | null;
 }
 
+/** Недавнее показание с таким запасом считается известным (0.3.5), см. `staleOkMinutes`. */
+export const STALE_OK_MAX_USED_PERCENT = 90;
+
 export function healthFromReading(reading: Reading | undefined, modelId: string | null, args: {
-  connected: boolean; now: Instant; policies: Pick<Policies, 'minRemainingPercent' | 'positiveFreshSeconds'>;
+  connected: boolean; now: Instant; policies: Pick<Policies, 'minRemainingPercent' | 'positiveFreshSeconds'> & { staleOkMinutes?: number };
 }): StepHealth {
   const { now } = args;
   if (!args.connected) return { available: false, exhausted: false, unknown: true, resetsAt: null, reason: 'машина не на связи' };
@@ -166,7 +169,16 @@ export function healthFromReading(reading: Reading | undefined, modelId: string 
   const freshMs = args.policies.positiveFreshSeconds * 1000;
   const fresh = applicable.length > 0 && reading.coverage === 'snapshot'
     && applicable.every(w => w.timeBasis !== 'unknown-cache' && w.observedAt !== null && now - w.observedAt <= freshMs);
-  if (!fresh) return { available: true, exhausted: false, unknown: true, resetsAt: null, reason: 'квота неизвестна: данные устарели' };
+  if (!fresh) {
+    // 0.3.5: показание старше positiveFreshSeconds, но не старше staleOkMinutes и с
+    // запасом (≤ 90 % использовано) — квота известна. Окна 5 ч/неделя и пакет vclaude
+    // за минуты не кончаются; исчерпание в ходе приходит событием и держится отдельно.
+    const graceMs = (args.policies.staleOkMinutes ?? 15) * 60_000;
+    const recent = applicable.length > 0 && applicable.every(w => w.timeBasis !== 'unknown-cache' && w.observedAt !== null
+      && now - w.observedAt <= graceMs && w.usedPercent !== null && w.usedPercent <= STALE_OK_MAX_USED_PERCENT);
+    if (recent) return { available: true, exhausted: false, unknown: false, resetsAt: null, reason: null };
+    return { available: true, exhausted: false, unknown: true, resetsAt: null, reason: 'квота неизвестна: данные устарели' };
+  }
   return { available: true, exhausted: false, unknown: false, resetsAt: null, reason: null };
 }
 
@@ -208,6 +220,9 @@ export class LimitMonitor {
 
   current(stage: Stage): Reading | undefined { return this.readings.get(quotaKey(stage)); }
 
+  /** Готовое показание источника (обнаружение машин уже прочитало usageLimits, 0.3.5). */
+  ingest(stage: Stage, reading: Reading, receivedAt: Instant): void { this.store(stage, reading, receivedAt); }
+
   /** Пассивное событие нативного CLI (rate_limit_event, account/rateLimits/updated, statusline). */
   observe(stage: Stage, event: unknown, receivedAt: Instant): void {
     const reading = this.adapters(stage.provider)?.onNativeEvent(stage, event, receivedAt);
@@ -226,9 +241,17 @@ export class LimitMonitor {
       const timeout = new Promise<Reading>(resolve => {
         timer = setTimeout(() => { controller.abort(); resolve({ kind: 'unknown', reason: 'timeout', checkedAt: Date.now() }); }, budgetMs);
       });
-      const read = adapter.read(stage, controller.signal)
-        .catch((): Reading => ({ kind: 'unknown', reason: controller.signal.aborted ? 'timeout' : 'malformed', checkedAt: Date.now() }));
-      job = Promise.race([read, timeout]).finally(() => { clearTimeout(timer); this.pending.delete(key); });
+      // Бюджет — только на ожидание хода. Сам запрос не обрывается: опоздавший ответ
+      // (кабинет vclaude, медленный usageLimits) сохраняется и виден следующему ходу,
+      // схеме и `limits` (0.3.5; до этого он терялся, и квота оставалась «неизвестной»).
+      const read = adapter.read(stage, new AbortController().signal)
+        .catch((): Reading => ({ kind: 'unknown', reason: 'malformed', checkedAt: Date.now() }));
+      let late = false;
+      const drop = () => { if (this.pending.get(key) === job) this.pending.delete(key); };
+      void read.then(r => { if (late) this.store(stage, r, Date.now()); drop(); });
+      // Зависший источник не держит ключ вечно: через минуту — новый запрос.
+      (setTimeout(drop, 60_000) as { unref?: () => void }).unref?.();
+      job = Promise.race([read, timeout.then(r => { late = true; return r; })]).finally(() => clearTimeout(timer));
       this.pending.set(key, job);
     }
     const reading = await job;

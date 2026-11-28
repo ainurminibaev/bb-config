@@ -12,6 +12,7 @@ import {
 import { toDiscoveredAccount } from './discovery.ts';
 import { registerExecutor } from './bridge/server-register.ts';
 import { describeReading, healthFromReading, LimitMonitor, readingFromUsageLimits } from './limits.ts';
+import { checkStep, limitsReport, tauStateOf, withReadiness, type StepCheck } from './readiness.ts';
 import { applyAutoMatches, resolveCell, suggestRows } from './models.ts';
 import { providerModels, quotaLookupFor } from './profiles.ts';
 import { revokeSsh, runWizard, wizardPlan, type ExecResult, type ProbeResult, type WizardDeps } from './wizard.ts';
@@ -73,9 +74,28 @@ export default function plugin(bb: BbPluginApi) {
       const step = config.steps.find(s => s.id === id);
       const blocked = step ? blockedModel(step.hostId, modelId) : null;
       if (blocked) return { available: false, exhausted: false, unknown: false, resetsAt: null, reason: `модель недоступна: ${blocked.reason}` };
-      return healthFromReading(step ? monitor.current(stageOf(step)) : undefined, modelId, { connected: step ? connected.has(step.hostId) : false, now: Date.now(), policies: config.policies });
+      const health = healthFromReading(step ? monitor.current(stageOf(step)) : undefined, modelId, { connected: step ? connected.has(step.hostId) : false, now: Date.now(), policies: config.policies });
+      // 0.3.5: неготовая ступень (check) недоступна с причиной — маршрут её пропускает.
+      const mark = readiness[id];
+      return withReadiness(health, mark && !mark.ready ? mark.reason ?? 'проверка не пройдена' : null);
     }),
-    refreshLimits: async (config, steps) => { await Promise.all(steps.map(s => monitor.refresh(stageOf(s), config.policies.preTurnBudgetMs).catch(() => undefined))); },
+    refreshLimits: async (config, steps) => {
+      // Неготовые ступени перепроверяются в фоне не чаще раза в 10 минут: починили — ступень вернётся сама.
+      const stale = steps.filter(s => readiness[s.id] && !readiness[s.id]!.ready && Date.now() - readiness[s.id]!.at > 10 * 60_000).map(s => s.id);
+      if (stale.length > 0) void checkSteps({ stepIds: stale }).catch(() => undefined);
+      await Promise.all(steps.map(s => monitor.refresh(stageOf(s), config.policies.preTurnBudgetMs).catch(() => undefined)));
+    },
+    limits: async () => {
+      await discover(false).catch(() => undefined);
+      const { config } = await loadConfig();
+      const lines = await Promise.all(config.steps.filter(s => s.enabled).map(async step => {
+        const reading = await monitor.refresh(stageOf(step), 20_000).catch(() => monitor.current(stageOf(step)));
+        const health = healthFromReading(reading, null, { connected: connected.has(step.hostId), now: Date.now(), policies: config.policies });
+        return { step, health, text: describeReading(reading, health).text };
+      }));
+      return limitsReport(config, step => lines.find(l => l.step.id === step.id)!);
+    },
+    check: filter => checkSteps(filter),
     observeLimit: (_config, step, event) => monitor.observe(stageOf(step), event, Date.now()),
     sync: { prepareTurn: (t, s, progress) => fileSync.prepareTurn(t, s, progress), finishTurn: (t, s) => fileSync.finishTurn(t, s), writerOf: t => fileSync.writerOf(t), modeOf: (config, projectId) => syncModeOf(config, projectId) },
   });
@@ -94,6 +114,52 @@ export default function plugin(bb: BbPluginApi) {
   let accounts: DiscoveredAccount[] = [];
   let hosts: CascadeState['hosts'] = [];
   let discoveredAt = 0;
+
+  // 0.3.5: готовность ступеней (check) — в хранилище плагина, переживает перезагрузку.
+  const READINESS_KEY = 'readiness';
+  let readiness: Record<string, { ready: boolean; reason: string | null; at: number }> = {};
+  void bb.storage.kv.get<typeof readiness>(READINESS_KEY).then(v => { if (v && typeof v === 'object') readiness = { ...v, ...readiness }; }).catch(() => undefined);
+
+  /** Аккаунты Thread Account Usage для сверки (её кэш, без обновления). Не установлен — null. */
+  async function tauAccounts(): Promise<unknown[] | null> {
+    return bb.sdk.plugins.callRpc({
+      pluginId: 'thread-account-usage', method: 'accounts', input: { refresh: false }, signal: AbortSignal.timeout(15_000),
+      outputSchema: z.object({ accounts: z.array(z.unknown()) }),
+    }).then(r => r.accounts).catch(() => null);
+  }
+
+  /** Проверка готовности ступеней: пробы машин, обнаружение, мастер, лимиты, сверка с TAU. */
+  async function checkSteps(filter: { stepIds?: string[]; hostIds?: string[] }): Promise<StepCheck[]> {
+    await discover(false).catch(() => undefined);
+    const { config } = await loadConfig();
+    const steps = config.steps.filter(s => (!filter.stepIds || filter.stepIds.includes(s.id)) && (!filter.hostIds || filter.hostIds.includes(s.hostId)));
+    const hostIds = [...new Set(steps.map(s => s.hostId))];
+    const probes = new Map(await Promise.all(hostIds.map(async id => {
+      const m = config.machines.find(x => x.hostId === id);
+      return [id, connected.has(id) && m ? await probe(id, m.sharedPath).catch(() => null) : null] as const;
+    })));
+    const wizard = new Map((await wizardStates(config)).map(w => [w.hostId, w]));
+    const tau = await tauAccounts();
+    const threshold = 100 - config.policies.minRemainingPercent;
+    const checks = await Promise.all(steps.map(async step => {
+      const stage = stageOf(step);
+      const reading = await monitor.refresh(stage, 20_000).catch(() => monitor.current(stage));
+      const health = healthFromReading(reading, null, { connected: connected.has(step.hostId), now: Date.now(), policies: config.policies });
+      const percents = reading?.kind === 'sample' ? reading.windows.map(w => w.usedPercent).filter((x): x is number => x !== null) : [];
+      const steps = wizard.get(step.hostId)?.steps as Record<string, { status: string; message?: string | null }> | undefined;
+      return checkStep(config, step, {
+        connected: connected.has(step.hostId), probe: probes.get(step.hostId) ?? null,
+        account: accounts.find(a => a.hostId === step.hostId && a.providerId === step.providerId), health,
+        tau: tau ? tauStateOf(tau, step, threshold) : null, usedPercent: percents.length ? Math.max(...percents) : null,
+        wizard: { folder: steps?.folder, mutagen: steps?.mutagen, ssh: steps?.ssh },
+        anchor: config.machines.find(m => m.hostId === step.hostId)?.anchor === true,
+      });
+    }));
+    const at = Date.now();
+    for (const c of checks) readiness[c.stepId] = { ready: c.ready, reason: c.reason, at };
+    await bb.storage.kv.set(READINESS_KEY, readiness).catch(() => undefined);
+    return checks;
+  }
 
   async function loadConfig(): Promise<{ config: CascadeConfig; seeded: boolean }> {
     const raw = (await settings.get()).config.trim();
@@ -136,6 +202,16 @@ export default function plugin(bb: BbPluginApi) {
         usageLimits(h.id, AbortSignal.timeout(20_000)).catch(() => ({} as Record<string, unknown>)),
       ]) : [null, null, {} as Record<string, unknown>];
       const at = Date.now();
+      // 0.3.5: квота ступеней по подписке (Codex, Claude) известна до первого хода —
+      // ответ usageLimits обнаружения уходит в монитор лимитов (шлюзы читаются своим источником).
+      if (live) {
+        const config = await loadConfig().then(r => r.config).catch(() => null);
+        for (const step of config?.steps ?? []) {
+          if (step.hostId !== h.id || step.authority !== 'subscription' || usage[step.providerId] === undefined) continue;
+          const stage = stageOf(step);
+          monitor.ingest(stage, readingFromUsageLimits(usage[step.providerId], stage, at, true), at);
+        }
+      }
       const found = live ? await Promise.all(registry.list().map(async adapter => toDiscoveredAccount({
         hostId: h.id, providerId: adapter.id, cliStatus: cli, now, usage: usage[adapter.id],
         models: await bb.sdk.providers.models({ hostId: h.id, providerId: adapter.id, preferCached: !refresh, signal: AbortSignal.timeout(20_000) }).catch(() => null),
@@ -211,7 +287,7 @@ export default function plugin(bb: BbPluginApi) {
       const health = healthFromReading(reading, null, { connected: connected.has(step.hostId), now: Date.now(), policies: config.policies });
       stepLimits[step.id] = { ...describeReading(reading, health), resetsAt: health.resetsAt };
     }));
-    return { config, hosts, accounts, cells, wizard: await wizardStates(config), stepLimits, projects, issues };
+    return { config, hosts, accounts, cells, wizard: await wizardStates(config), stepLimits, projects, issues, readiness };
   }
 
   async function save(config: CascadeConfig): Promise<CascadeState> {
@@ -224,6 +300,9 @@ export default function plugin(bb: BbPluginApi) {
       if (was?.enabled && !m.enabled && !m.anchor) void revokeSsh(m, { exec, anchor }).then(n => bb.log.info(`машина ${m.label} выключена: ${n.join('; ')}`)).catch(() => undefined);
     }
     await settings.experimental_set({ config: JSON.stringify(normalized, null, 2) });
+    // 0.3.5: новая ступень — проверка готовности (в фоне; «не готова» видно в настройках и схеме).
+    const added = normalized.steps.filter(s => !before?.steps.some(x => x.id === s.id)).map(s => s.id);
+    if (added.length > 0) await checkSteps({ stepIds: added }).catch(error => bb.log.warn(`проверка новых ступеней: ${String(error)}`));
     return state(false);
   }
 
@@ -325,6 +404,11 @@ export default function plugin(bb: BbPluginApi) {
     }
     const states = new Map((await wizardStates((await loadConfig()).config)).map(st => [st.hostId, st]));
     const wizard = await runWizard(machines, states, { ...wizardDeps, anchor }, { dryRun: input.dryRun ?? false, recheck: input.recheck ?? false, allowSsh: new Set(input.allowSsh ?? []) });
+    // 0.3.5: после мастера — готовность ступеней этих машин (тот же отчёт, что `check`).
+    if (!input.dryRun) {
+      const checks = await checkSteps({ hostIds: machines.map(m => m.hostId) }).catch(() => []);
+      for (const c of checks) notes.push(`${c.ready ? '✓' : '✗'} ${c.title}: ${c.ready ? 'готова' : `не готова — ${c.reason}`}`);
+    }
     return { wizard, notes };
   }
 

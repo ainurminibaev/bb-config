@@ -47,7 +47,12 @@ test('несколько блокирующих окон: возврат пос�
 test('свежесть: старое и кэшированное показание не даёт положительного решения', () => {
   const fresh = readingFromUsageLimits(usage([{ kind: 'weekly', label: 'Weekly', usedPercent: 10, resetsAt: iso(NOW + 86_400_000) }]), stage, NOW - 30_000, true);
   assert.equal(healthFromReading(fresh, null, { connected: true, now: NOW, policies }).unknown, false);
-  assert.equal(healthFromReading(fresh, null, { connected: true, now: NOW + 120_000, policies }).unknown, true);
+  // 0.3.5: старше positiveFreshSeconds, но не старше staleOkMinutes (15) и с запасом — известна.
+  assert.equal(healthFromReading(fresh, null, { connected: true, now: NOW + 120_000, policies }).unknown, false);
+  assert.equal(healthFromReading(fresh, null, { connected: true, now: NOW + 16 * 60_000, policies }).unknown, true);
+  assert.equal(healthFromReading(fresh, null, { connected: true, now: NOW + 120_000, policies: { ...policies, staleOkMinutes: 0 } }).unknown, true);
+  const tight = readingFromUsageLimits(usage([{ kind: 'weekly', label: 'Weekly', usedPercent: 95, resetsAt: iso(NOW + 86_400_000) }]), stage, NOW - 30_000, true);
+  assert.equal(healthFromReading(tight, null, { connected: true, now: NOW + 120_000, policies }).unknown, true, 'без запаса (95 %) старое показание — неизвестно');
   const cached = readingFromUsageLimits(usage([{ kind: 'weekly', label: 'Weekly', usedPercent: 10, resetsAt: iso(NOW + 86_400_000) }]), stage, NOW, false);
   assert.equal(healthFromReading(cached, null, { connected: true, now: NOW, policies }).unknown, true);
   assert.equal(healthFromReading(undefined, null, { connected: false, now: NOW, policies }).available, false);
@@ -123,4 +128,22 @@ test('монитор объединяет параллельные чтения 
   const timed = new LimitMonitor(() => slow);
   const r = await timed.refresh({ ...stage, bindingEpoch: 'e9' }, 20);
   assert.deepEqual(r && r.kind === 'unknown' && r.reason, 'timeout');
+});
+
+test('0.3.5: опоздавший ответ источника (дольше бюджета хода) сохраняется — следующий ход видит квоту', async () => {
+  let release: (r: Reading) => void = () => undefined;
+  const late = {
+    provider: 'codex', supports: () => ({ poll: true, events: true }),
+    read: () => new Promise<Reading>(resolve => { release = resolve; }),
+    onNativeEvent: () => null,
+  };
+  const monitor = new LimitMonitor(() => late);
+  const st = { ...stage, provider: 'codex', bindingEpoch: 'late' };
+  const first = await monitor.refresh(st, 20);
+  assert.equal(first?.kind, 'unknown', 'в бюджет не уложился');
+  release(readingFromUsageLimits(usage([{ kind: 'weekly', label: 'Weekly limit', usedPercent: 70, resetsAt: iso(NOW + 86_400_000) }]), st, Date.now(), true));
+  await new Promise(r => setTimeout(r, 5));
+  const after = monitor.current(st);
+  assert.equal(after?.kind, 'sample', 'поздний ответ сохранён');
+  assert.equal(healthFromReading(after, null, { connected: true, now: Date.now(), policies }).unknown, false);
 });

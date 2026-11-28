@@ -161,6 +161,11 @@ export const policiesSchema = z.object({
   positiveFreshSeconds: z.number().int().min(5).max(3600).default(60),
   /** Общий бюджет ожидания чтения лимитов перед ходом. */
   preTurnBudgetMs: z.number().int().min(500).max(60_000).default(5_000),
+  /**
+   * 0.3.5: показание не старше стольких минут с запасом (≤ 90 % использовано) —
+   * квота известна, даже если оно старше positiveFreshSeconds. 0 — выключено.
+   */
+  staleOkMinutes: z.number().int().min(0).max(120).default(15),
   /** Фоновая перепроверка приоритетной ступени при спросе. */
   recheckMinutes: z.number().int().min(1).max(120).default(5),
 });
@@ -196,12 +201,28 @@ export const profileSchema = z.object({
   /** stepId → «спрашивать при входе» поверх настройки ступени. */
   confirm: z.record(z.string(), z.boolean()).default({}),
   /**
-   * 0.3.4: куда идут подтреды треда на этом профиле. `same` — как раньше (по
-   * своему профилю); `codex` — только ступени Codex на любой машине, без
-   * подтверждения, задание проверяется (4 части); Codex недоступен — «Авто».
-   * На сам тред не влияет. Нет поля (настройки до 0.3.4) — `same`.
+   * 0.3.4 (устарело с 0.3.5): `codex` читается как `descendants: 'subthread-codex'`.
    */
   subthreads: z.enum(['same', 'codex']).optional(),
+  /**
+   * 0.3.5: правило для всех потомков треда на этом профиле (профиль = self +
+   * descendants). ID профиля, по которому идут подтреды, их подтреды и т.д.;
+   * `subthread-codex` — «только Codex, любая машина». Нет поля — потомки идут по
+   * своему профилю (обычно это профиль родителя из BB_CASCADE_PROFILE).
+   */
+  descendants: z.string().min(1).nullable().optional(),
+  /**
+   * 0.3.5: правило потомков исчерпано везде. `wait` (по умолчанию) — ждать сброса
+   * или спросить владельца, другие ступени не тратятся; `fallback` — ход по «Авто»
+   * со строкой в ленте.
+   */
+  onDescendantsExhausted: z.enum(['wait', 'fallback']).optional(),
+  /**
+   * 0.3.5: «квота неизвестна» поверх настройки ступени (`step.onUnknown`). Нет поля —
+   * как у ступени. «Подтред · Codex» ставит `try`: неизвестная квота Codex — повод
+   * попробовать ступень и узнать лимит из хода, а не откат на Claude.
+   */
+  onUnknown: z.enum(['skip', 'try']).optional(),
 });
 export type Profile = z.infer<typeof profileSchema>;
 
@@ -288,6 +309,8 @@ export const discoveredAccountSchema = z.object({
   limitsStatus: z.string(),
   error: z.string().nullable(),
   fetchedAt: z.string(),
+  /** 0.3.5: версия CLI из providerCliStatus (проверка готовности ступени); null — неизвестна. */
+  cliVersion: z.string().nullable().optional(),
 });
 export type DiscoveredAccount = z.infer<typeof discoveredAccountSchema>;
 
@@ -358,6 +381,8 @@ export const stateSchema = z.object({
   /** Проекты BB — для режима синхронизации по проекту. */
   projects: z.array(z.object({ id: z.string(), name: z.string() })),
   issues: z.array(z.string()),
+  /** 0.3.5: готовность ступеней (`check`): неготовая включена, но маршрут её пропускает с причиной. */
+  readiness: z.record(z.string(), z.object({ ready: z.boolean(), reason: z.string().nullable(), at: z.number() })).optional(),
 });
 export type CascadeState = z.infer<typeof stateSchema>;
 
