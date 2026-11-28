@@ -50,6 +50,8 @@ export interface CodexRelayPorts {
    * опросом usageLimits, а квота без опроса оставалась «неизвестной».
    */
   limits?(observation: LimitObservation): void;
+  /** 0.4.1: строка «где я выполняюсь» — в конец ввода каждого turn/start (ступень не на машине треда). */
+  whereNote?: string | null;
   log(line: string): void;
 }
 
@@ -76,6 +78,12 @@ export function startCodexRelay(ports: CodexRelayPorts): { onChildLine(line: str
           }
           prepared = true;
         }
+      }
+      if (message?.method === 'turn/start' && ports.whereNote) {
+        const params = (message.params ?? {}) as Json;
+        const input = Array.isArray(params.input) ? params.input as unknown[] : [];
+        ports.toChild(toStage(JSON.stringify({ ...message, params: { ...params, input: [...input, { type: 'text', text: ports.whereNote }] } })));
+        continue;
       }
       ports.toChild(toStage(line));
     }

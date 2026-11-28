@@ -624,6 +624,7 @@ async function runCodex(io: LauncherIo, rawArgs: string[], threadId: string): Pr
       await sendFeed(io, threadId, r.notes);
     },
     log: line => logLine(io, line),
+    whereNote: route.whereNote ?? null,
     // Лимит Codex из хода — сразу на сервер (ступень помечается исчерпанной, монитор узнаёт квоту).
     limits: observation => {
       void callServer(io, 'turnLimits', { threadId, stepId: runRoute.stepId, limits: [observation] }, 10_000).catch(error => logLine(io, `codex limits: ${String(error)}`));

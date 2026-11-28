@@ -110,6 +110,11 @@ export const routeTurnOutputSchema = z.discriminatedUnion('action', [
     cwd: z.string().nullable(),
     /** Переменные синхронизации и ступени для CLI (без секретов). */
     env: z.record(z.string(), z.string()).default({}),
+    /**
+     * 0.4.1: строка «где я выполняюсь» — дописывается в КОНЕЦ сообщения пользователя хода,
+     * когда машина ступени ≠ машине треда (начало запроса и кэш промптов не меняются).
+     */
+    whereNote: z.string().max(600).nullable().optional(),
     stage: stageLabelSchema,
     notes: z.array(routeNoteSchema).default([]),
     /**

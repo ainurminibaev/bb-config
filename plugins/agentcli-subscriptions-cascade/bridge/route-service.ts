@@ -217,6 +217,39 @@ export function bypassLine(title: string): string {
   return `Подтред «${title.slice(0, 80)}» запущен мимо каскада: лимиты не переключаются`;
 }
 
+/**
+ * 0.4.1: строка «где я выполняюсь» для хода на чужой машине. Только факты и правило выбора
+ * цели: «эта машина» — машина треда, другую владелец называет сам. Текст зависит лишь от
+ * пары машин — стабилен от хода к ходу.
+ */
+export function whereLine(execLabel: string, homeLabel: string): string {
+  return [
+    `[Каскад: этот ход выполняется на ${execLabel} — машине ступени каскада, а не машине треда (${homeLabel}). Файлы проекта синхронизированы; локальные команды здесь затрагивают ${execLabel}.`,
+    `Задачи про саму машину — деплой, установка и настройка (nginx, https/certbot, docker compose, systemd, cron, пакеты), очистка диска, перезапуск сервисов, порты, firewall, логи — выполняй на машине, о которой речь: «эта машина» значит ${homeLabel}, другую владелец называет сам; например nginx и https для сайта ставь на машине, где сайт работает.`,
+    `Команды там: \`bb terminal run --machine <id или имя> -- …\` (имена — в BB_CASCADE_MACHINES).]`,
+  ].join('\n');
+}
+
+/**
+ * 0.4.1: окружение CLI о машинах: дом треда, машина ступени и список машин каскада
+ * (`BB_CASCADE_MACHINES` — «Имя=hostId;…», для `bb terminal run --machine`).
+ */
+export function machinesEnv(config: CascadeConfig, homeHostId: string, execHostId: string, label: (hostId: string) => string): Record<string, string> {
+  const list = config.machines.map(m => `${m.label.replace(/[=;]/gu, ' ')}=${m.hostId}`);
+  return { BB_CASCADE_HOME_HOST: homeHostId, BB_CASCADE_HOME_LABEL: label(homeHostId), BB_CASCADE_EXEC_HOST: execHostId, BB_CASCADE_MACHINES: list.join(';') };
+}
+
+/** Дописать строку в конец сообщения пользователя stream-json (`{"type":"user"}`); не JSON — как есть. */
+export function appendToUserLine(line: string, note: string): string {
+  let message: Record<string, unknown>;
+  try { message = JSON.parse(line) as Record<string, unknown>; } catch { return line; }
+  const inner = message.message as { content?: unknown } | undefined;
+  if (message.type !== 'user' || !inner) return line;
+  const content = inner.content;
+  const next = typeof content === 'string' ? `${content}\n\n${note}` : Array.isArray(content) ? [...content, { type: 'text', text: note }] : content;
+  return JSON.stringify({ ...message, message: { ...inner, content: next } });
+}
+
 /** «Ход не запущен: Каскад подписок → <источник>: <причина>». */
 export function refusalText(source: string, reason: string): string {
   return `Ход не запущен: Каскад подписок → ${source}: ${reason}`;
@@ -906,9 +939,13 @@ export function createRouteService(deps: RouteDeps): RouteService {
       });
       // Тред знает, что он на каскаде, через окружение CLI ступени (0.3.0), а не через
       // промпт: начало запроса не меняется, кэш промптов не теряется.
-      const stageEnv = { ...env, ...cascadeEnv(profileId, decision.stepId) };
+      const label = (hostId: string) => config.machines.find(m => m.hostId === hostId)?.label ?? deps.hostName?.(hostId) ?? hostId;
+      const where = bridgeHost ? machinesEnv(config, bridgeHost, decision.hostId, label) : {};
+      const whereNote = bridgeHost && bridgeHost !== decision.hostId ? whereLine(label(decision.hostId), label(bridgeHost)) : null;
+      const stageEnv = { ...env, ...cascadeEnv(profileId, decision.stepId), ...where };
       return {
         action: 'run', stepId: decision.stepId, hostId: decision.hostId, providerId: decision.providerId, modelId: decision.modelId, local, cwd, env: stageEnv, stage: to, notes,
+        ...(whereNote ? { whereNote } : {}),
         ...(seed && !seed.done ? { seedSession: { sessionId: seed.sessionId } } : {}),
       };
     }

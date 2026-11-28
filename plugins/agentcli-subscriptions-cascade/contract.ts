@@ -230,6 +230,10 @@ export const profileSchema = z.object({
    * попробовать ступень и узнать лимит из хода, а не откат на Claude.
    */
   onUnknown: z.enum(['skip', 'try']).optional(),
+  /** 0.4.1: «спрашивать при входе» для ступеней без своей отметки в `confirm`; нет — как у ступени. */
+  confirmDefault: z.boolean().optional(),
+  /** 0.4.1: не показывать в списке моделей (прежний профиль: старые треды на нём работают). */
+  hidden: z.boolean().optional(),
 });
 export type Profile = z.infer<typeof profileSchema>;
 

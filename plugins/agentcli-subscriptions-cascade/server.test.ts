@@ -63,8 +63,8 @@ test('сервер: состояние, провайдер с каталогом
   const provider = harness.registrations.providerRegistrations.find(p => p.id === 'subscriptions-cascade');
   assert.ok(provider, 'провайдер зарегистрирован');
   const ids = (provider!.models?.fallback ?? []).map(m => m.id);
-  assert.deepEqual(ids.filter(id => !id.startsWith('pin:')), ['auto', 'auto-no-codex', 'auto-codex-children', 'opus-then-auto', 'fable-then-auto', 'only-opus-5.5', 'only-fable-5.2'], 'список моделей = профили');
-  assert.deepEqual(ids.slice(0, 7), ids.filter(id => !id.startsWith('pin:')), 'профили — первыми, закреплённые ступени — за ними');
+  assert.deepEqual(ids.filter(id => !id.startsWith('pin:')), ['auto', 'auto-no-codex', 'auto-codex-children', 'fable-then-auto', 'fable-no-codex', 'fable-codex-children', 'only-opus-5.5', 'only-fable-5.2', 'only-codex'], 'список моделей = профили');
+  assert.deepEqual(ids.slice(0, 9), ids.filter(id => !id.startsWith('pin:')), 'профили — первыми, закреплённые ступени — за ними');
   assert.ok(ids.includes('pin:host_mac:claude-code:*:fable-5.2'), 'закреплённая ступень с моделью из таблицы');
   assert.ok(!ids.includes('pin:host_mac:claude-code:*:opus-5.5'), 'модели без ID на машине нет в меню');
   assert.match(provider!.models!.fallback![0]!.description ?? '', /Старт: Opus · Tru/);
@@ -93,7 +93,7 @@ test('пустые настройки → model/list отдаёт профили
   }
   assert.ok(provider, 'провайдер зарегистрирован при запуске');
   const catalog = (provider!.experimental_bridgeOptions as { catalog: { id: string }[] }).catalog;
-  assert.deepEqual(catalog.map(m => m.id).filter(id => !id.startsWith('pin:')), ['auto', 'auto-no-codex', 'auto-codex-children', 'opus-then-auto', 'fable-then-auto', 'only-opus-5.5', 'only-fable-5.2']);
+  assert.deepEqual(catalog.map(m => m.id).filter(id => !id.startsWith('pin:')), ['auto', 'auto-no-codex', 'auto-codex-children', 'fable-then-auto', 'fable-no-codex', 'fable-codex-children', 'only-opus-5.5', 'only-fable-5.2', 'only-codex']);
   assert.deepEqual((provider!.models?.fallback ?? []).map(m => m.id), catalog.map(m => m.id));
 });
 
@@ -103,7 +103,7 @@ test('нет ни одной машины → каталог всё равно �
   const empty = seedConfig([]);
   assert.equal(empty.policies.executionMode, 'provider', 'пустые настройки — каскад готов к работе');
   const models = providerModels(empty, []);
-  assert.deepEqual(models.map(m => m.id), ['auto', 'auto-no-codex', 'auto-codex-children', 'opus-then-auto', 'fable-then-auto', 'only-opus-5.5', 'only-fable-5.2']);
+  assert.deepEqual(models.map(m => m.id), ['auto', 'auto-no-codex', 'auto-codex-children', 'fable-then-auto', 'fable-no-codex', 'fable-codex-children', 'only-opus-5.5', 'only-fable-5.2', 'only-codex']);
   assert.equal(models[0]!.isDefault, true);
   assert.match(models[0]!.description, /ещё не найдены/u);
 });

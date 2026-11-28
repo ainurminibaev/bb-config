@@ -147,7 +147,7 @@ export function modelPriority(config: CascadeConfig): ModelRow[] {
 }
 
 export function stepConfirm(profile: Profile, step: Step): boolean {
-  return profile.confirm[step.id] ?? step.confirm;
+  return profile.confirm[step.id] ?? profile.confirmDefault ?? step.confirm;
 }
 
 /**

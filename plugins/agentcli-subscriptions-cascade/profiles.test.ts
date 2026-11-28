@@ -10,14 +10,15 @@ import {
 
 const describe = (id: string, c = config()) => describeProfile(c, c.profiles.find(p => p.id === id)!, ACCOUNTS);
 
-test('подпись профиля (0.4.0): цепочка моделей, старт и правило', () => {
-  assert.equal(describe('auto'), 'Opus → Fable → Sonnet → Codex. Старт: Opus · Tru; внутри модели — ступени Tru → Mac → UA; Codex — с подтверждением');
-  assert.equal(describe('auto-no-codex'), 'Opus → Fable → Sonnet. Старт: Opus · Tru; внутри модели — ступени Tru → Mac → UA, без Codex');
-  assert.equal(describe('fable-then-auto'), 'Старт: Fable · Tru. Сначала Fable на Tru → Mac, потом любые модели; Codex — с подтверждением');
+test('подпись профиля (0.4.1): цепочка моделей, старт и правило', () => {
+  assert.equal(describe('auto'), 'Opus → Fable → Sonnet → Codex. Старт: Opus · Tru. Сначала Opus на Tru → Mac → UA, потом лучшая; Codex — с подтверждением');
+  assert.equal(describe('auto-no-codex'), 'Opus → Fable → Sonnet. Старт: Opus · Tru. Сначала Opus на Tru → Mac → UA, потом лучшая, без Codex');
+  assert.equal(describe('fable-then-auto'), 'Fable → Opus → Sonnet → Codex. Старт: Fable · Tru. Сначала Fable на Tru → Mac, потом лучшая; Codex — с подтверждением');
+  assert.equal(describe('only-codex'), 'Codex. Старт: Codex · Mac; внутри модели — ступени Mac → UA, без Claude');
   assert.equal(describe('only-opus-5.5'), 'Старт: Opus · Tru. Только Opus 5.5 на Tru → Mac → UA');
   const c = config();
   c.policies.modelPriority = ['fable-5.2'];
-  assert.match(describe('auto', c), /^Fable → .*Старт: Fable · Tru/u, '«Лучшая модель» стартует с первой модели приоритета');
+  assert.match(describe('auto', c), /^Opus → Fable → .*Старт: Opus · Tru/u, '«Авто Opus» начинает с Opus, дальше — приоритет моделей');
 });
 
 test('список моделей провайдера = включённые профили в порядке владельца', () => {
@@ -25,7 +26,7 @@ test('список моделей провайдера = включённые п
   // Сначала профили, за ними закреплённые ступени (pin:…, 0.3.0).
   const models = providerModels(c, ACCOUNTS).filter(m => !m.id.startsWith('pin:'));
   assert.deepEqual(models.map(m => [m.id, m.displayName]), c.profiles.map(p => [p.id, p.name]));
-  assert.deepEqual(models.map(m => m.isDefault), [true, false, false, false, false, false, false]);
+  assert.deepEqual(models.map(m => m.isDefault), [true, false, false, false, false, false, false, false, false]);
   assert.ok(models.every(m => m.description.includes('Старт: ')));
   assert.deepEqual(providerModels(c, ACCOUNTS).slice(0, models.length).map(m => m.id), models.map(m => m.id), 'профили — первыми');
   // «Авто» выключено — по умолчанию следующий профиль; профиль без ступеней не показывается.
@@ -39,7 +40,7 @@ test('список моделей провайдера = включённые п
 
 test('умолчания только для конфигурации без профилей; пустой список владельца сохраняется', () => {
   const legacy = normalizeConfig({ machines: [], steps: [], models: [{ key: 'opus-5.5', displayName: 'Opus 5.5', providerId: 'claude-code' }] });
-  assert.deepEqual(legacy.profiles.map(p => p.id), ['auto', 'auto-no-codex', 'auto-codex-children', 'opus-then-auto', 'only-opus-5.5']);
+  assert.deepEqual(legacy.profiles.map(p => p.id), ['auto', 'auto-no-codex', 'auto-codex-children', 'only-opus-5.5', 'only-codex']);
   assert.deepEqual(normalizeConfig({ ...legacy, profiles: [] }).profiles, []);
 });
 
@@ -49,7 +50,7 @@ test('«+ Профиль»: заготовки и дублирование с у
   assert.equal(presetProfile('model-then-auto', c).name, 'Opus, потом лучшая');
   assert.deepEqual(presetProfile('no-codex', c).excludedProviders, ['codex']);
   const copy = duplicateProfile(c.profiles[0]!, c);
-  assert.deepEqual([copy.id, copy.name], ['auto-copy', 'Лучшая модель · любая машина (копия)']);
+  assert.deepEqual([copy.id, copy.name], ['auto-copy', 'Авто Opus · с Codex (копия)']);
 });
 
 test('тестовый источник квоты: только в тестовых тредах; превью и схема его учитывают', () => {
@@ -101,7 +102,7 @@ test('схема «i» строится из движка: отмеченная 
       checked++;
     }
   }
-  assert.equal(checked, 7 * 128);
+  assert.equal(checked, 9 * 128);
 });
 
 test('тестовая квота своего треда: главнее общей, действует без общего флага, исчерпание с прошедшим сбросом — «лимит есть»', () => {
