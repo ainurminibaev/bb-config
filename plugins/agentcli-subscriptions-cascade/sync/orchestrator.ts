@@ -59,6 +59,12 @@ export interface SyncProjectContext {
   symlinkMode?: SymlinkMode;
   /** SSH-цель опоры с машины-исполнителя (`tru`, `root@host`); null — не настроено. */
   anchorSsh(hostId: string): string | null;
+  /**
+   * 0.3.6: «тёплый хвост» ленивого режима, мс. После хода W остаётся запущенным столько
+   * (правки обеих сторон продолжают ходить), повторный ход на той же машине готовится
+   * одним flush. 0/нет — как раньше: W на паузу и снимок сразу после хода.
+   */
+  tailMs?: number;
 }
 
 export interface WriterState {
@@ -85,11 +91,22 @@ export function writerThreads(writer: WriterState): Record<string, number> {
   return writer.threads && Object.keys(writer.threads).length > 0 ? { ...writer.threads } : { [writer.threadId]: writer.since };
 }
 
+/** 0.3.6: после хода W ещё работает до `until` (ленивый режим, тёплый хвост). */
+export interface TailState {
+  hostId: string;
+  threadId: string;
+  until: number;
+  root: string;
+  label: string;
+}
+
 export interface ProjectSyncState {
   version: 1;
   writer: WriterState | null;
   /** Ходы на опоре: threadId → начало. */
   anchorTurns: Record<string, number>;
+  /** 0.3.6: открытый тёплый хвост; null/нет — W на паузе. */
+  tail?: TailState | null;
 }
 
 export interface SyncStore {
@@ -97,7 +114,7 @@ export interface SyncStore {
   set(projectId: string, state: ProjectSyncState): Promise<void>;
 }
 
-export type SyncStepKind = 'mount' | 'create' | 'quarantine' | 'env-read' | 'align' | 'resume' | 'flush' | 'health' | 'locks' | 'resolve-index' | 'env-restore' | 'pause' | 'snapshot' | 'warm';
+export type SyncStepKind = 'mount' | 'create' | 'quarantine' | 'env-read' | 'align' | 'resume' | 'flush' | 'health' | 'locks' | 'resolve-index' | 'env-restore' | 'pause' | 'snapshot' | 'warm' | 'tail';
 
 /** Замер шага для строки в ленте: «Mac → Tru: flush 0,6 с ✓». */
 export interface SyncTiming {
@@ -147,6 +164,8 @@ export interface SyncOrchestratorDeps {
   staleAfterMs?: number;
   /** Сколько ждать живой git перед отказом. По умолчанию 10 с. */
   gitWaitMs?: number;
+  /** 0.3.6: отложенное закрытие тёплого хвоста (таймер сервера); нет — закрывает следующая подготовка. */
+  schedule?(ms: number, fn: () => void): void;
   /** Карантин на исполнителе: `<база>/<slug>/<время>/`. */
   quarantineBase?: string;
   /** Как часто опрашивать прогресс передачи во время долгого шага. По умолчанию 2 с. */
@@ -290,6 +309,19 @@ export class SyncOrchestrator {
     const abandoned = (threadId: string, since: number) => this.abandoned(threadId, since, now);
     void stale;
 
+    // 0.3.6: тёплый хвост. Та же машина, срок не вышел, писателя нет — быстрый путь
+    // (flush W + проверка). Другая машина-исполнитель или срок вышел — сначала обычное
+    // закрытие хвоста (flush до опоры, пауза W, снимок). Ход на опоре хвосту не мешает:
+    // W двусторонний, как при живом писателе.
+    if (state.tail && !state.writer) {
+      const tail = state.tail;
+      if (tail.hostId === host && now < tail.until && ctx.mode === 'lazy') {
+        const fast = await this.tailFastPath(ctx, state, thread, tail, timings, notices);
+        if (fast) return fast;
+      }
+      if (state.tail && (host !== anchor || now >= tail.until)) await this.closeTail(ctx, state, timings, notices);
+    }
+
     // Открытый писатель: свой незакрытый ход закрываем, чужой живой — отказ «busy»
     // (исполнитель ждёт), брошенный — возвращаем его изменения на опору и снимаем.
     // Писатель на машине, которая выбыла из каскада (выключена или убрана), — сначала
@@ -311,6 +343,12 @@ export class SyncOrchestrator {
       if (liveOthers.length > 0 && writer.hostId === host) {
         // Та же машина, та же реплика: ещё один писатель, как два треда одной папки в штатном BB.
         return this.joinWriter(ctx, state, thread, writer, others, timings);
+      }
+      // 0.3.6: свой незакрытый ход на той же машине (finishTurn не дошёл) в ленивом режиме с
+      // тёплым хвостом — W ещё работает: тот же быстрый путь (flush W), без полного цикла.
+      if (liveOthers.length === 0 && writer.hostId === host && host !== anchor && ctx.mode === 'lazy' && (ctx.tailMs ?? 0) > 0
+        && writer.threadId === thread.threadId && !this.writerMachine(ctx, writer).retired) {
+        return this.joinWriter(ctx, state, thread, writer, {}, timings);
       }
       if (liveOthers.length > 0 && host !== anchor) {
         throw new Refused('busy', `Рабочую папку сейчас пишет другой тред (${liveOthers.join(', ')}) на ${this.label(ctx, writer.hostId)}`);
@@ -426,8 +464,83 @@ export class SyncOrchestrator {
       await this.deps.store.set(ctx.projectId, state);
       return { cwd: projectRoot(ctx.anchor, ctx.slug), env: {} };
     }
-    await this.release(ctx, state, timings, notices);
+    // 0.3.6: ленивый режим с тёплым хвостом — W не ставится на паузу, следующий ход на этой машине быстрый.
+    const tailMs = ctx.mode === 'lazy' && machine ? ctx.tailMs ?? 0 : 0;
+    await this.release(ctx, state, timings, notices, tailMs > 0 ? { tailMs, threadId: thread.threadId } : undefined);
     return { cwd: projectRoot(ctx.anchor, ctx.slug), env: {} };
+  }
+
+  /**
+   * Быстрый путь повторного хода в тёплом хвосте: сессии с той же настройкой — flush W
+   * (правки опоры доходят до исполнителя) и проверка; null — настройки сессий сменились,
+   * нужен полный путь (хвост закрывается вызывающим).
+   */
+  private async tailFastPath(ctx: SyncProjectContext, state: ProjectSyncState, thread: SyncThreadRef, tail: TailState, timings: SyncTiming[], notices: string[]) {
+    const host = tail.hostId;
+    const machine = ctx.executors.find(m => m.hostId === host);
+    const ssh = ctx.anchorSsh(host);
+    if (!machine || !ssh) return null;
+    const alpha = `${ssh}:${projectRoot(ctx.anchor, ctx.slug)}`;
+    const sessions = await this.sessions(host, ctx.projectId);
+    const same = (['r', 'w'] as SessionRole[]).every(role => {
+      const spec: SessionSpec = { projectId: ctx.projectId, hostId: host, role, alpha, beta: projectRoot(machine, ctx.slug), ignores: ctx.ignores, symlinkMode: ctx.symlinkMode ?? 'posix-raw' };
+      return sessions.get(sessionName(ctx.projectId, host, role))?.labels['bbc-cfg'] === specFingerprint(spec);
+    });
+    const w = sessionName(ctx.projectId, host, 'w');
+    if (!same || sessions.get(w)?.paused) return null;
+    const anchorRoot = projectRoot(ctx.anchor, ctx.slug);
+    const [env] = await Promise.all([
+      this.timed(timings, 'env-read', ctx.anchor.hostId, () => this.deps.call(ctx.anchor.hostId, 'syncEnvModes', { root: anchorRoot, ignores: ctx.ignores })),
+      this.timed(timings, 'flush', host, () => this.mutagenOk(host, sessionArgs('flush', w), 180_000), undefined, { from: ctx.anchor.hostId, to: host }),
+    ]);
+    const health = await this.timed(timings, 'health', host, () => this.health(host, ctx.projectId, w), h => (h.ok ? undefined : h.reasons.join('; ')));
+    if (!health.ok) throw new Refused(health.conflicts.length ? 'conflict' : 'error', `${machine.label}: синхронизация не готова — ${health.reasons.join('; ')}`, health.conflicts);
+    pushWarnings(notices, `${ctx.anchor.label} → ${machine.label}`, health.warnings);
+    const now = this.now();
+    state.writer = { hostId: host, threadId: thread.threadId, since: now, env600: env.files.filter(f => (f.mode & 0o777) === 0o600).map(f => f.path), threads: { [thread.threadId]: now }, root: tail.root, label: machine.label };
+    state.tail = null;
+    await this.deps.store.set(ctx.projectId, state);
+    return { cwd: tail.root, env: {} };
+  }
+
+  /** Закрыть тёплый хвост: правки исполнителя — на опору, W на паузу, снимок (как обычный конец хода). */
+  private async closeTail(ctx: SyncProjectContext, state: ProjectSyncState, timings: SyncTiming[], notices: string[]) {
+    const tail = state.tail!;
+    const { machine } = this.writerMachine(ctx, { hostId: tail.hostId, threadId: tail.threadId, since: 0, env600: [], root: tail.root, label: tail.label });
+    const w = sessionName(ctx.projectId, tail.hostId, 'w');
+    try {
+      await this.timed(timings, 'tail', tail.hostId, async () => {
+        await this.mutagenOk(tail.hostId, sessionArgs('flush', w), 180_000);
+        const health = await this.health(tail.hostId, ctx.projectId, w);
+        pushWarnings(notices, `${machine.label} → ${ctx.anchor.label}`, health.warnings);
+        if (!health.ok) throw new Refused(health.conflicts.length ? 'conflict' : 'error', `${machine.label} → ${ctx.anchor.label}: хвост не закрыт — ${health.reasons.join('; ')}`, health.conflicts);
+        await this.mutagenOk(tail.hostId, sessionArgs('pause', w), 60_000);
+        await this.deps.call(tail.hostId, 'syncSnapshot', { root: tail.root, key: this.snapshotKey(ctx, machine), ignores: ctx.ignores });
+      }, undefined, { from: tail.hostId, to: ctx.anchor.hostId });
+    } catch (error) {
+      // Конфликт — ход не передаётся (как у обычного конца хода); машина недоступна — хвост
+      // снимается со строкой, правки после последнего хода могли остаться на ней.
+      if (error instanceof Refused && error.reason === 'conflict') throw error;
+      notices.push(`Тёплый хвост ${machine.label} не закрыт (${error instanceof Error ? error.message.slice(0, 160) : String(error)}): правки после последнего хода могли остаться в ${tail.root}`);
+      await this.mutagenOk(tail.hostId, sessionArgs('pause', w), 30_000).catch(() => undefined);
+    }
+    state.tail = null;
+    await this.deps.store.set(ctx.projectId, state);
+  }
+
+  /** Поставить закрытие хвоста на его срок (после перезагрузки плагина). */
+  scheduleTailClose(projectId: string, until: number): void {
+    this.deps.schedule?.(Math.max(0, until - this.now()) + 1_000, () => { void this.closeExpiredTail(projectId); });
+  }
+
+  /** Закрыть просроченный тёплый хвост единицы (таймер сервера). Ход идёт — не трогает. */
+  closeExpiredTail(projectId: string): Promise<SyncResult> {
+    return this.exclusive(projectId, () => this.run(async (timings, notices) => {
+      const ctx = await this.deps.context(projectId);
+      const state = await this.load(projectId);
+      if (state.tail && !state.writer && this.now() >= state.tail.until) await this.closeTail(ctx, state, timings, notices);
+      return { cwd: projectRoot(ctx.anchor, ctx.slug), env: {} };
+    }));
   }
 
   /**
@@ -511,7 +624,7 @@ export class SyncOrchestrator {
   }
 
   /** Конец хода писателя: вернуть его изменения на опору и поставить W на паузу. */
-  private async release(ctx: SyncProjectContext, state: ProjectSyncState, timings: SyncTiming[], notices: string[]) {
+  private async release(ctx: SyncProjectContext, state: ProjectSyncState, timings: SyncTiming[], notices: string[], tail?: { tailMs: number; threadId: string }) {
     const writer = state.writer!;
     const host = writer.hostId;
     const anchor = ctx.anchor.hostId;
@@ -562,11 +675,21 @@ export class SyncOrchestrator {
       await this.timed(timings, 'env-restore', anchor, () => this.deps.call(anchor, 'syncChmod', { root: anchorRoot, paths: writer.env600, mode: 0o600 }),
         out => (out.changed.length ? `0600: ${out.changed.join(', ')}` : undefined));
     }
+    if (tail) {
+      // Тёплый хвост: правки хода уже на опоре (flush и проверка выше), W работает дальше.
+      const until = this.now() + tail.tailMs;
+      state.writer = null;
+      state.tail = { hostId: host, threadId: tail.threadId, until, root, label: machine.label };
+      await this.deps.store.set(ctx.projectId, state);
+      this.deps.schedule?.(tail.tailMs + 1_000, () => { void this.closeExpiredTail(ctx.projectId); });
+      return;
+    }
     await this.timed(timings, 'pause', host, () => this.mutagenOk(host, sessionArgs('pause', w), 60_000));
     await this.timed(timings, 'snapshot', host, () => this.deps.call(host, 'syncSnapshot', { root, key: this.snapshotKey(ctx, machine), ignores: ctx.ignores }), out => `${out.entries} записей`);
     if (ctx.mode === 'warm') await this.timed(timings, 'warm', host, () => this.mutagenOk(host, sessionArgs('resume', sessionName(ctx.projectId, host, 'r')), 120_000));
 
     state.writer = null;
+    state.tail = null;
     await this.deps.store.set(ctx.projectId, state);
   }
 
@@ -675,7 +798,7 @@ export class SyncOrchestrator {
   private async load(projectId: string): Promise<ProjectSyncState> {
     const saved = await this.deps.store.get(projectId).catch(() => undefined);
     if (!saved || saved.version !== 1) return emptyState();
-    return { version: 1, writer: saved.writer ?? null, anchorTurns: { ...(saved.anchorTurns ?? {}) } };
+    return { version: 1, writer: saved.writer ?? null, anchorTurns: { ...(saved.anchorTurns ?? {}) }, ...(saved.tail ? { tail: { ...saved.tail } } : {}) };
   }
 
   private snapshotKey(ctx: SyncProjectContext, machine: SyncMachine) {

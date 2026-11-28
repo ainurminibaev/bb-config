@@ -125,6 +125,7 @@ export function buildContext(args: { config: CascadeConfig; projectId: string; p
     ignores: syncIgnores(config),
     symlinkMode: symlinkModeFor([anchor, ...config.machines.filter(m => m.enabled && !m.anchor)]),
     anchorSsh: hostId => args.ssh.get(hostId) ?? null,
+    tailMs: config.policies.warmTailMinutes * 60_000,
   };
 }
 
@@ -240,7 +241,25 @@ export function createSyncService(bb: BbPluginApi, loadConfig: () => Promise<{ c
       set: (id, state) => bb.storage.kv.set(STATE_KEY(id), state),
     },
     threadActive: async threadId => threadActiveFrom(await bb.sdk.threads.get({ threadId }).catch(error => (isNotFound(error) ? { missing: true } : undefined))),
+    // 0.3.6: закрытие тёплого хвоста по сроку (таймер не держит процесс; после перезагрузки — проход ниже).
+    schedule: (ms, fn) => { const t = setTimeout(fn, ms); tailTimers.add(t); (t as { unref?: () => void }).unref?.(); },
   });
+  const tailTimers = new Set<ReturnType<typeof setTimeout>>();
+  bb.onDispose?.(() => { for (const t of tailTimers) clearTimeout(t); tailTimers.clear(); });
+  // После перезагрузки плагина таймеров нет: открытые хвосты закрываются одним проходом через минуту.
+  const sweep = setTimeout(() => {
+    void bb.storage.kv.list('sync:project:').then(async keys => {
+      for (const key of keys) {
+        const st = await bb.storage.kv.get<ProjectSyncState>(key).catch(() => undefined);
+        if (st?.tail) {
+          const id = key.slice('sync:project:'.length);
+          orchestrator.scheduleTailClose(id, st.tail.until);
+        }
+      }
+    }).catch(() => undefined);
+  }, 60_000);
+  (sweep as { unref?: () => void }).unref?.();
+  bb.onDispose?.(() => clearTimeout(sweep));
 
   const gcPorts: GcPorts = {
     loadConfig: async () => (await loadConfig()).config,

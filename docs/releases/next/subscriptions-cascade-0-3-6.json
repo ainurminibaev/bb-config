@@ -1,0 +1,30 @@
+{
+  "id": "subscriptions-cascade-0-3-6",
+  "title": "Каскад подписок 0.3.6 — повторный ход на той же ступени без ожидания: квоты в фоне, тёплый хвост синхронизации",
+  "component": "agentcli-subscriptions-cascade",
+  "where": "server",
+  "kind": "command",
+  "applies": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "applicable",
+    "agentcli-subscriptions-cascade",
+    "0.3.6"
+  ],
+  "apply": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "apply",
+    "agentcli-subscriptions-cascade",
+    "0.3.6"
+  ],
+  "verify": [
+    "{python}",
+    "scripts/plugin_git_update.py",
+    "check",
+    "agentcli-subscriptions-cascade",
+    "0.3.6"
+  ],
+  "rerun": "Актуальная работающая версия проходит проверку без установки.",
+  "rollback": "Установите предыдущий тег agentcli-subscriptions-cascade/v0.3.5."
+}

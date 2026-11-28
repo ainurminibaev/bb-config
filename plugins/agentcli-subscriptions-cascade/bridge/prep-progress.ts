@@ -28,7 +28,7 @@ export interface PrepState {
 const STEP_LABELS: Record<SyncStepKind, string> = {
   mount: 'папка на опоре', create: 'сессии Mutagen', quarantine: 'карантин опоздавших записей', 'env-read': 'права .env',
   align: 'выравнивание', resume: 'запуск синхронизации', flush: 'синхронизация', health: 'сверка', locks: 'lock-файлы git',
-  'resolve-index': 'конфликт .git/index', 'env-restore': 'права .env', pause: 'пауза', snapshot: 'снимок', warm: 'прогрев',
+  'resolve-index': 'конфликт .git/index', 'env-restore': 'права .env', pause: 'пауза', snapshot: 'снимок', warm: 'прогрев', tail: 'закрытие тёплого хвоста',
 };
 
 /** Подпись шага: «синхронизация Tru → Mac», «выравнивание Mac по Tru», «сверка». */
