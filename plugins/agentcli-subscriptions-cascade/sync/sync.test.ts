@@ -74,7 +74,7 @@ test('первый ход на Mac: mount, создание R и W на пауз
   assert.equal(fake.session(MAC, 'r')!.paused, true);
   assert.equal(fake.session(MAC, 'w')!.mode, 'two-way-safe');
   assert.equal(fake.session(MAC, 'r')!.mode, 'one-way-replica');
-  assert.deepEqual(states.get('proj_1')!.writer, { hostId: MAC, threadId: 'thr_a', since: 1_000_000, env600: ['.env'], threads: { thr_a: 1_000_000 } });
+  assert.deepEqual(states.get('proj_1')!.writer, { hostId: MAC, threadId: 'thr_a', since: 1_000_000, env600: ['.env'], threads: { thr_a: 1_000_000 }, root: '/opt/bbfs/app', label: 'Mac' });
   const align = result.timings.find(t => t.step === 'align')!;
   assert.deepEqual([align.from, align.to, align.ok], [TRU, MAC, true]);
   assert.ok(result.timings.every(t => typeof t.seconds === 'number'));
@@ -255,6 +255,65 @@ test('0.3.0 п.9: один из двух писателей упал — кон�
   assert.equal(states.get('proj_1')!.writer, null, 'блокировка снята');
   assert.equal(fake.session(MAC, 'w')!.paused, true);
   assert.equal((await sync.prepareTurn({ ...T2, threadId: 'thr_c' }, { hostId: UA })).ok, true, 'другая машина входит сразу');
+});
+
+test('0.3.1 п.12: писатель на машине, убранной из каскада, — ход сам закрывает его выход (flush до опоры, пауза) и идёт', async () => {
+  const fake = new FakeMutagen();
+  const states = new Map<string, ProjectSyncState>();
+  let ctx = context();
+  let aliveA = true;
+  const sync = new SyncOrchestrator({
+    call: fake.call, context: async () => ctx,
+    store: { get: async id => structuredClone(states.get(id)), set: async (id, st) => { states.set(id, structuredClone(st)); } },
+    now: () => 1_000_000, sleep: async () => {}, gitWaitMs: 0, threadActive: async id => (id === 'thr_a' ? aliveA : true),
+  });
+  assert.equal((await sync.prepareTurn(T, { hostId: MAC })).ok, true);
+  // Mac убрали из каскада (в настройках его больше нет): ход A там ещё идёт — ждём его.
+  ctx = context({ executors: [{ hostId: UA, label: 'UA', sharedPath: '/opt/bbfs', platform: 'linux' }] });
+  const wait = await sync.prepareTurn(T2, { hostId: UA });
+  assert.ok(!wait.ok && /^Жду: последние правки на Mac ещё не вернулись/u.test(wait.message));
+  aliveA = false; // ход A закончился
+  fake.log.length = 0;
+  const r = await sync.prepareTurn(T2, { hostId: UA });
+  assert.equal(r.ok, true, r.ok ? '' : r.message);
+  const log = steps(fake.log);
+  const flushMac = log.findIndex(l => l.startsWith(`${MAC}:`) && /flush W/u.test(l));
+  const pauseMac = log.findIndex(l => l.startsWith(`${MAC}:`) && /pause W/u.test(l));
+  const firstUa = log.findIndex(l => l.startsWith(`${UA}:`));
+  assert.ok(flushMac !== -1 && pauseMac > flushMac && firstUa > pauseMac, `сначала выход писателя Mac, потом ход на UA:\n${log.join('\n')}`);
+  assert.equal(states.get('proj_1')!.writer!.hostId, UA);
+});
+
+test('0.3.1 п.12: конец хода самого писателя после того, как его машину убрали, — обычный выход, без отказа', async () => {
+  const { sync, states, setContext } = setup();
+  await sync.prepareTurn(T, { hostId: MAC });
+  setContext({ executors: [{ hostId: UA, label: 'UA', sharedPath: '/opt/bbfs', platform: 'linux' }] });
+  const done = await sync.finishTurn(T, { hostId: MAC });
+  assert.equal(done.ok, true, done.ok ? '' : done.message);
+  assert.ok(done.timings.some(t => t.step === 'flush' && t.from === MAC && t.to === TRU));
+  assert.equal(states.get('proj_1')!.writer, null);
+});
+
+test('0.3.1 п.12: выбывшая машина недоступна — ждём со строкой, потом снимаем блокировку и пишем, где могли остаться правки', async () => {
+  const fake = new FakeMutagen();
+  const states = new Map<string, ProjectSyncState>();
+  let now = 1_000_000;
+  let ctx = context();
+  const call: typeof fake.call = (hostId, method, input) => (hostId === MAC && !ctx.executors.some(m => m.hostId === MAC) ? Promise.reject(new Error('host offline')) : fake.call(hostId, method, input));
+  const sync = new SyncOrchestrator({
+    call, context: async () => ctx,
+    store: { get: async id => structuredClone(states.get(id)), set: async (id, st) => { states.set(id, structuredClone(st)); } },
+    now: () => now, sleep: async () => {}, gitWaitMs: 0, retiredWaitMs: 5 * 60_000,
+  });
+  await sync.prepareTurn(T, { hostId: MAC });
+  ctx = context({ executors: [{ hostId: UA, label: 'UA', sharedPath: '/opt/bbfs', platform: 'linux' }], retired: [{ hostId: MAC, label: 'Mac', sharedPath: '/opt/bbfs', platform: 'macos' }] });
+  const waiting = await sync.prepareTurn(T2, { hostId: UA });
+  assert.ok(!waiting.ok && waiting.reason === 'busy' && /^Жду: последние правки на Mac ещё не вернулись/u.test(waiting.message), JSON.stringify(waiting));
+  now += 6 * 60_000;
+  const taken = await sync.prepareTurn(T2, { hostId: UA });
+  assert.equal(taken.ok, true, taken.ok ? '' : taken.message);
+  assert.ok(taken.notices.some(n => /правки, возможно, остались на Mac в \/opt\/bbfs\/app/u.test(n)), taken.notices.join('\n'));
+  assert.equal(states.get('proj_1')!.writer!.hostId, UA);
 });
 
 test('свой незакрытый ход закрывается перед следующим (ход перешёл Mac → UA)', async () => {

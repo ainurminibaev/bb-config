@@ -249,6 +249,7 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
 
   const routes = createRouteService({
     adoptSeed,
+    hostName: hostId => deps.hosts?.().find(h => h.hostId === hostId)?.name ?? null,
     threadTitle: async threadId => {
       const r = rec(await bb.sdk.threads.get({ threadId }).catch(() => null));
       const t = rec(r.thread ?? r);

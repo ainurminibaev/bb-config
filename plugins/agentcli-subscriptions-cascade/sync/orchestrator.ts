@@ -48,6 +48,11 @@ export interface SyncProjectContext {
   anchor: SyncMachine;
   /** Включённые машины-исполнители (без опоры). */
   executors: SyncMachine[];
+  /**
+   * Машины, которые раньше были исполнителями, а теперь выключены или убраны из
+   * каскада (0.3.1): нужны, чтобы закрыть оставшийся там выход писателя и для gc.
+   */
+  retired?: SyncMachine[];
   mode: SyncModeExt;
   ignores: string[];
   /** Режим symlink сессий (symlinkModeFor); не задан — posix-raw. */
@@ -68,6 +73,11 @@ export interface WriterState {
    * писатели с другой машины. Нет поля — писатель один (`threadId`).
    */
   threads?: Record<string, number>;
+  /** Папка реплики на машине писателя и подпись машины — на случай, если машину уберут из каскада (0.3.1). */
+  root?: string;
+  label?: string;
+  /** Машина писателя выбыла, а правки ещё не вернулись: с какого момента ждём (0.3.1). */
+  drainSince?: number;
 }
 
 /** Писатели машины-писателя: тред → начало хода. */
@@ -132,6 +142,8 @@ export interface SyncOrchestratorDeps {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   /** Ход другого треда старше этого считается брошенным. По умолчанию 6 ч. */
+  /** Сколько ждать возврата правок с выбывшей из каскада машины, прежде чем снять её блокировку (0.3.1). По умолчанию 5 мин. */
+  retiredWaitMs?: number;
   staleAfterMs?: number;
   /** Сколько ждать живой git перед отказом. По умолчанию 10 с. */
   gitWaitMs?: number;
@@ -280,6 +292,12 @@ export class SyncOrchestrator {
 
     // Открытый писатель: свой незакрытый ход закрываем, чужой живой — отказ «busy»
     // (исполнитель ждёт), брошенный — возвращаем его изменения на опору и снимаем.
+    // Писатель на машине, которая выбыла из каскада (выключена или убрана), — сначала
+    // его обычный выход (flush до опоры, пауза), потом ход; машина недоступна — ждём до
+    // N мин, затем снимаем блокировку со строкой, где могли остаться правки (0.3.1).
+    if (state.writer && this.writerMachine(ctx, state.writer).retired) {
+      await this.drainRetired(ctx, state, thread, timings, notices, now);
+    }
     let liveWriters: Record<string, number> = {};
     if (state.writer) {
       const writer = state.writer;
@@ -378,7 +396,7 @@ export class SyncOrchestrator {
     }
     pushWarnings(notices, `${ctx.anchor.label} → ${machine.label}`, health.warnings);
 
-    state.writer = { hostId: host, threadId: thread.threadId, since: now, env600, threads: { [thread.threadId]: now } };
+    state.writer = { hostId: host, threadId: thread.threadId, since: now, env600, threads: { [thread.threadId]: now }, root, label: machine.label };
     await this.deps.store.set(thread.projectId, state);
     return { cwd: root, env: {} };
   }
@@ -422,6 +440,54 @@ export class SyncOrchestrator {
     return active === false;
   }
 
+  /**
+   * Машина писателя: включённый исполнитель или выбывшая (выключена / убрана из
+   * каскада). Для убранной путь берётся из записи писателя, иначе из общего пути
+   * по умолчанию.
+   */
+  private writerMachine(ctx: SyncProjectContext, writer: WriterState): { machine: SyncMachine; retired: boolean } {
+    const live = ctx.executors.find(m => m.hostId === writer.hostId);
+    if (live) return { machine: live, retired: false };
+    if (writer.hostId === ctx.anchor.hostId) return { machine: ctx.anchor, retired: false };
+    const known = ctx.retired?.find(m => m.hostId === writer.hostId);
+    const sharedPath = writer.root ? posix.dirname(writer.root) : known?.sharedPath ?? '/opt/bbfs';
+    return { machine: { hostId: writer.hostId, label: known?.label ?? writer.label ?? writer.hostId, sharedPath, platform: known?.platform ?? 'linux' }, retired: true };
+  }
+
+  /** Подождать, пока ходы живых писателей на выбывшей машине закончатся, затем закрыть их выход. */
+  private async drainRetired(ctx: SyncProjectContext, state: ProjectSyncState, thread: SyncThreadRef, timings: SyncTiming[], notices: string[], now: number) {
+    const writer = state.writer!;
+    const { machine } = this.writerMachine(ctx, writer);
+    const root = writer.root ?? projectRoot(machine, ctx.slug);
+    const waitMs = this.deps.retiredWaitMs ?? 5 * 60_000;
+    const since = writer.drainSince ?? now;
+    const timedOut = now - since >= waitMs;
+    const remember = async () => {
+      if (writer.drainSince === undefined) { state.writer = { ...writer, drainSince: since }; await this.deps.store.set(ctx.projectId, state); }
+    };
+    const alive: string[] = [];
+    for (const [threadId, at] of Object.entries(writerThreads(writer))) if (threadId !== thread.threadId && !(await this.abandoned(threadId, at, now))) alive.push(threadId);
+    if (alive.length > 0 && !timedOut) {
+      await remember();
+      throw new Refused('busy', `Жду: последние правки на ${machine.label} ещё не вернулись (там идёт ход ${alive.join(', ')}; ${machine.label} больше не в каскаде)`);
+    }
+    try {
+      await this.release(ctx, state, timings, notices);
+      notices.push(`${machine.label} больше не в каскаде: её последние правки возвращены на ${ctx.anchor.label}, блокировка снята`);
+      return;
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      if (!timedOut) {
+        await remember();
+        throw new Refused('busy', `Жду: последние правки на ${machine.label} ещё не вернулись (${why.slice(0, 120)})`);
+      }
+      await this.mutagenOk(writer.hostId, sessionArgs('pause', sessionName(ctx.projectId, writer.hostId, 'w')), 30_000).catch(() => undefined);
+      state.writer = null;
+      await this.deps.store.set(ctx.projectId, state);
+      notices.push(`Блокировка ${machine.label} снята: машина больше не в каскаде и не вернула правки за ${Math.round(waitMs / 60_000)} мин — последние правки, возможно, остались на ${machine.label} в ${root}`);
+    }
+  }
+
   /** Писатель единицы (для маршрута: предпочесть его машину, строка ожидания). */
   async writerOf(projectId: string): Promise<{ hostId: string; threadIds: string[] } | null> {
     const state = await this.load(projectId);
@@ -449,9 +515,9 @@ export class SyncOrchestrator {
     const writer = state.writer!;
     const host = writer.hostId;
     const anchor = ctx.anchor.hostId;
-    const machine = ctx.executors.find(m => m.hostId === host);
-    if (!machine) throw new Refused('unsupported', `Пишущая машина ${host} больше не в каскаде: закройте её сессию вручную`);
-    const root = projectRoot(machine, ctx.slug);
+    // Машина могла выбыть из каскада: выход писателя тот же, через её хост-RPC (0.3.1).
+    const { machine } = this.writerMachine(ctx, writer);
+    const root = writer.root ?? projectRoot(machine, ctx.slug);
     const anchorRoot = projectRoot(ctx.anchor, ctx.slug);
     const w = sessionName(ctx.projectId, host, 'w');
     const flush = () => this.mutagenOk(host, sessionArgs('flush', w), 180_000);

@@ -5,7 +5,7 @@ import { profileName } from '../pins.ts';
 import { bindingEpoch } from '../config.ts';
 import { grant, pruneConsents, type Consent } from '../consent.ts';
 import type { CascadeConfig, DiscoveredAccount, Step } from '../contract.ts';
-import { BUSY_RECHECK_MS, explainProfile, nextThreadState, selectStep, type Decision, type HealthLookup, type ThreadCascadeState } from '../engine.ts';
+import { BUSY_RECHECK_MS, explainNoSteps, explainProfile, parentHomeMissing, nextThreadState, selectStep, type Decision, type HealthLookup, type ThreadCascadeState } from '../engine.ts';
 import { previewText, usesTestQuota } from '../profiles.ts';
 import { buildHandoff, type ThreadEventRow } from './handoff.ts';
 import type {
@@ -113,6 +113,8 @@ export interface RouteDeps {
   saveProjectConsents?(projectId: string, consents: Consent[]): Promise<void>;
   /** События треда после seq (по возрастанию) — для сводки и дельты другой нативной сессии. */
   threadEvents?(threadId: string, afterSeq: number): Promise<ThreadEventRow[]>;
+  /** Имя машины BB (для машины, которой уже нет в настройках каскада). */
+  hostName?(hostId: string): string | null;
   /** Название треда для строк ленты («Жду: папку держит тред <название> на Mac»). */
   threadTitle?(threadId: string): Promise<string | null>;
   /** Посев `adopt --native` для нового треда (одноразовый ключ в метаданных треда → хранилище плагина). */
@@ -420,6 +422,12 @@ export function createRouteService(deps: RouteDeps): RouteService {
         decision = decide(now);
       }
       const busyNotes: RouteNote[] = [];
+      // Машина родителя ушла из каскада — правило S11 не держит подтред (0.3.1).
+      if (parentHomeMissing(config, engine)) {
+        const home = engine.homeHostId!;
+        const name = config.machines.find(m => m.hostId === home)?.label ?? deps.hostName?.(home) ?? home;
+        busyNotes.push({ kind: 'notice', message: `Машина родителя ${name} не в каскаде — иду по профилю.` });
+      }
       // Ступень занята (maxConcurrent, onBusy: wait): ход ждёт освобождения со строкой в ленте.
       if (decision.kind === 'wait' && decision.reason === 'busy') {
         const step = config.steps.find(st => st.id === (decision as { stepId: string | null }).stepId);
@@ -444,7 +452,10 @@ export function createRouteService(deps: RouteDeps): RouteService {
       const save = (next: StoredThreadState) => deps.save(input.threadId, next).catch(error => warn(`состояние треда: ${String(error)}`));
 
       if (decision.kind === 'unavailable') {
-        const message = refusalText('настройки', REFUSE_TEXT[decision.reason] ?? 'не найдена ступень для хода.');
+        const reason = decision.reason === 'no-steps'
+          ? `${explainNoSteps({ config, requestedModel: profileId, accounts: deps.accounts(), thread: engine })}.`
+          : REFUSE_TEXT[decision.reason] ?? 'не найдена ступень для хода.';
+        const message = refusalText('настройки', reason);
         return { action: 'refuse', retryable: false, message, notes: [{ kind: 'problem', message: message.slice(0, 300), note: REFUSAL_ACTIONS }] };
       }
       if (decision.kind === 'wait') {

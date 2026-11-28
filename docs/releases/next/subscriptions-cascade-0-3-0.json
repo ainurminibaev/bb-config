@@ -1,6 +1,6 @@
 {
   "id": "subscriptions-cascade-0-3-0",
-  "title": "Каскад подписок 0.3.0 — подтреды через каскад, закреплённые ступени, resolve, adopt --native, лимит ходов на ступени",
+  "title": "Каскад подписок 0.3.1 — подтреды через каскад, закреплённые ступени, resolve, adopt --native, лимит ходов на ступени, уход машины из каскада",
   "component": "agentcli-subscriptions-cascade",
   "where": "server",
   "kind": "command",
@@ -9,21 +9,21 @@
     "scripts/plugin_git_update.py",
     "applicable",
     "agentcli-subscriptions-cascade",
-    "0.3.0"
+    "0.3.1"
   ],
   "apply": [
     "{python}",
     "scripts/plugin_git_update.py",
     "apply",
     "agentcli-subscriptions-cascade",
-    "0.3.0"
+    "0.3.1"
   ],
   "verify": [
     "{python}",
     "scripts/plugin_git_update.py",
     "check",
     "agentcli-subscriptions-cascade",
-    "0.3.0"
+    "0.3.1"
   ],
   "rerun": "Актуальная работающая версия проходит проверку без установки.",
   "rollback": "Установите предыдущий тег agentcli-subscriptions-cascade/v0.2.16."

@@ -12,7 +12,7 @@ import { hasConsent, type Consent } from './consent.ts';
 import { AUTO_MODEL_ID, MODEL_ID_PREFIX, type CascadeConfig, type DiscoveredAccount, type ModelRow, type Profile, type Step } from './contract.ts';
 import type { StepHealth } from './limits.ts';
 import { effectiveModelId } from './models.ts';
-import { isPinId, pinnedProfile } from './pins.ts';
+import { isPinId, pinnedProfile, stepTitle } from './pins.ts';
 
 export type { StepHealth } from './limits.ts';
 export type HealthLookup = (stepId: string, modelId: string | null) => StepHealth;
@@ -151,7 +151,10 @@ export function buildPlan(input: PlanInput): Attempt[] | Unavailable {
   const steps = profileSteps(config, profile);
   // Закреплённую ступень выбрал владелец явно — запрет «подтред только на машине родителя» на неё не действует.
   const pinned = isPinId(profile.id);
-  const offHome = (step: Step) => !pinned && thread.isSubthread && !config.policies.subthreadsUseOtherMachines && thread.homeHostId !== null && step.hostId !== thread.homeHostId;
+  // S11 действует, только пока машина родителя есть среди ступеней каскада (0.3.1):
+  // машину убрали или выключили — подтред идёт по общему профилю.
+  const homeInCascade = parentHomeInCascade(config, thread.homeHostId);
+  const offHome = (step: Step) => !pinned && homeInCascade && thread.isSubthread && !config.policies.subthreadsUseOtherMachines && thread.homeHostId !== null && step.hostId !== thread.homeHostId;
   const out: Attempt[] = [];
   const seen = new Set<string>();
   const push = (step: Step, phase: Attempt['phase'], r: ModelRow | null, modelId: string | null, skip: Attempt['skip']) => {
@@ -182,6 +185,47 @@ export function buildPlan(input: PlanInput): Attempt[] | Unavailable {
     }
   }
   return out;
+}
+
+/** Есть ли у машины включённая ступень на включённой машине (правилу S11 есть куда вести). */
+export function parentHomeInCascade(config: CascadeConfig, homeHostId: string | null): boolean {
+  if (homeHostId === null) return false;
+  const on = config.machines.some(m => m.hostId === homeHostId && m.enabled);
+  return on && config.steps.some(s => s.enabled && s.hostId === homeHostId);
+}
+
+/** Подтред, у которого машина родителя ушла из каскада: S11 не применяется, нужна строка в ленте. */
+export function parentHomeMissing(config: CascadeConfig, thread: Pick<ThreadCascadeState, 'isSubthread' | 'homeHostId'>): boolean {
+  return thread.isSubthread && !config.policies.subthreadsUseOtherMachines && thread.homeHostId !== null && !parentHomeInCascade(config, thread.homeHostId);
+}
+
+/**
+ * Почему в профиле нет ни одной ступени (0.3.1): по каждой ступени каскада —
+ * машина или ступень выключена, исключена профилем, S11, нет модели на машине.
+ */
+export function explainNoSteps(input: PlanInput): string {
+  const { config, thread } = input;
+  if (config.steps.length === 0) return 'в каскаде нет ни одной ступени — добавьте машины в настройках «Каскада»';
+  const plan = buildPlan(input);
+  const attempts = Array.isArray(plan) ? plan : [];
+  const profile = resolveProfile(config, input.requestedModel);
+  const modelKey = 'kind' in profile ? null : profile.modelKey;
+  const modelName = (modelKey ? config.models.find(r => r.key === modelKey)?.displayName : null) ?? modelKey ?? '';
+  const home = thread.homeHostId ? config.machines.find(m => m.hostId === thread.homeHostId)?.label ?? thread.homeHostId : '—';
+  const reasons = config.steps.map(step => {
+    const machine = config.machines.find(m => m.hostId === step.hostId);
+    const title = stepTitle(config, step);
+    if (!machine) return `${title} — машины нет в каскаде`;
+    if (!machine.enabled) return `${title} — машина выключена`;
+    if (!step.enabled) return `${title} — ступень выключена`;
+    const skips = new Set(attempts.filter(a => a.stepId === step.id).map(a => a.skip));
+    if (skips.has(null)) return null;
+    if (skips.has('excluded')) return `${title} — исключена профилем`;
+    if (skips.has('subthread')) return `${title} — S11: подтред только на машине родителя ${home}`;
+    if (skips.has('no-model')) return `${title} — нет модели ${modelName} на этой машине`;
+    return `${title} — не участвует`;
+  }).filter((r): r is string => r !== null);
+  return `в профиле нет доступных ступеней: ${reasons.join('; ')}`;
 }
 
 // ---- План → решение ----
