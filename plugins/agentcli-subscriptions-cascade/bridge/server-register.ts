@@ -45,27 +45,42 @@ const CONSENTS_KEY = (projectId: string) => `exec:consents:${projectId}`;
  * Порты карточки подтверждения и перехода между провайдерами: правила
  * «навсегда» проекта в kv плагина, события треда для сводки/дельты.
  */
+/** Предел страницы событий треда у BB (`Thread event limit cannot exceed 100`). */
+export const THREAD_EVENTS_PAGE = 100;
+
+/**
+ * События треда для сводки перехода: только нужные типы, страницами по 100,
+ * не больше 4000. Ошибка — наружу (мост покажет честную сводку без событий).
+ */
+export async function readThreadEvents(list: (args: Record<string, unknown>) => Promise<unknown>, threadId: string, afterSeq: number): Promise<ThreadEventRow[]> {
+  const rows: ThreadEventRow[] = [];
+  let after = afterSeq;
+  let filtered = true;
+  const page = async (since: number) => {
+    const base = { threadId, afterSeq: String(since), limit: String(THREAD_EVENTS_PAGE), order: 'asc' };
+    if (!filtered) return list(base);
+    // Фильтр типов уменьшает число страниц; не принят — без него.
+    try { return await list({ ...base, types: ['client/turn/requested', 'item/completed'] }); } catch { filtered = false; return list(base); }
+  };
+  for (let n = 0; n < 40; n += 1) {
+    const batch = await page(after);
+    const items = Array.isArray(batch) ? batch as unknown[] : [];
+    for (const item of items) {
+      const row = rec(item);
+      const seq = Number(row.seq);
+      if (Number.isFinite(seq) && typeof row.type === 'string') rows.push({ seq, type: row.type, data: row.data });
+    }
+    if (items.length < THREAD_EVENTS_PAGE || rows.length === 0) break;
+    after = rows[rows.length - 1]!.seq;
+  }
+  return rows;
+}
+
 function consentAndHandoffPorts(bb: BbPluginApi): Pick<RouteDeps, 'projectConsents' | 'saveProjectConsents' | 'threadEvents'> {
   return {
     projectConsents: async projectId => (await bb.storage.kv.get<Consent[]>(CONSENTS_KEY(projectId))) ?? [],
     saveProjectConsents: async (projectId, consents) => { await bb.storage.kv.set(CONSENTS_KEY(projectId), consents); },
-    threadEvents: async (threadId, afterSeq) => {
-      // Постранично, не больше 4000 событий: сводка всё равно режет ранние.
-      const rows: ThreadEventRow[] = [];
-      let after = afterSeq;
-      for (let page = 0; page < 8; page += 1) {
-        const batch = await bb.sdk.threads.events.list({ threadId, afterSeq: String(after), limit: '500', order: 'asc' }) as unknown;
-        const items = Array.isArray(batch) ? batch as unknown[] : [];
-        for (const item of items) {
-          const row = rec(item);
-          const seq = Number(row.seq);
-          if (Number.isFinite(seq) && typeof row.type === 'string') rows.push({ seq, type: row.type, data: row.data });
-        }
-        if (items.length < 500 || rows.length === 0) break;
-        after = rows[rows.length - 1]!.seq;
-      }
-      return rows;
-    },
+    threadEvents: (threadId, afterSeq) => readThreadEvents(list => bb.sdk.threads.events.list(list as never) as Promise<unknown>, threadId, afterSeq),
   };
 }
 

@@ -23,6 +23,33 @@ export function rewritePaths(value: unknown, from: string, to: string): unknown 
   return value;
 }
 
+/**
+ * Песочница Codex на ступени каскада (строже штатной: у BB для «workspace»
+ * сеть открыта, «full» — без песочницы): `workspace-write`, сеть выключена,
+ * запись — только в папку ступени. Применяется к `sandbox`/`sandboxPolicy`
+ * в параметрах thread/start, thread/resume и turn/start.
+ */
+export function confineSandbox(message: Json, stageRoot: string): Json {
+  const method = message.method;
+  if (method !== 'thread/start' && method !== 'thread/resume' && method !== 'turn/start') return message;
+  const params = { ...(message.params as Json | undefined ?? {}) };
+  params.sandbox = 'workspace-write';
+  const policy = (params.sandboxPolicy && typeof params.sandboxPolicy === 'object' ? params.sandboxPolicy : {}) as Json;
+  const roots = Array.isArray(policy.writableRoots) ? (policy.writableRoots as unknown[]).filter((r): r is string => typeof r === 'string' && (r === stageRoot || r.startsWith(`${stageRoot}/`))) : [];
+  params.sandboxPolicy = {
+    ...policy, type: 'workspaceWrite', writableRoots: [...new Set([stageRoot, ...roots])], networkAccess: false,
+  };
+  if (method === 'thread/start' || method === 'thread/resume') {
+    // Конфиг сессии тоже: тот же режим, сеть выключена.
+    const config = (params.config && typeof params.config === 'object' ? params.config : {}) as Json;
+    params.config = { ...config, sandbox_mode: 'workspace-write', 'sandbox_workspace_write.network_access': false };
+  }
+  return { ...message, params };
+}
+
+/** Аргументы app-server: та же песочница через конфиг codex (на случай, если параметры её не несут). */
+export const SANDBOX_ARGS: readonly string[] = ['-c', 'sandbox_mode="workspace-write"', '-c', 'sandbox_workspace_write.network_access=false'];
+
 /** Строка JSON-RPC с переписанными путями; не JSON — как есть. */
 export function rewriteLine(line: string, from: string | null, to: string | null): string {
   if (!from || !to || from === to || !line.includes(from)) return line;
@@ -38,6 +65,8 @@ export interface CodexRelayPorts {
   /** Путь проекта у моста и на машине ступени; null или одинаковые — без перевода. */
   bridgeCwd: string;
   stageCwd: string | null;
+  /** Папка ступени для песочницы (корень записи); null — песочница не меняется. */
+  sandboxRoot: string | null;
   /** Подготовка файлов к ходу (не первому). */
   prepare(): Promise<{ ok: boolean; message: string }>;
   /** Возврат файлов на опору после хода. */
@@ -48,7 +77,11 @@ export interface CodexRelayPorts {
 export function startCodexRelay(ports: CodexRelayPorts): { onChildLine(line: string): void; pump: Promise<void> } {
   let prepared = true; // первый ход подготовил маршрут при старте app-server
   let finishing: Promise<void> = Promise.resolve();
-  const toStage = (line: string) => rewriteLine(line, ports.bridgeCwd, ports.stageCwd);
+  const toStage = (line: string) => {
+    const moved = rewriteLine(line, ports.bridgeCwd, ports.stageCwd);
+    if (!ports.sandboxRoot || !moved.includes('"method"')) return moved;
+    try { return JSON.stringify(confineSandbox(JSON.parse(moved) as Json, ports.sandboxRoot)); } catch { return moved; }
+  };
   const toBridge = (line: string) => rewriteLine(line, ports.stageCwd, ports.bridgeCwd);
 
   const pump = (async () => {

@@ -67,6 +67,16 @@ export function pendingRequest(events: readonly ThreadEventRow[], input: Pick<Ha
   return null;
 }
 
+export const isContinuation = (text: string | null | undefined) => !!text && RETRY_CONTINUATION.test(text);
+
+/** Автоповтор без известной просьбы: не искать самому, а спросить. */
+export const NO_CONTEXT_BLOCK = [
+  '<current-request unknown="true">',
+  'Этот ход — автоматический повтор после перехода на тебя («Please continue.» прислал BB), а исходная просьба пользователя каскаду неизвестна.',
+  'Контекста нет — коротко спроси пользователя, что продолжить. Не ищи сам: не читай треды и дела, окружение, переменные, ключи и ~/.ssh, не заходи на другие машины.',
+  '</current-request>',
+].join('\n');
+
 /** Блок текущей задачи для автоповтора после перехода. */
 function currentTaskBlock(pending: { seq: number; text: string }): string {
   return [
@@ -126,7 +136,8 @@ export function buildHandoff(events: readonly ThreadEventRow[], input: HandoffIn
     if (line) lines.push({ seq: row.seq, line });
   }
   const pending = pendingRequest(events, input);
-  if (lines.length === 0) return { text: pending ? currentTaskBlock(pending) : '', throughSeq };
+  const noTask = !pending && isContinuation(input.currentText) ? `\n${NO_CONTEXT_BLOCK}` : '';
+  if (lines.length === 0) return { text: pending ? currentTaskBlock(pending) : noTask.trim(), throughSeq };
 
   // Сверх предела — сначала уходят ранние события, на них остаётся ссылка.
   let total = 0;
@@ -140,7 +151,7 @@ export function buildHandoff(events: readonly ThreadEventRow[], input: HandoffIn
     ...kept.map(l => l.line),
   ].join('\n');
 
-  const task = pending ? `\n${currentTaskBlock(pending)}` : '';
+  const task = pending ? `\n${currentTaskBlock(pending)}` : noTask;
   if (input.mode === 'snapshot') {
     return {
       text: crossProviderBrief({ threadId: input.threadId, from: input.from, to: input.to, summary: body, throughSeq, afterSeq: input.afterSeq }) + task,

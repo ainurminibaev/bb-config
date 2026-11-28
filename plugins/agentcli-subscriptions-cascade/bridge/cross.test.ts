@@ -529,3 +529,44 @@ test('сквозной путь S3: «Да» → автоповтор «Please c
   assert.match(text, /не исследуй окружение машины, переменные, ключи и ~\/\.ssh, другие треды и дела/u);
   assert.match(text, /Please continue\.$/u);
 });
+
+test('события треда для сводки: страницами по 100 (предел BB), только нужные типы', async () => {
+  const { readThreadEvents, THREAD_EVENTS_PAGE } = await import('./server-register.ts');
+  const all = Array.from({ length: 250 }, (_, i) => ({ seq: i + 1, type: i % 2 ? 'item/completed' : 'client/turn/requested', data: {} }));
+  const asked: Record<string, unknown>[] = [];
+  const list = async (args: Record<string, unknown>) => {
+    asked.push(args);
+    if (Number(args.limit) > 100) throw new Error('HTTP 400: Thread event limit cannot exceed 100');
+    const after = Number(args.afterSeq);
+    return all.filter(e => e.seq > after).slice(0, Number(args.limit));
+  };
+  const rows = await readThreadEvents(list, 'thr_1', 0);
+  assert.equal(THREAD_EVENTS_PAGE, 100);
+  assert.equal(rows.length, 250);
+  assert.deepEqual(asked.map(a => a.afterSeq), ['0', '100', '200']);
+  assert.deepEqual(asked[0]!.types, ['client/turn/requested', 'item/completed']);
+});
+
+test('автоповтор без известной просьбы: сводка велит спросить пользователя, а не искать самому', async () => {
+  const { buildHandoff, NO_CONTEXT_BLOCK } = await import('./handoff.ts');
+  const out = buildHandoff([], { threadId: 'thr_1', afterSeq: 0, mode: 'snapshot', from: 'Claude', to: 'Codex', currentRequestId: 'creq_x', currentText: 'Please continue.' });
+  assert.equal(out.text, NO_CONTEXT_BLOCK);
+  assert.match(NO_CONTEXT_BLOCK, /Контекста нет — коротко спроси пользователя, что продолжить\. Не ищи сам/u);
+  // Сервер не дал сводку (ошибка) — мост шлёт тот же блок, без подсказки читать треды.
+  const fx = switchFixture({
+    nativeSessions: input => ({ sessions: input.sessions ?? null }),
+    peekProvider: () => ({ providerId: 'codex', modelId: null, stage: null }),
+    handoffBrief: () => { throw new Error('HTTP 400: Thread event limit cannot exceed 100'); },
+  });
+  const { bridge, out: lines, codex, options } = fx;
+  bridge.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }));
+  bridge.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'thread/start', params: { threadId: 'thr_1', cwd: '/p', options } }));
+  await fx.flush();
+  const outer = ((lines.find(m => m.id === 2)!.result) as { providerThreadId: string }).providerThreadId;
+  bridge.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'turn/start', params: { threadId: 'thr_1', providerThreadId: outer, clientRequestId: 'creq_x', input: [{ type: 'text', text: 'Please continue.' }], options } }));
+  await fx.flush();
+  const text = (codex.lines.find(l => l.method === 'turn/start') as { params: { input: { text: string }[] } }).params.input[0]!.text;
+  assert.ok(text.startsWith(NO_CONTEXT_BLOCK));
+  assert.doesNotMatch(text, /bb thread messages/u);
+  await bridge.close();
+});

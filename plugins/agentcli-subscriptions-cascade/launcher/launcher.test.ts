@@ -533,3 +533,22 @@ test('Codex app-server: тред и адрес сервера — через с�
     assert.deepEqual(await askBridgeThread({ env: { CASCADE_FEED_SOCKET: path } }), { threadId: 'thr_s3', serverUrl: 'http://127.0.0.1:4999' });
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
+
+test('P0 песочница: app-server на ступени запускается с конфигом workspace-write без сети', async () => {
+  const fx = remoteFixture();
+  const bin = join(fx.root, 'bin-codex2');
+  mkdirSync(bin);
+  const marker = join(fx.root, 'codex-args');
+  writeFileSync(join(bin, 'codex'), `#!/bin/sh\necho "$@" > '${marker}'\n`);
+  chmodSync(join(bin, 'codex'), 0o755);
+  const server = fakeServer({ action: 'run', stepId: 'host_tru:codex:*', hostId: 'host_tru', providerId: 'codex', modelId: null, local: true, cwd: null, env: {}, stage: { machine: 'Tru' }, notes: [] });
+  const code = await runLauncher({
+    env: { PATH: `${bin}:/usr/bin:/bin`, BB_THREAD_ID: 'thr_s3', BB_SERVER_URL: 'http://bb.test', CASCADE_LAUNCHER_PROVIDER: 'codex' },
+    argv: [], cwd: fx.cwd, fetch: server.fetchImpl, stdin: Object.assign(new PassThrough(), {}), stdout: collect(), stderr: collect(), now: Date.now,
+  });
+  assert.equal(code, 0);
+  const args = readFileSync(marker, 'utf8').trim();
+  assert.match(args, /^app-server /u);
+  assert.match(args, /sandbox_mode="workspace-write"/u);
+  assert.match(args, /sandbox_workspace_write\.network_access=false/u);
+});

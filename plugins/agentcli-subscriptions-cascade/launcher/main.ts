@@ -18,7 +18,7 @@ import {
   type ConfirmPrompt, type LimitObservation, type NativeProvider, type RouteNote, type RouteTurnOutput, type RoutedTurn,
 } from '../bridge/route-contract.ts';
 import { parseBridgeAnswer, resolveRoute, type BridgeAnswer } from './confirm.ts';
-import { startCodexRelay } from './codex-relay.ts';
+import { SANDBOX_ARGS, startCodexRelay } from './codex-relay.ts';
 import { claudeSessionInfo, claudeSessionPath, flagValue, remoteArgs, remoteEnv, replaceModel, resumeOrStart } from './cli-args.ts';
 import { spawn } from 'node:child_process';
 import { resolveRealExecutable, runLocal } from './local.ts';
@@ -539,7 +539,8 @@ export function codexAppServerArgs(args: readonly string[]): string[] {
 }
 
 async function runCodex(io: LauncherIo, rawArgs: string[], threadId: string): Promise<number> {
-  const args = codexAppServerArgs(rawArgs);
+  // Песочница ступени — и в конфиге app-server (сеть выключена, только workspace-write).
+  const args = [...codexAppServerArgs(rawArgs), ...SANDBOX_ARGS];
   // Старт app-server — это открытие сессии, а не ход: карточку BB здесь не покажет.
   // Согласие на Codex даётся раньше, в ходе (мост открывает сессию Codex только после «Да»).
   let decided: RouteTurnOutput;
@@ -567,6 +568,7 @@ async function runCodex(io: LauncherIo, rawArgs: string[], threadId: string): Pr
     toBridge: line => { io.stdout.write(`${line}\n`); },
     bridgeCwd: io.cwd,
     stageCwd: stageCwd && stageCwd !== io.cwd ? stageCwd : null,
+    sandboxRoot: stageCwd ?? io.cwd,
     prepare: async () => {
       const r = await callServer<{ ok: boolean; message: string; notes: RouteNote[] }>(io, 'syncTurn', { threadId, stepId: runRoute.stepId, hostId: runRoute.hostId, phase: 'prepare' }, ROUTE_TIMEOUT_MS);
       await sendFeed(io, threadId, r.notes);

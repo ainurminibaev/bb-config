@@ -28,6 +28,7 @@ import { LAUNCHER_ENV } from '../launcher/main.ts';
 import { historyHint } from './context-brief.ts';
 import type { ConfirmPrompt, NativeSessions, RouteNote } from './route-contract.ts';
 import { catalogFrom } from './static-catalog.ts';
+import { isContinuation, NO_CONTEXT_BLOCK } from './handoff.ts';
 import {
   loadNativeBridge, NativeLoadError, nativeLoadHint, NATIVE_BRIDGES,
   type BridgeContext, type BridgeEntry, type LoadDeps, type LoadedNativeBridge, type NativeProviderId,
@@ -500,8 +501,9 @@ export function createCascadeBridge(options: CascadeBridgeOptions): BridgeEntry 
       threadId, afterSeq, mode, from, to, currentRequestId: requestId, currentText: currentText?.slice(0, 20_000) ?? null,
     }).catch(error => {
       log(`handoffBrief ${threadId}: ${String(error)}`);
-      // Сводку собрать не удалось: только как дочитать тред; курсор не двигаем.
-      return { text: `<cascade-handoff from="${from}" to="${to}">\n${historyHint(threadId, [], afterSeq)}\n</cascade-handoff>`, throughSeq: afterSeq };
+      // Сводку собрать не удалось. Автоповтор без контекста — спросить пользователя, не искать
+      // самому; обычный ход — его собственный ввод и есть задача. Курсор не двигаем.
+      return { text: isContinuation(currentText) ? NO_CONTEXT_BLOCK : `<cascade-handoff from="${from}" to="${to}">\nСводка предыдущей работы недоступна. Выполни просьбу пользователя ниже; окружение, ключи, другие треды не исследуй.\n</cascade-handoff>`, throughSeq: afterSeq };
     });
     const sessionOptions = optionsFor(template.options ?? params.options, target, target === 'codex' ? peek?.modelId ?? null : null);
     const existing = state.sessions[target];
