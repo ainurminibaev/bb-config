@@ -14,7 +14,7 @@ import { formatThreadTestQuota, parseTestQuotaSpec, withThreadTestQuota } from '
 import type { CascadeConfig, DiscoveredAccount, Step, TestQuotaEntry, WizardMachineState } from '../contract.ts';
 import type { HealthLookup } from '../engine.ts';
 import { formatAdopt, parseAdoptArgs, runAdopt, type AdoptPorts, type AdoptThread } from './adopt.ts';
-import { formatResolve, resolveRequest } from '../resolve.ts';
+import { formatResolve, lastReasoningLevel, resolveRequest } from '../resolve.ts';
 import { createRouteJobs } from './route-jobs.ts';
 import { DEFAULT_ADOPT_PROMPT, formatNativeAdopt, runNativeAdopt, seedFor, sessionFromEvents, type AdoptSeed, type NativeAdoptPorts, type SeedStore } from './adopt-native.ts';
 import { randomUUID } from 'node:crypto';
@@ -22,7 +22,7 @@ import { digestMap, nativeBridgeStatus, type NativeBridgeStatus } from './digest
 import { executorRpcContract, PROVIDER_RETRY_AVAILABILITY, retryAvailabilityContract, type LimitObservation } from './route-contract.ts';
 import type { Consent } from '../consent.ts';
 import type { ThreadEventRow } from './handoff.ts';
-import { createRouteService, rememberMachineLabels, type RouteDeps, type RouteService, type StoredThreadState, type SyncPort, type ThreadInfo } from './route-service.ts';
+import { bypassLine, createRouteService, rememberMachineLabels, type RouteDeps, type RouteService, type StoredThreadState, type SyncPort, type ThreadInfo } from './route-service.ts';
 
 export interface ExecutorDeps {
   providerId: string;
@@ -228,6 +228,22 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     gcTimer = setTimeout(() => { gcTimer = null; const ids = [...gcThreads]; gcThreads.clear(); runAutoGc(ids); }, 60_000);
     gcTimer.unref?.();
   };
+  // 0.3.5: подтред создан штатным провайдером при установленном каскаде — предупреждение
+  // родителю (на каскаде — строка в следующем ходе; иначе — в замечаниях настроек каскада).
+  const onCreated = (payload: { thread?: { id?: unknown; providerId?: unknown; parentThreadId?: unknown; title?: unknown } }) => {
+    const t = payload.thread;
+    if (!t || typeof t.id !== 'string' || typeof t.parentThreadId !== 'string') return;
+    if (t.providerId !== 'claude-code' && t.providerId !== 'codex') return;
+    const child = { threadId: t.id, parentThreadId: t.parentThreadId, title: typeof t.title === 'string' && t.title ? t.title : null, providerId: t.providerId };
+    void deps.loadConfig().then(async config => {
+      if (config.policies.executionMode !== 'provider') return;
+      const r = await routes.subthreadBypass(child);
+      if (!r.parentOnCascade) bypassIssues.unshift({ at: Date.now(), text: `${bypassLine(child.title ?? child.threadId)} (родитель ${child.parentThreadId} не на каскаде)` });
+      bypassIssues.splice(20);
+    }).catch(error => bb.log.warn(`подтред мимо каскада ${child.threadId}: ${String(error)}`));
+  };
+  const bypassIssues: { at: number; text: string }[] = [];
+  bb.events.on('thread.created', onCreated as never);
   bb.events.on('thread.archived', onGone as never);
   bb.events.on('thread.deleted', onGone as never);
   const dailyGc = setInterval(() => runAutoGc(null), 24 * 3_600_000);
@@ -502,7 +518,9 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
         // Только чтение настроек, таблицы моделей и уже обнаруженных каталогов — без вызова моделей.
         const text = rest.filter(a => a !== '--json').join(' ').trim();
         if (!text) return { exitCode: 2, stderr: 'укажите просьбу: bb subscriptions-cascade resolve "Codex 6.2 на Tru" [--json]\n' };
-        const result = resolveRequest({ config: await deps.loadConfig(), accounts: deps.accounts(), hosts: deps.hosts?.() ?? [], blocked: deps.blockedModel, text });
+        // effort родителя — из последнего хода треда, откуда вызван resolve (любой тред, не только на каскаде).
+        const parentEffort = ctx.threadId ? lastReasoningLevel(await readThreadEvents(list => bb.sdk.threads.events.list(list as never) as Promise<unknown>, ctx.threadId!, 0).catch(() => [])) : null;
+        const result = resolveRequest({ config: await deps.loadConfig(), accounts: deps.accounts(), hosts: deps.hosts?.() ?? [], blocked: deps.blockedModel, text, parentEffort });
         if (rest.includes('--json')) return { exitCode: 0, stdout: `${JSON.stringify(result)}\n` };
         return { exitCode: 0, stdout: formatResolve(result) };
       }
@@ -562,6 +580,9 @@ export function registerExecutor(bb: BbPluginApi, deps: ExecutorDeps): ExecutorR
     nativeBridges: () => bridges,
     scheme: threadId => routes.threadScheme(threadId),
     refreshNativeBridges,
-    issues: () => bridges.filter(b => b.problem && b.providerId === 'claude-code').map(b => `Штатный мост Claude Code: ${b.problem}. Каскад не сможет запускать ходы.`),
+    issues: () => [
+      ...bridges.filter(b => b.problem && b.providerId === 'claude-code').map(b => `Штатный мост Claude Code: ${b.problem}. Каскад не сможет запускать ходы.`),
+      ...bypassIssues.filter(b => Date.now() - b.at < 24 * 3_600_000).map(b => b.text),
+    ],
   };
 }

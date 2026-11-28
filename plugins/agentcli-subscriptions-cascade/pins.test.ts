@@ -184,7 +184,13 @@ test('реле сессии: профиль сменился на той же с
 
 test('resolve: «Codex 6.2 на Tru», «на аккаунте vclaude», «Opus на UA» → ступень; несколько — кандидаты', () => {
   const c = withCodex();
-  const r = (text: string) => resolveRequest({ config: c, accounts: ACCOUNTS_CODEX, hosts: HOSTS, text });
+  // Сравнение по ступени и подписи; model/effort/spawn (0.3.5) — в resolve-spawn.test.ts.
+  const r = (text: string) => {
+    const out = resolveRequest({ config: c, accounts: ACCOUNTS_CODEX, hosts: HOSTS, text });
+    if ('match' in out) return { match: { profileId: out.match.profileId, label: out.match.label } };
+    if ('candidates' in out) return { candidates: out.candidates };
+    return out;
+  };
   assert.deepEqual(r('на аккаунте vclaude'), { match: { profileId: pinId(MAC_GW, null), label: 'Mac · Claude (vclaude)' } });
   assert.deepEqual(r('Opus на UA'), { match: { profileId: pinId(UA_PRO, 'opus-5.5'), label: 'UA · Claude (Pro) · Opus 5.5' } });
   assert.deepEqual(r('запусти через каскад опус на юа'.replace('юа', 'UA')), { match: { profileId: pinId(UA_PRO, 'opus-5.5'), label: 'UA · Claude (Pro) · Opus 5.5' } });
@@ -195,7 +201,7 @@ test('resolve: «Codex 6.2 на Tru», «на аккаунте vclaude», «Opus
   assert.deepEqual(r('GPT-6.2 Astra на Tru'), { match: { profileId: pinId(TRU_CODEX, 'gpt-6.2-astra'), label: 'Tru · Codex · GPT-6.2 Astra' } });
   assert.deepEqual(r('Codex на маке'), { match: { profileId: pinId(MAC_CODEX, null), label: 'Mac · Codex' } });
   const opus = r('Opus');
-  assert.ok('candidates' in opus && opus.candidates.length === 3, 'Opus есть на трёх машинах');
+  assert.ok('candidates' in opus && opus.candidates?.length === 3, 'Opus есть на трёх машинах');
   assert.deepEqual(r('Авто · без Codex'), { match: { profileId: 'auto-no-codex', label: 'Авто · без Codex' } });
 });
 

@@ -825,13 +825,34 @@ RouteNote `notice`: отдельная строка ленты (тип `problem`
   «ступень не готова: …». Движок её пропускает, схема «i» и настройки показывают
   «не готова». Перепроверка — в фоне перед ходом, не чаще раза в 10 минут.
 
+**Запуск подтредов только через каскад** (единое правило для всех тредов).
+
+- `resolve` отдаёт `model`, `effort` и `spawn`: готовые аргументы `bb thread spawn`
+  (`--provider subscriptions-cascade --model <профиль> --reasoning-level <effort>`
+  или штатный запуск в `fallback`). Effort — явный из просьбы (`effortFromText`) или
+  родителя: `lastReasoningLevel` берёт `execution.reasoningLevel` последнего
+  `client/turn/requested` треда, откуда вызван resolve.
+- «Codex» без машины, аккаунта и модели → `subthread-codex`, а не кандидаты.
+- Effort идёт в ход штатно: BB кладёт уровень в `turn/start`, обёртка каскада
+  передаёт его мосту провайдера (Claude `--effort`, Codex
+  `model_reasoning_effort`) без изменений.
+- Ограничение: подтред, запущенный без `--reasoning-level`, получает уровень BB по
+  умолчанию для модели. Отличить «не задан» от явного `medium` каскад не может,
+  поэтому effort родителя он не подставляет — это делает `resolve` через `spawn`.
+- Подтред мимо каскада: `bb.events.on('thread.created')` для `claude-code`/`codex` с
+  `parentThreadId` при `executionMode: provider` → `subthreadBypass`. Родителю на
+  каскаде — `notice` в следующем ходе (один раз, `bypassNoted`). Родитель не на
+  каскаде — строка в замечаниях настроек (сутки): писать в ленту треда вне его хода
+  SDK не даёт.
+
 **Возврат «Авто» на Claude** — штатный S4. Новое только то, что квота шлюза vclaude
 теперь известна (см. выше).
 
 - Тесты (на 0.3.4 падают проверки нового поведения):
   - `codex-fallback.test.ts`, `tree.test.ts`, `return-claude.test.ts` (vclaude);
   - `limits-contract.test.ts` (vclaude) и `limits.test.ts` (поздний ответ, свежесть);
-  - `launcher/codex-limits.test.ts` и `readiness.test.ts` — модулей на 0.3.4 нет.
+  - `launcher/codex-limits.test.ts` и `readiness.test.ts` — модулей на 0.3.4 нет;
+  - `resolve-spawn.test.ts` (model/effort/spawn, «передай Codex», подтред мимо каскада).
 
 ## Уборка реплик после тредов (0.2.12, `sync/gc.ts`)
 

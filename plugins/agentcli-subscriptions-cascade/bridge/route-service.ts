@@ -88,6 +88,8 @@ export interface StoredThreadState {
    * Повтор после сбоя и схема берут его отсюда, без запроса предков.
    */
   inherited?: (DescendantsRule & { ownerThreadId: string }) | null;
+  /** 0.3.5: подтреды, о запуске которых мимо каскада родитель уже предупреждён. */
+  bypassNoted?: string[];
 }
 
 export interface RouteDeps {
@@ -152,6 +154,11 @@ export const REFUSAL_ACTIONS = 'Что сделать: повторите ход
  */
 export function cascadeEnv(profileId: string, stepId: string): Record<string, string> {
   return { BB_CASCADE_PROFILE: profileId, BB_CASCADE_STEP: stepId };
+}
+
+/** 0.3.5: строка ленты родителя о подтреде, запущенном штатным провайдером. */
+export function bypassLine(title: string): string {
+  return `Подтред «${title.slice(0, 80)}» запущен мимо каскада: лимиты не переключаются`;
 }
 
 /** «Ход не запущен: Каскад подписок → <источник>: <причина>». */
@@ -292,6 +299,12 @@ export interface RouteService {
   turnLimits(input: { threadId: string; stepId: string; limits: LimitObservation[] }): Promise<{ exhausted: boolean }>;
   /** Ответ provider-retry после ошибки лимита: можно ли повторить ход сейчас (S2, S14). */
   retryAvailability(threadId: string): Promise<RetryAvailability>;
+  /**
+   * 0.3.5: подтред создан штатным провайдером (`--provider codex|claude-code`) при
+   * установленном каскаде. Родитель на каскаде получает строку в следующем ходе, один
+   * раз на подтред. parentOnCascade: false — родитель не на каскаде (строка не доставлена).
+   */
+  subthreadBypass(input: { threadId: string; parentThreadId: string; title: string | null; providerId: string }): Promise<{ noted: boolean; parentOnCascade: boolean }>;
   /** Схема профиля треда для метки ступени (timeline.provideScheme): тот же движок и то же состояние. */
   threadScheme(threadId: string): Promise<{ name: string; text: string; test: boolean; attempts: unknown[]; config: unknown; subthreads?: { attempts: unknown[]; text: string; note: string } } | null>;
 }
@@ -929,6 +942,17 @@ export function createRouteService(deps: RouteDeps): RouteService {
     };
   }
 
+  async function subthreadBypass(input: { threadId: string; parentThreadId: string; title: string | null; providerId: string }) {
+    return serial(input.parentThreadId, async () => {
+      const parent = await deps.load(input.parentThreadId).catch(() => undefined);
+      if (!parent) return { noted: false, parentOnCascade: false };
+      if (parent.bypassNoted?.includes(input.threadId)) return { noted: false, parentOnCascade: true };
+      await deps.save(input.parentThreadId, { ...parent, bypassNoted: [...(parent.bypassNoted ?? []), input.threadId].slice(-50) });
+      await pushThreadNote(input.parentThreadId, bypassLine(input.title ?? input.threadId));
+      return { noted: true, parentOnCascade: true };
+    });
+  }
+
   async function threadScheme(threadId: string) {
     const [config, stored] = await Promise.all([deps.loadConfig(), deps.load(threadId).catch(() => undefined)]);
     if (!stored) return null;
@@ -1092,5 +1116,5 @@ export function createRouteService(deps: RouteDeps): RouteService {
     });
   }
 
-  return { routeTurn, finishTurn, answerConfirmation, peekProvider, handoffBrief, nativeSessions, threadStatus, threadScheme, retryAvailability, turnLimits, turnModelUnavailable, syncTurn, turnProgress: threadId => prep.note(threadId) };
+  return { subthreadBypass, routeTurn, finishTurn, answerConfirmation, peekProvider, handoffBrief, nativeSessions, threadStatus, threadScheme, retryAvailability, turnLimits, turnModelUnavailable, syncTurn, turnProgress: threadId => prep.note(threadId) };
 }

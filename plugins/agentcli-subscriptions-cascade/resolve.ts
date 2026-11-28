@@ -11,8 +11,17 @@
 import type { CascadeConfig, DiscoveredAccount, ModelRow, Step } from './contract.ts';
 import { effectiveModelId } from './models.ts';
 import { pinnedEntries, stepTitle, type BlockedModel, type PinEntry } from './pins.ts';
+import { SUBTHREAD_CODEX_ID } from './contract.ts';
 
 export interface ResolveChoice { profileId: string; label: string }
+
+/**
+ * 0.3.5: совпадение с тем, что агент передаёт в `bb thread spawn` дословно:
+ * model — модель CLI, на которой пойдёт ход (таблица моделей каскада; null — модель
+ * CLI по умолчанию или выберет каскад по приоритету); effort — effort родителя, если
+ * в просьбе нет явного; spawn — готовые аргументы запуска.
+ */
+export interface ResolveMatch extends ResolveChoice { model: string | null; effort: string | null; spawn: string[] }
 
 export interface ResolveFallback {
   /** Штатный провайдер BB (`claude-code`, `codex`); null — не понятно, какой. */
@@ -22,14 +31,18 @@ export interface ResolveFallback {
   machineLabel: string | null;
   /** ID модели у CLI машины; null — модель CLI по умолчанию. */
   model: string | null;
+  /** 0.3.5: effort родителя или явный из просьбы. */
+  effort?: string | null;
+  /** 0.3.5: аргументы штатного запуска; нет провайдера — пусто. */
+  spawn?: string[];
   reason: string;
   /** Ближайшие закреплённые ступени каскада (без условия на модель). */
   nearest: ResolveChoice[];
 }
 
 export type ResolveResult =
-  | { match: ResolveChoice }
-  | { candidates: ResolveChoice[] }
+  | { match: ResolveMatch }
+  | { candidates: ResolveChoice[]; effort?: string | null }
   | { fallback: ResolveFallback };
 
 export interface ResolveInput {
@@ -39,6 +52,36 @@ export interface ResolveInput {
   hosts: readonly { hostId: string; name: string }[];
   blocked?: BlockedModel;
   text: string;
+  /** 0.3.5: effort родителя (последний ход треда, откуда вызван resolve); null — неизвестен. */
+  parentEffort?: string | null;
+}
+
+const EFFORT_WORDS: readonly { effort: string; test: RegExp }[] = [
+  { effort: 'xhigh', test: /(^|[^\p{L}])x-?high([^\p{L}]|$)/iu },
+  { effort: 'max', test: /(^|[^\p{L}])(max|максимальн\p{L}*)\s*(effort|усили\p{L}*)?([^\p{L}]|$)/iu },
+  { effort: 'high', test: /(^|[^\p{L}-])high([^\p{L}]|$)|подумай\s+(как\s+следует|хорошо|глубоко)|глубоко\s+подумай/iu },
+  { effort: 'low', test: /(^|[^\p{L}])low([^\p{L}]|$)|подумай\s+поменьше|без\s+глубокого/iu },
+];
+
+/** Явный effort в просьбе («high», «xhigh», «low», «подумай как следует»); null — не назван. */
+export function effortFromText(text: string): string | null {
+  return EFFORT_WORDS.find(e => e.test.test(text))?.effort ?? null;
+}
+
+/** Слова effort не участвуют в поиске машины, модели и аккаунта. */
+function stripEffort(text: string): string {
+  return text.replace(/\bx-?high\b|\bhigh\b|\blow\b|подумай\s+(как\s+следует|хорошо|глубоко|поменьше)|глубоко\s+подумай|без\s+глубокого/giu, ' ');
+}
+
+/** effort родителя — из последнего запроса хода треда (`client/turn/requested.data.execution.reasoningLevel`). */
+export function lastReasoningLevel(events: readonly { seq: number; type: string; data: unknown }[]): string | null {
+  const rec = (v: unknown): Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
+  const rows = events.filter(e => e.type === 'client/turn/requested').sort((a, b) => b.seq - a.seq);
+  for (const row of rows) {
+    const level = rec(rec(row.data).execution).reasoningLevel;
+    if (typeof level === 'string' && level) return level;
+  }
+  return null;
 }
 
 const CYR: Record<string, string> = {
@@ -82,6 +125,31 @@ function rowVersions(row: ModelRow): string[] {
 const choice = (e: PinEntry): ResolveChoice => ({ profileId: e.id, label: e.label });
 
 export function resolveRequest(input: ResolveInput): ResolveResult {
+  const effort = effortFromText(input.text) ?? input.parentEffort ?? null;
+  const core = resolveCore({ ...input, text: stripEffort(input.text) });
+  const level = (args: string[]) => (effort ? [...args, '--reasoning-level', effort] : args);
+  if ('match' in core) {
+    const m = core.match;
+    return { match: { ...m, model: matchModel(input, m.profileId), effort, spawn: level(['--provider', 'subscriptions-cascade', '--model', m.profileId]) } };
+  }
+  if ('candidates' in core) return { candidates: core.candidates, effort };
+  const f = core.fallback;
+  return { fallback: { ...f, effort, spawn: f.provider ? level(['--provider', f.provider, ...(f.machine ? ['--machine', f.machine] : []), ...(f.model ? ['--model', f.model] : [])]) : [] } };
+}
+
+/** Модель CLI совпадения: закреплённая модель; ступень — первая по приоритету на машине; «Codex · любая машина» — первая Codex по приоритету. */
+function matchModel(input: ResolveInput, profileId: string): string | null {
+  const entries = pinnedEntries(input.config, input.accounts, input.blocked);
+  const pin = entries.find(e => e.id === profileId);
+  if (pin?.modelId) return pin.modelId;
+  if (pin) return entries.find(e => e.stepId === pin.stepId && e.modelId !== null)?.modelId ?? null;
+  if (profileId === SUBTHREAD_CODEX_ID) return entries.find(e => e.providerId === 'codex' && e.modelId !== null)?.modelId ?? null;
+  return null;
+}
+
+type CoreResult = { match: ResolveChoice } | { candidates: ResolveChoice[] } | { fallback: ResolveFallback };
+
+function resolveCore(input: ResolveInput): CoreResult {
   const { config } = input;
   const all = words(input.text);
   const used = new Set<number>();
@@ -196,6 +264,11 @@ export function resolveRequest(input: ResolveInput): ResolveResult {
   const hits = where.filter(e => modelAsked ? e.modelKey !== null && matchedRows.some(r => r.key === e.modelKey) : e.modelKey === null);
 
   if (hits.length === 1) return { match: choice(hits[0]!) };
+  // 0.3.5: «передай Codex» — только провайдер Codex, без машины, аккаунта и модели:
+  // профиль «Codex · любая машина» (порядок ступеней каскада), а не вопрос владельцу.
+  if (hits.length > 1 && provider === 'codex' && machines.size === 0 && !accountSteps && !modelAsked) {
+    return { match: { profileId: SUBTHREAD_CODEX_ID, label: 'Codex · любая машина' } };
+  }
   if (hits.length > 1) return { candidates: hits.map(choice) };
 
   // Нет совпадения — объяснить, чего нет, и предложить ближайшее.
@@ -244,7 +317,8 @@ function fallbackModel(input: ResolveInput, hostId: string | null, provider: str
 export function formatResolve(result: ResolveResult): string {
   const q = (id: string) => `'${id.replace(/'/gu, `'\\''`)}'`;
   if ('match' in result) {
-    return `Ступень: ${result.match.label}\nЗапуск: bb thread spawn … --provider subscriptions-cascade --model ${q(result.match.profileId)}\n`;
+    const m = result.match;
+    return `Ступень: ${m.label}${m.model ? ` · модель ${m.model}` : ''}${m.effort ? ` · effort ${m.effort}` : ''}\nЗапуск: bb thread spawn … ${m.spawn.map(a => (a.startsWith('--') ? a : q(a))).join(' ')}\n`;
   }
   if ('candidates' in result) {
     if (result.candidates.length === 0) return 'Подходящих ступеней нет.\n';
@@ -252,7 +326,7 @@ export function formatResolve(result: ResolveResult): string {
   }
   const f = result.fallback;
   const lines = [`Мимо каскада: ${f.reason}.`];
-  if (f.provider) lines.push(`Запуск: bb thread spawn … --provider ${f.provider}${f.machine ? ` --machine ${f.machine}` : ''}${f.model ? ` --model ${q(f.model)}` : ''}`);
+  if (f.provider) lines.push(`Запуск: bb thread spawn … ${(f.spawn ?? []).map(a => (a.startsWith('--') ? a : q(a))).join(' ')}`);
   if (f.nearest.length > 0) lines.push(`Ближайшее в каскаде: ${f.nearest.map(n => `${n.label} (${n.profileId})`).join('; ')}`);
   lines.push('Владельцу — одна строка: «запущен мимо каскада: <причина>; лимиты не переключаются».');
   return `${lines.join('\n')}\n`;
